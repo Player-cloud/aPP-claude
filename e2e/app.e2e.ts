@@ -284,7 +284,7 @@ test('M3: the main agent runs on a started run and is clearly labelled simulated
     await agent.getByRole('button', { name: 'Ask the agent' }).click();
     await agent.getByText('Succeeded', { exact: true }).first().waitFor();
     await agent.getByText('Single agent', { exact: true }).waitFor();
-    await agent.getByText('Import recipes from a CSV file').first().click();
+    await agent.locator('.agent-request > summary').first().click();
     await agent.getByText(/Simulated model: no AI was called/).waitFor();
     await shot(page, '11-agent-simulated-dark-1280');
 
