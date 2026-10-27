@@ -27,12 +27,16 @@
 
   --radius-sm: 8px;
   --radius-md: 12px;
-  --radius-lg: 18px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
   --radius-pill: 999px;
 
   --rail-width: 256px;
   --rail-width-collapsed: 72px;
   --panel-width: 320px;
+
+  --glass-blur: 22px;
+  --glass-saturate: 150%;
 
   --duration-fast: 120ms;
   --duration-base: 200ms;
@@ -73,6 +77,23 @@
   --info-soft: rgba(108, 182, 255, 0.14);
 
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  /* Frosted glass (DEC-015). Surfaces are translucent over --backdrop. */
+  --backdrop:
+    radial-gradient(1100px 760px at 8% -12%, rgba(79, 111, 245, 0.5), transparent 62%),
+    radial-gradient(900px 700px at 105% 4%, rgba(124, 92, 255, 0.44), transparent 58%),
+    radial-gradient(1000px 820px at 55% 118%, rgba(34, 167, 240, 0.3), transparent 62%),
+    linear-gradient(180deg, #080c1c 0%, #060914 100%);
+  --glass-bg: rgba(20, 28, 58, 0.52);
+  --glass-bg-strong: rgba(14, 20, 44, 0.66);
+  --glass-inset: rgba(255, 255, 255, 0.035);
+  --glass-inset-hover: rgba(255, 255, 255, 0.07);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-border-strong: rgba(255, 255, 255, 0.16);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --glass-shadow: 0 18px 50px rgba(2, 4, 16, 0.45);
+  --glow: 0 8px 28px rgba(91, 124, 250, 0.38);
+  --field-bg: rgba(255, 255, 255, 0.045);
 }
 
 [data-theme="light"] {
@@ -108,16 +129,58 @@
   --info-soft: rgba(29, 111, 196, 0.1);
 
   --shadow: 0 8px 24px rgba(22, 26, 46, 0.08);
+
+  --backdrop:
+    radial-gradient(1000px 720px at 6% -10%, rgba(120, 140, 255, 0.38), transparent 60%),
+    radial-gradient(900px 700px at 104% 2%, rgba(176, 140, 255, 0.36), transparent 58%),
+    radial-gradient(1000px 800px at 50% 120%, rgba(120, 205, 255, 0.32), transparent 62%),
+    linear-gradient(180deg, #f3f2fc 0%, #eceefa 100%);
+  --glass-bg: rgba(255, 255, 255, 0.58);
+  --glass-bg-strong: rgba(255, 255, 255, 0.72);
+  --glass-inset: rgba(255, 255, 255, 0.5);
+  --glass-inset-hover: rgba(255, 255, 255, 0.8);
+  --glass-border: rgba(255, 255, 255, 0.75);
+  --glass-border-strong: rgba(90, 80, 160, 0.18);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --glass-shadow: 0 18px 50px rgba(60, 50, 140, 0.12);
+  --glow: 0 8px 26px rgba(109, 76, 230, 0.3);
+  --field-bg: rgba(255, 255, 255, 0.7);
 }
 
-/* The navigation rail stays dark in both themes (reference 03). */
+/* The navigation rail stays dark glass in both themes (reference 03). */
 [data-theme="light"] .rail {
+  --glass-bg-strong: rgba(30, 22, 62, 0.8);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   --text: #eeeaff;
   --text-muted: #b9b2d9;
+  --text-subtle: #9b93c2;
+  --glass-inset: rgba(255, 255, 255, 0.06);
+  --glass-inset-hover: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.22);
   --surface-hover: #2a2348;
   --surface-selected: #3a2f66;
   --border: #2d2650;
   --focus: #b9a8ff;
+}
+
+/* Glass off (setting) or the OS asks for less transparency: solid surfaces, no blur. */
+[data-glass="off"] {
+  --glass-blur: 0px;
+  --glass-saturate: 100%;
+  --glass-bg: var(--surface);
+  --glass-bg-strong: var(--bg-elevated);
+}
+[data-glass="off"] .rail {
+  --glass-bg-strong: var(--rail);
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-blur: 0px;
+    --glass-saturate: 100%;
+    --glass-bg: var(--surface);
+    --glass-bg-strong: var(--bg-elevated);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

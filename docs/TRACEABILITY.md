@@ -47,3 +47,11 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M2-AC8 | Renderer isolation and IPC validation | Verified | `app.e2e.ts` test 4, `service.test.ts` |
 | M2-AC9 | No horizontal overflow at 1024×768, 1280×800, 1920×1080; nav collapses below 1060 px | Verified | `app.e2e.ts` test 5 |
 | M2-AC10 | CI runs type check, unit tests (Linux + Windows), e2e (Linux), installer (Windows) | Verified, all green | PR #2 CI |
+
+## UI refresh: frosted glass (DEC-015)
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Glass surfaces in dark and light themes; layouts still fit 1024, 1280, 1920 px | Verified | `app.e2e.ts` tests 1, 2, 5 and their screenshots |
+| *Surfaces* setting (Frosted glass / Solid panels) validated, persisted, audited; solid removes the blur | Verified | `workspace.test.ts`, `app.e2e.ts` test 2 |
+| Reduced transparency (OS setting) falls back to solid panels | Implemented, not automatically tested | `tokens.css` media query |

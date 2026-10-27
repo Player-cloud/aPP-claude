@@ -91,6 +91,18 @@ test('M2-AC6: theme preference applies immediately and persists', async (t) => {
     await shot(page, '04-settings-light-1280');
     await page.getByRole('button', { name: 'Projects' }).click();
     await shot(page, '05-projects-empty-light-1280');
+
+    // Frosted glass is on by default and can be switched to solid panels.
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.glass), 'on');
+    const blur = () => page.locator('.rail').evaluate((el) => getComputedStyle(el).backdropFilter);
+    assert.match(await blur(), /blur\(22px\)/);
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('radio', { name: 'Solid panels' }).check();
+    await page.waitForFunction(() => document.documentElement.dataset.glass === 'off');
+    assert.doesNotMatch(await blur(), /blur\(22px\)/);
+    await shot(page, '07-settings-solid-light-1280');
+    await page.getByRole('radio', { name: 'Frosted glass' }).check();
+    await page.waitForFunction(() => document.documentElement.dataset.glass === 'on');
   } finally {
     await app.close();
   }

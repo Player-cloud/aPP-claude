@@ -58,6 +58,7 @@ export function App() {
   useEffect(() => {
     if (!settings) return;
     applyTheme(settings.theme);
+    document.documentElement.dataset.glass = settings.glass;
     if (settings.theme !== 'system') return;
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const onChange = () => applyTheme('system');

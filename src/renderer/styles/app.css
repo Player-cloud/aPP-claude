@@ -13,7 +13,10 @@ body,
 }
 
 body {
-  background: var(--bg);
+  background: var(--backdrop);
+  background-color: var(--bg);
+  background-attachment: fixed;
+  accent-color: var(--accent);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--text-md);
@@ -52,10 +55,25 @@ body {
 
 /* ---- Shell ------------------------------------------------------------- */
 
+/* One reusable frosted-glass surface. Blur is limited to large, mostly
+   static panels (rail, top bar, cards) to keep scrolling smooth. */
+.glass,
+.rail,
+.topbar,
+.card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
 .shell {
   display: grid;
   grid-template-columns: var(--rail-width) 1fr;
+  gap: var(--space-3);
   height: 100%;
+  padding: var(--space-3);
 }
 
 .rail {
@@ -63,8 +81,8 @@ body {
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-5) var(--space-3);
-  background: var(--rail);
-  border-right: 1px solid var(--border);
+  background: var(--glass-bg-strong);
+  border-radius: var(--radius-xl);
   color: var(--text);
   overflow-y: auto;
 }
@@ -114,15 +132,17 @@ body {
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 .nav-item:hover {
-  background: var(--surface-hover);
+  background: var(--glass-inset-hover);
   color: var(--text);
 }
 .nav-item[aria-current="page"] {
-  background: var(--surface-selected);
+  background: linear-gradient(90deg, var(--accent-soft), transparent 90%);
+  box-shadow: inset 0 0 0 1px var(--glass-border);
   color: var(--text);
 }
 .nav-item[aria-current="page"] .nav-icon {
   background: var(--accent-gradient);
+  box-shadow: var(--glow);
   color: #fff;
 }
 .nav-icon {
@@ -132,7 +152,9 @@ body {
   height: 32px;
   flex: none;
   border-radius: var(--radius-pill);
-  background: var(--surface-hover);
+  background: var(--glass-inset);
+  border: 1px solid var(--glass-border);
+  transition: background var(--duration-fast) var(--ease-out), box-shadow var(--duration-base) var(--ease-out);
 }
 .nav-label {
   flex: 1;
@@ -156,6 +178,7 @@ body {
 .main {
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
   min-width: 0;
   overflow: hidden;
 }
@@ -164,9 +187,9 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-6);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elevated);
+  min-height: 56px;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-lg);
 }
 .breadcrumbs {
   display: flex;
@@ -203,7 +226,7 @@ body {
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-6);
+  padding: var(--space-5) var(--space-4) var(--space-6);
 }
 .content-grid {
   display: grid;
@@ -213,10 +236,11 @@ body {
 }
 
 .page-title {
-  margin: 0 0 var(--space-1);
-  font-size: var(--text-2xl);
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-2);
+  font-size: clamp(1.75rem, 1.2rem + 1.4vw, 2.5rem);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
 }
 .page-title .accent {
   background: var(--accent-gradient);
@@ -233,11 +257,9 @@ body {
 /* ---- Surfaces ---------------------------------------------------------- */
 
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-5);
-  box-shadow: var(--shadow);
+  position: relative;
+  border-radius: var(--radius-xl);
+  padding: var(--space-5) var(--space-5) var(--space-6);
 }
 .card + .card {
   margin-top: var(--space-4);
@@ -282,12 +304,22 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-subtle);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
 }
 .table td {
   padding: var(--space-3);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
   vertical-align: top;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.table tbody tr:hover td {
+  background: var(--glass-inset);
+}
+.table tbody tr td:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+.table tbody tr td:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 .table tr:last-child td {
   border-bottom: 0;
@@ -315,9 +347,9 @@ body {
   gap: var(--space-2);
   min-height: 36px;
   padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--glass-border-strong);
   border-radius: var(--radius-pill);
-  background: var(--surface);
+  background: var(--glass-inset);
   color: var(--text);
   font: inherit;
   font-size: var(--text-sm);
@@ -326,20 +358,24 @@ body {
   transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 .btn:hover {
-  background: var(--surface-hover);
+  background: var(--glass-inset-hover);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 .btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
 .btn-primary {
-  border-color: transparent;
+  border-color: rgba(255, 255, 255, 0.18);
   background: var(--accent-gradient);
   color: var(--accent-text);
+  box-shadow: var(--glow), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 .btn-primary:hover {
   background: var(--accent-gradient);
-  filter: brightness(1.08);
+  filter: brightness(1.1);
 }
 .btn-danger {
   border-color: var(--danger);
@@ -377,12 +413,22 @@ body {
 .select {
   width: 100%;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
   color: var(--text);
   font: inherit;
   font-size: var(--text-sm);
+}
+.input:focus-visible,
+.textarea:focus-visible,
+.select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.select option {
+  background: var(--bg-elevated);
+  color: var(--text);
 }
 .textarea {
   min-height: 84px;
@@ -403,8 +449,9 @@ fieldset.field {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--glass-border-strong);
   border-radius: var(--radius-pill);
+  background: var(--glass-inset);
   cursor: pointer;
   font-size: var(--text-sm);
 }
@@ -460,7 +507,7 @@ fieldset.field {
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
-  border: 1px solid var(--border);
+  border: 1px solid var(--glass-border);
   background: var(--info-soft);
   font-size: var(--text-sm);
 }
@@ -506,9 +553,13 @@ fieldset.field {
 
 .run {
   padding: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset);
+  transition: border-color var(--duration-base) var(--ease-out), background var(--duration-base) var(--ease-out);
+}
+.run:hover {
+  border-color: var(--glass-border-strong);
 }
 .run + .run {
   margin-top: var(--space-3);
@@ -587,6 +638,8 @@ fieldset.field {
 @media (max-width: 1060px) {
   .shell {
     grid-template-columns: var(--rail-width-collapsed) 1fr;
+    gap: var(--space-2);
+    padding: var(--space-2);
   }
   .rail {
     padding: var(--space-4) var(--space-2);
@@ -623,4 +676,10 @@ fieldset.field {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
+}
+
+/* Thin scrollbars that sit on the glass instead of a grey gutter. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--glass-border-strong) transparent;
 }

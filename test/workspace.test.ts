@@ -145,7 +145,8 @@ test('M2-AC6: settings are validated, persisted and audited', (t) => {
   const { home, cleanup } = tempHome();
   t.after(cleanup);
   let ws = Workspace.open(home, { actor: 'tester' });
-  assert.equal(ws.getSettings().theme, 'dark');
+  assert.deepEqual(ws.getSettings(), { theme: 'dark', glass: 'on' });
+  assert.throws(() => ws.updateSetting('glass', 'maybe'), ValidationError);
   assert.throws(() => ws.updateSetting('theme', 'neon'), ValidationError);
   assert.throws(() => ws.updateSetting('telemetry', 'on'), ValidationError);
   ws.updateSetting('theme', 'light');
