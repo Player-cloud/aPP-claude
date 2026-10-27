@@ -11,6 +11,9 @@ import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '
 import { moveCorruptStateAside, Workspace, type Fact, type WorkflowRun } from '../core/workspace.ts';
 import { defaultScanRoots } from '../core/inventory.ts';
 import { runToolScan, type ToolScan } from '../core/tools.ts';
+import { SimulatedModel } from '../core/agents/model.ts';
+import { Orchestrator } from '../core/agents/orchestrator.ts';
+import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
 
 const USAGE = `Usage: iap <command> [options]
@@ -30,6 +33,10 @@ Claude Code tools (read-only: nothing is changed or removed)
   tools scan [--include <projectDir>]...   Inventory plugins, skills, commands, agents, hooks and MCP servers, and report conflicts
   tools show                               Show the latest scan
 
+Main agent (simulated model only: no AI is called and nothing is billed)
+  agent run [runId] --goal <text> [--title <text>]   Plan, delegate and reconcile a request (the run must be "running")
+  agent list <runId>                                 Show the agent tasks for a run
+
 Audit and health
   events [--project <id>] [--run <id>] [--limit <n>]
   doctor
@@ -43,7 +50,7 @@ Run states: ${RUN_STATES.join(', ')}`;
 
 type Out = (line: string) => void;
 
-export function run(argv: string[], out: Out = console.log, err: Out = console.error): number {
+export async function run(argv: string[], out: Out = console.log, err: Out = console.error): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -62,6 +69,7 @@ export function run(argv: string[], out: Out = console.log, err: Out = console.e
       json: { type: 'boolean', default: false },
       confirm: { type: 'boolean', default: false },
       include: { type: 'string', multiple: true },
+      goal: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -199,6 +207,21 @@ export function run(argv: string[], out: Out = console.log, err: Out = console.e
         print(scan, () => (scan ? describeScan(scan, out) : out('No scan yet. Run: iap tools scan')));
         return 0;
       }
+      case 'agent run': {
+        const goal = values.goal ?? '';
+        const root = await new Orchestrator(ws, new SimulatedModel()).run({ runId: rest[0] ?? null, title: values.title ?? goal.slice(0, 80), goal });
+        const tasks = [root, ...ws.listAgentTasks({ parentId: root.id })];
+        print(tasks, () => tasks.forEach((t) => out(describeTask(t))));
+        return root.status === 'succeeded' ? 0 : 4;
+      }
+      case 'agent list': {
+        const tasks = ws.listAgentTasks({ runId: need(rest[0], 'runId') });
+        print(tasks, () => {
+          if (!tasks.length) out('No agent tasks for this run.');
+          for (const t of tasks) out(describeTask(t));
+        });
+        return 0;
+      }
       case 'doctor': {
         const health = ws.health();
         print({ home, db: ws.paths.db, ...health }, () => {
@@ -231,6 +254,16 @@ function describeRun(r: WorkflowRun): string {
   return r.state === 'blocked'
     ? `${base}\n      BLOCKED (from ${r.blockedFrom}): ${r.blockerReason}\n      To resolve: ${r.blockerResolution}`
     : base;
+}
+
+function describeTask(t: AgentTask): string {
+  const lines = [`${t.parentId ? '  ' : ''}${t.id}  ${t.kind.padEnd(9)} ${t.status.padEnd(17)} ${t.title}${t.strategy ? `  [${t.strategy}]` : ''}`];
+  const pad = t.parentId ? '      ' : '    ';
+  for (const r of t.rationale) lines.push(`${pad}why: ${r}`);
+  if (t.failure) lines.push(`${pad}problem: ${t.failure}`);
+  if (t.resolution) lines.push(`${pad}to resolve: ${t.resolution}`);
+  if (t.output && !t.parentId) lines.push(...t.output.split('\n').map((l) => `${pad}${l}`));
+  return lines.join('\n');
 }
 
 function describeScan(scan: ToolScan, out: Out): void {
@@ -267,7 +300,7 @@ function fail(e: unknown, err: Out): number {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    process.exitCode = run(process.argv.slice(2));
+    process.exitCode = await run(process.argv.slice(2));
   } catch (e) {
     // parseArgs rejects unknown flags by throwing
     console.error(`Error: ${(e as Error).message}\n\n${USAGE}`);

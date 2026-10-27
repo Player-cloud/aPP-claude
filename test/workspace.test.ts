@@ -145,7 +145,7 @@ test('M2-AC6: settings are validated, persisted and audited', (t) => {
   const { home, cleanup } = tempHome();
   t.after(cleanup);
   let ws = Workspace.open(home, { actor: 'tester' });
-  assert.deepEqual(ws.getSettings(), { theme: 'dark', glass: 'on' });
+  assert.deepEqual(ws.getSettings(), { theme: 'dark', glass: 'on', budget: 'none' });
   assert.throws(() => ws.updateSetting('glass', 'maybe'), ValidationError);
   assert.throws(() => ws.updateSetting('theme', 'neon'), ValidationError);
   assert.throws(() => ws.updateSetting('telemetry', 'on'), ValidationError);
@@ -166,7 +166,7 @@ test('a version 1 database is migrated forward without losing data', (t) => {
   const p = ws.createProject({ name: 'Old' });
   ws.close();
   const raw = new DatabaseSync(appPaths(home).db);
-  raw.exec('DROP TABLE settings; DROP TABLE tool_scans; PRAGMA user_version = 1;');
+  raw.exec('DROP TABLE settings; DROP TABLE tool_scans; DROP TABLE spend; DROP TABLE agent_tasks; PRAGMA user_version = 1;');
   raw.close();
   ws = Workspace.open(home);
   assert.equal(ws.getProject(p.id).name, 'Old');

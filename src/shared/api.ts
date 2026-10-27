@@ -1,11 +1,11 @@
 // Contract between the renderer and the main process. The renderer only ever
 // sees these types; it never touches the database or filesystem directly.
 
-import type { AuditEvent, Fact, Project, Settings, WorkflowRun } from '../core/workspace.ts';
+import type { AgentTask, AuditEvent, Fact, Project, Settings, WorkflowRun } from '../core/workspace.ts';
 import type { ToolScan } from '../core/tools.ts';
 import type { RunState, Workflow } from '../core/workflow.ts';
 
-export type { AuditEvent, Fact, Project, RunState, Settings, ToolScan, Workflow, WorkflowRun };
+export type { AgentTask, AuditEvent, Fact, Project, RunState, Settings, ToolScan, Workflow, WorkflowRun };
 export type { Finding, Severity } from '../core/conflicts.ts';
 export type { ToolEntry, ToolKind } from '../core/inventory.ts';
 
@@ -54,6 +54,9 @@ export interface IapApi {
   /** Read-only scan of the user's Claude Code tools (M4). Changes nothing outside the app's database. */
   scanTools(): Promise<Result<ToolScan>>;
   getToolScan(): Promise<Result<ToolScan | null>>;
+  /** Main agent on a running run (M3). Uses the simulated model only: no AI is called and nothing is billed. */
+  runAgent(input: { runId: string; goal: string }): Promise<Result<AgentTask>>;
+  listAgentTasks(runId: string): Promise<Result<AgentTask[]>>;
 }
 
 export type IapMethod = keyof IapApi;
@@ -73,6 +76,8 @@ export const IAP_METHODS = [
   'health',
   'scanTools',
   'getToolScan',
+  'runAgent',
+  'listAgentTasks',
 ] as const satisfies readonly IapMethod[];
 
 export const channel = (method: IapMethod) => `iap:${method}`;

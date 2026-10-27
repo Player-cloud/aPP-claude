@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { RunState, RunWithNext, Workflow } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
+import { AgentPanel } from './AgentPanel.tsx';
 import { Alert, Empty, formatDate, formatTime, StateBadge, stateLabel } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
@@ -107,6 +108,7 @@ function RunCard({ run, onChanged }: { run: RunWithNext; onChanged: () => void }
           <Alert tone="danger">{error}</Alert>
         </div>
       )}
+      <AgentPanel run={run} />
       <div className="run-foot">
         <span className="pill" title={`Updated ${formatTime(run.updatedAt)}`}>
           <Icon name="calendar" size={14} /> {formatDate(run.updatedAt)}

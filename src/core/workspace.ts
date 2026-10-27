@@ -16,7 +16,7 @@ import { NotFoundError, StateCorruptError, StateTooNewError, ValidationError } f
 import type { ToolScan } from './tools.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -120,13 +120,112 @@ const MIGRATIONS: Record<number, string> = {
     );
     CREATE INDEX tool_scans_at ON tool_scans(scanned_at);
   `,
+  4: `
+    CREATE TABLE agent_tasks (
+      id TEXT PRIMARY KEY,
+      run_id TEXT REFERENCES runs(id),
+      parent_id TEXT REFERENCES agent_tasks(id),
+      kind TEXT NOT NULL CHECK (kind IN ('request','subtask','reconcile')),
+      title TEXT NOT NULL,
+      spec TEXT NOT NULL,
+      status TEXT NOT NULL,
+      strategy TEXT,
+      rationale TEXT NOT NULL DEFAULT '[]',
+      output TEXT,
+      failure TEXT,
+      resolution TEXT,
+      model TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX agent_tasks_run ON agent_tasks(run_id);
+    CREATE INDEX agent_tasks_parent ON agent_tasks(parent_id);
+    CREATE TABLE spend (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      task_id TEXT,
+      model TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
+      cost_usd REAL NOT NULL
+    );
+    CREATE TRIGGER spend_no_update BEFORE UPDATE ON spend
+      BEGIN SELECT RAISE(ABORT, 'the spend ledger is append-only'); END;
+    CREATE TRIGGER spend_no_delete BEFORE DELETE ON spend
+      BEGIN SELECT RAISE(ABORT, 'the spend ledger is append-only'); END;
+  `,
 };
+
+export type AgentTaskKind = 'request' | 'subtask' | 'reconcile';
+export type AgentTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'blocked' | 'permission_denied' | 'cancelled';
+
+/** What a task may do and what it must return (FR-APP-003: scope, output, permissions, verification). */
+export interface AgentTaskSpec {
+  goal: string;
+  /** Tool names the task may request. Anything else is denied. */
+  allowedTools: string[];
+  timeoutMs: number;
+  maxOutputTokens: number;
+  /** How the result is verified before it counts. */
+  output: { kind: 'text'; mustInclude: string[] } | { kind: 'json'; requiredKeys: string[] };
+}
+
+export interface AgentTask {
+  id: string;
+  runId: string | null;
+  parentId: string | null;
+  kind: AgentTaskKind;
+  title: string;
+  spec: AgentTaskSpec;
+  status: AgentTaskStatus;
+  strategy: string | null;
+  rationale: string[];
+  output: string | null;
+  failure: string | null;
+  resolution: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AgentTaskPatch = Partial<Pick<AgentTask, 'status' | 'strategy' | 'rationale' | 'output' | 'failure' | 'resolution' | 'model' | 'inputTokens' | 'outputTokens' | 'costUsd'>>;
+
+function toAgentTask(row: Record<string, unknown>): AgentTask {
+  return {
+    id: row.id as string,
+    runId: (row.run_id as string | null) ?? null,
+    parentId: (row.parent_id as string | null) ?? null,
+    kind: row.kind as AgentTaskKind,
+    title: row.title as string,
+    spec: JSON.parse(row.spec as string) as AgentTaskSpec,
+    status: row.status as AgentTaskStatus,
+    strategy: (row.strategy as string | null) ?? null,
+    rationale: JSON.parse(row.rationale as string) as string[],
+    output: (row.output as string | null) ?? null,
+    failure: (row.failure as string | null) ?? null,
+    resolution: (row.resolution as string | null) ?? null,
+    model: (row.model as string | null) ?? null,
+    inputTokens: row.input_tokens as number,
+    outputTokens: row.output_tokens as number,
+    costUsd: row.cost_usd as number,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
 
 // Known settings and their allowed values. Unknown keys are rejected so the
 // settings table cannot become an unvalidated dumping ground.
 export const SETTINGS = {
   theme: { values: ['system', 'dark', 'light'], default: 'dark' },
   glass: { values: ['on', 'off'], default: 'on' },
+  // Monthly cap in US dollars for billable model calls. "none" = no real calls (DEC-017).
+  budget: { values: ['none', '20', '50', '100'], default: 'none' },
 } as const satisfies Record<string, { values: readonly string[]; default: string }>;
 export type SettingKey = keyof typeof SETTINGS;
 export type Settings = { [K in SettingKey]: (typeof SETTINGS)[K]['values'][number] };
@@ -404,6 +503,110 @@ export class Workspace {
   }
 
   /** Read-only health summary for `iap doctor`. */
+  // ---- Agent tasks and spend (M3) ----------------------------------------
+
+  createAgentTask(input: { runId: string | null; parentId: string | null; kind: AgentTaskKind; title: string; spec: AgentTaskSpec }): AgentTask {
+    if (input.runId) this.getRun(input.runId);
+    const id = `task_${randomUUID()}`;
+    const at = this.timestamp();
+    const title = redactString(requireText('Task title', input.title, 200));
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO agent_tasks (id, run_id, parent_id, kind, title, spec, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
+        )
+        // Only the free-text goal can carry secrets; redact() would also blank keys like maxOutputTokens.
+        .run(id, input.runId, input.parentId, input.kind, title, JSON.stringify({ ...input.spec, goal: redactString(input.spec.goal) }), at, at);
+      this.record('agent.task.created', this.projectOfRun(input.runId), input.runId, { taskId: id, parentId: input.parentId, kind: input.kind, title });
+    });
+    return this.getAgentTask(id);
+  }
+
+  updateAgentTask(id: string, patch: AgentTaskPatch): AgentTask {
+    const task = this.getAgentTask(id);
+    const next = { ...task, ...patch };
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE agent_tasks SET status = ?, strategy = ?, rationale = ?, output = ?, failure = ?, resolution = ?, model = ?,
+             input_tokens = ?, output_tokens = ?, cost_usd = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          next.status,
+          next.strategy,
+          JSON.stringify(next.rationale.map(redactString)),
+          next.output === null ? null : redactString(next.output),
+          next.failure === null ? null : redactString(next.failure),
+          next.resolution === null ? null : redactString(next.resolution),
+          next.model,
+          next.inputTokens,
+          next.outputTokens,
+          next.costUsd,
+          this.timestamp(),
+          id,
+        );
+      if (patch.status && patch.status !== task.status) {
+        this.record('agent.task.status', this.projectOfRun(task.runId), task.runId, {
+          taskId: id,
+          from: task.status,
+          to: patch.status,
+          ...(next.failure && patch.status !== 'succeeded' ? { reason: next.failure } : {}),
+        });
+      }
+      if (patch.strategy && patch.strategy !== task.strategy) {
+        this.record('agent.strategy.chosen', this.projectOfRun(task.runId), task.runId, { taskId: id, strategy: patch.strategy, rationale: next.rationale });
+      }
+    });
+    return this.getAgentTask(id);
+  }
+
+  getAgentTask(id: string): AgentTask {
+    const row = this.db.prepare('SELECT * FROM agent_tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Agent task', id);
+    return toAgentTask(row);
+  }
+
+  listAgentTasks(filter: { runId?: string; parentId?: string } = {}): AgentTask[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.runId) {
+      where.push('run_id = ?');
+      params.push(filter.runId);
+    }
+    if (filter.parentId) {
+      where.push('parent_id = ?');
+      params.push(filter.parentId);
+    }
+    const sql = `SELECT * FROM agent_tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at, rowid`;
+    return (this.db.prepare(sql).all(...params) as Record<string, unknown>[]).map(toAgentTask);
+  }
+
+  recordSpend(input: { taskId: string | null; model: string; inputTokens: number; outputTokens: number; costUsd: number }): void {
+    if (!(input.costUsd >= 0) || !Number.isFinite(input.costUsd)) throw new ValidationError('Cost must be a non-negative number.');
+    this.db
+      .prepare('INSERT INTO spend (at, task_id, model, input_tokens, output_tokens, cost_usd) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(this.timestamp(), input.taskId, input.model, input.inputTokens, input.outputTokens, input.costUsd);
+  }
+
+  /** Spend in the current calendar month (UTC). */
+  spentThisMonth(): number {
+    const now = this.now();
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+    const row = this.db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS total FROM spend WHERE at >= ?').get(start) as { total: number };
+    return row.total;
+  }
+
+  /** The monthly cap in dollars, or null when real (billable) calls are off. */
+  monthlyBudgetUsd(): number | null {
+    const value = this.getSettings().budget;
+    return value === 'none' ? null : Number(value);
+  }
+
+  private projectOfRun(runId: string | null): string | null {
+    return runId ? this.getRun(runId).projectId : null;
+  }
+
   // ---- Tool inventory (M4) -------------------------------------------------
 
   /** Stores a read-only tool scan (redacted) and records it in the audit log. */
