@@ -114,6 +114,7 @@ const MIGRATIONS: Record<number, string> = {
 // settings table cannot become an unvalidated dumping ground.
 export const SETTINGS = {
   theme: { values: ['system', 'dark', 'light'], default: 'dark' },
+  glass: { values: ['on', 'off'], default: 'on' },
 } as const satisfies Record<string, { values: readonly string[]; default: string }>;
 export type SettingKey = keyof typeof SETTINGS;
 export type Settings = { [K in SettingKey]: (typeof SETTINGS)[K]['values'][number] };

@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { RunState, RunWithNext, Workflow } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
-import { Alert, Empty, formatTime, StateBadge, stateLabel } from '../ui.tsx';
+import { Icon } from '../icons.tsx';
+import { Alert, Empty, formatDate, formatTime, StateBadge, stateLabel } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
 const WORKFLOWS: { id: Workflow; label: string }[] = [
@@ -62,18 +63,34 @@ function RunCard({ run, onChanged }: { run: RunWithNext; onChanged: () => void }
   return (
     <article className="run" aria-label={`${run.title}, ${stateLabel(run.state)}`}>
       <div className="run-head">
-        <span className="run-title">{run.title}</span>
+        <div>
+          <h3 className="run-title">{run.title}</h3>
+          <p className="run-sub">{WORKFLOWS.find((w) => w.id === run.workflow)?.label ?? run.workflow} workflow</p>
+        </div>
         <StateBadge state={run.state} />
-        <span className="run-meta subtle">
-          {WORKFLOWS.find((w) => w.id === run.workflow)?.label ?? run.workflow} · updated {formatTime(run.updatedAt)}
-        </span>
       </div>
       {progress >= 0 && (
-        <ol className="stepper" aria-label={`Step ${progress + 1} of ${FORWARD.length}`}>
-          {FORWARD.map((s, i) => (
-            <li key={s} data-done={i <= progress} title={stateLabel(s)} />
-          ))}
-        </ol>
+        <div className="progress-row">
+          <div className="progress-label">
+            <span>
+              <Icon name="list" size={14} /> Progress
+            </span>
+            <span>
+              {progress + 1}/{FORWARD.length}
+            </span>
+          </div>
+          <div
+            className="progress"
+            data-tone={run.state === 'blocked' || run.state === 'failed' ? 'danger' : run.state === 'completed' ? 'ok' : 'accent'}
+            role="progressbar"
+            aria-label={`Step ${progress + 1} of ${FORWARD.length}: ${stateLabel(FORWARD[progress]!)}`}
+            aria-valuemin={1}
+            aria-valuemax={FORWARD.length}
+            aria-valuenow={progress + 1}
+          >
+            <span style={{ width: `${((progress + 1) / FORWARD.length) * 100}%` }} />
+          </div>
+        </div>
       )}
       {run.state === 'blocked' && (
         <div className="run-blocker">
@@ -90,25 +107,30 @@ function RunCard({ run, onChanged }: { run: RunWithNext; onChanged: () => void }
           <Alert tone="danger">{error}</Alert>
         </div>
       )}
-      {run.next.length > 0 && !mode && (
-        <div className="run-actions btn-row">
-          {simple.map((to) => (
-            <button key={to} type="button" className={to === 'cancelled' ? 'btn btn-sm btn-danger' : 'btn btn-sm'} disabled={busy} onClick={() => void move(to)}>
-              {label(to)}
-            </button>
-          ))}
-          {run.next.includes('blocked') && (
-            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setMode('blocked')}>
-              Report blocker
-            </button>
-          )}
-          {run.next.includes('failed') && (
-            <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => setMode('failed')}>
-              Mark failed
-            </button>
-          )}
-        </div>
-      )}
+      <div className="run-foot">
+        <span className="pill" title={`Updated ${formatTime(run.updatedAt)}`}>
+          <Icon name="calendar" size={14} /> {formatDate(run.updatedAt)}
+        </span>
+        {run.next.length > 0 && !mode && (
+          <div className="btn-row">
+            {simple.map((to) => (
+              <button key={to} type="button" className={to === 'cancelled' ? 'btn btn-sm btn-danger' : 'btn btn-sm'} disabled={busy} onClick={() => void move(to)}>
+                {label(to)}
+              </button>
+            ))}
+            {run.next.includes('blocked') && (
+              <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setMode('blocked')}>
+                Report blocker
+              </button>
+            )}
+            {run.next.includes('failed') && (
+              <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => setMode('failed')}>
+                Mark failed
+              </button>
+            )}
+          </div>
+        )}
+      </div>
       {mode && (
         <form className="run-actions" onSubmit={submitIssue}>
           <div className="field">
@@ -172,11 +194,17 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
         <div>
           <section className="card" aria-labelledby="runs-title">
             <h2 className="card-title" id="runs-title">
-              Workflow runs {runs.data && <span className="count">{runs.data.length}</span>}
+              Workflow runs {runs.data && <span className="count-pill">{runs.data.length}</span>}
             </h2>
             {runs.error && <Alert tone="danger">{runs.error}</Alert>}
             {runs.data && runs.data.length === 0 && <Empty title="No runs yet">Start a workflow run to track a piece of work through its states.</Empty>}
-            {runs.data?.map((run) => <RunCard key={run.id} run={run} onChanged={() => void runs.reload()} />)}
+            {runs.data && runs.data.length > 0 && (
+              <div className="run-grid">
+                {runs.data.map((run) => (
+                  <RunCard key={run.id} run={run} onChanged={() => void runs.reload()} />
+                ))}
+              </div>
+            )}
           </section>
           <section className="card" aria-labelledby="facts-title">
             <h2 className="card-title" id="facts-title">

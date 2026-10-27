@@ -1,9 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import type { Fact } from '../../shared/api.ts';
+import type { Fact, Project } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
-import { Alert, Badge, Empty, formatTime } from '../ui.tsx';
-import { useAsync } from '../useAsync.ts';
+import { Alert, Empty, formatDate } from '../ui.tsx';
 
 const lines = (text: string) =>
   text
@@ -11,9 +10,9 @@ const lines = (text: string) =>
     .map((l) => l.trim())
     .filter(Boolean);
 
-function CreateProjectPanel({ onCreated, onCancel }: { onCreated: (id: string, name: string) => void; onCancel: () => void }) {
+function CreateProjectPanel({ initialIdea, onCreated, onCancel }: { initialIdea: string; onCreated: (id: string, name: string) => void; onCancel: () => void }) {
   const [name, setName] = useState('');
-  const [idea, setIdea] = useState('');
+  const [idea, setIdea] = useState(initialIdea);
   const [confirmed, setConfirmed] = useState('');
   const [assumptions, setAssumptions] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -79,81 +78,137 @@ function CreateProjectPanel({ onCreated, onCancel }: { onCreated: (id: string, n
   );
 }
 
-export function ProjectsView({ onOpen }: { onOpen: (id: string, name: string) => void }) {
-  const { data: projects, error, loading } = useAsync(() => call(iap().listProjects()), []);
-  const [creating, setCreating] = useState(false);
+const STAGES = ['Plan', 'Build', 'Design', 'Review', 'Ship'];
+
+function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
+  const assumptions = project.facts.filter((f) => f.kind === 'assumption').length;
+  return (
+    <li>
+      <button type="button" className="project-card" onClick={onOpen}>
+        <span className="project-card-top">
+          <span className="icon-tile">
+            <Icon name="projects" />
+          </span>
+          <span className="project-card-arrow">
+            <Icon name="arrow" size={20} />
+          </span>
+        </span>
+        <span className="project-card-name">{project.name}</span>
+        <span className="project-card-idea">{project.idea ?? 'No idea recorded yet.'}</span>
+        <span className="project-card-foot">
+          <span className="pill">
+            <Icon name="calendar" size={14} /> {formatDate(project.createdAt)}
+          </span>
+          <span className="subtle">
+            {project.facts.length - assumptions} confirmed · {assumptions} assumed
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+}
+
+export function ProjectsView({
+  projects,
+  error,
+  creating,
+  onCreate,
+  onCancelCreate,
+  onCreated,
+  onOpen,
+}: {
+  projects: Project[] | null;
+  error: string | null;
+  creating: { idea: string } | null;
+  onCreate: (idea?: string) => void;
+  onCancelCreate: () => void;
+  onCreated: (id: string, name: string) => void;
+  onOpen: (id: string, name: string) => void;
+}) {
+  const [draft, setDraft] = useState('');
 
   const newButton = (
-    <button type="button" className="btn btn-primary" onClick={() => setCreating(true)} disabled={creating}>
+    <button type="button" className="btn btn-primary" onClick={() => onCreate()} disabled={!!creating}>
       <Icon name="plus" size={16} /> New project
     </button>
   );
 
+  const startFromIdea = (event: FormEvent) => {
+    event.preventDefault();
+    onCreate(draft.trim());
+    setDraft('');
+  };
+
   return (
     <>
+      <p className="eyebrow">Welcome back</p>
       <h1 className="page-title">
-        Your <span className="accent">projects</span>
+        Bring your next <span className="accent">idea</span> to life
       </h1>
       <p className="page-lede">Plan, build, review and ship software projects. Each project has its own workspace and design documents.</p>
       <div className="content-grid">
-        <section className="card" aria-labelledby="projects-title">
-          <div className="card-head">
-            <h2 className="card-title" id="projects-title">
-              Projects {projects && <span className="count">{projects.length}</span>}
-            </h2>
-            {projects && projects.length > 0 && newButton}
-          </div>
-          {loading && !projects && <p className="loading">Loading projects…</p>}
-          {error && <Alert tone="danger" title="Could not load projects">{error}</Alert>}
-          {projects && projects.length === 0 && (
-            <Empty title="No projects yet" action={!creating && newButton}>
-              Create your first project from an idea. You can record what is confirmed and what is still an assumption.
-            </Empty>
-          )}
-          {projects && projects.length > 0 && (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th scope="col">Name</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Facts</th>
-                  <th scope="col">Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {projects.map((p) => {
-                  const assumptions = p.facts.filter((f) => f.kind === 'assumption').length;
-                  return (
-                    <tr key={p.id}>
-                      <td>
-                        <button type="button" className="row-link" onClick={() => onOpen(p.id, p.name)}>
-                          {p.name}
-                        </button>
-                        {p.idea && <div className="subtle">{p.idea.length > 90 ? `${p.idea.slice(0, 90)}…` : p.idea}</div>}
-                      </td>
-                      <td>
-                        <Badge tone={p.status === 'active' ? 'ok' : 'neutral'}>{p.status === 'active' ? 'Active' : 'Archived'}</Badge>
-                      </td>
-                      <td className="subtle">
-                        {p.facts.length - assumptions} confirmed · {assumptions} assumed
-                      </td>
-                      <td className="subtle">{formatTime(p.createdAt)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </section>
+        <div>
+          <form className="composer glass" onSubmit={startFromIdea}>
+            <span className="composer-icon">
+              <Icon name="sparkle" size={20} />
+            </span>
+            <textarea
+              className="composer-input"
+              aria-label="Describe what you want to build"
+              placeholder="Describe what you want to build…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={2}
+            />
+            <div className="composer-foot">
+              <span className="subtle">You'll name it and record what's confirmed on the next step.</span>
+              <button type="submit" className="round-btn" aria-label="Continue with this description" title="Continue">
+                <Icon name="send" size={18} />
+              </button>
+            </div>
+          </form>
+
+          <section aria-labelledby="projects-title" className="section">
+            <div className="section-head">
+              <h2 className="section-title" id="projects-title">
+                Projects {projects && <span className="count-pill">{projects.length}</span>}
+              </h2>
+              {projects && projects.length > 0 && newButton}
+            </div>
+            {!projects && !error && <p className="loading">Loading projects…</p>}
+            {error && <Alert tone="danger" title="Could not load projects">{error}</Alert>}
+            {projects && projects.length === 0 && (
+              <div className="card">
+                <Empty title="No projects yet" action={!creating && newButton}>
+                  Create your first project from an idea. You can record what is confirmed and what is still an assumption.
+                </Empty>
+              </div>
+            )}
+            {projects && projects.length > 0 && (
+              <ul className="card-grid" aria-label="All projects">
+                {projects.map((p) => (
+                  <ProjectCard key={p.id} project={p} onOpen={() => onOpen(p.id, p.name)} />
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
         <aside aria-label="Project details panel">
           {creating ? (
-            <CreateProjectPanel onCreated={onOpen} onCancel={() => setCreating(false)} />
+            <CreateProjectPanel key={creating.idea} initialIdea={creating.idea} onCreated={onCreated} onCancel={onCancelCreate} />
           ) : (
             <section className="card">
               <h2 className="card-title">How projects work</h2>
+              <ol className="stages">
+                {STAGES.map((s, i) => (
+                  <li key={s}>
+                    <span className="stage-num">{i + 1}</span>
+                    {s}
+                  </li>
+                ))}
+              </ol>
               <p className="muted">
-                A project moves through <strong>Plan → Build → Design → Review → Ship</strong>. Each piece of work is a workflow run with an explicit
-                state, and every change is recorded in the activity log.
+                Each piece of work is a workflow run with an explicit state, and every change is recorded in the activity log.
               </p>
             </section>
           )}

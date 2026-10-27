@@ -1,18 +1,19 @@
 /*
  * Design tokens (FR-DESIGN-004). Every colour, size and duration used by the
- * UI comes from here. Direction from docs/spec/design-references: deep navy
- * surfaces, restrained blue-to-violet accents, high-contrast text.
+ * UI comes from here. Direction (DEC-015): graphite frosted glass with soft
+ * violet and teal light, after joshua's reference designs.
  * Themes: [data-theme="dark"] (default), [data-theme="light"]; "system" is
  * resolved in the renderer from prefers-color-scheme.
  */
 :root {
-  --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-sans: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Cascadia Code", Consolas, ui-monospace, monospace;
 
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
   --text-md: 0.9375rem;
-  --text-lg: 1.125rem;
+  --text-lg: 1.0625rem;
   --text-xl: 1.5rem;
   --text-2xl: 2rem;
   --leading: 1.5;
@@ -28,11 +29,15 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 18px;
+  --radius-xl: 24px;
   --radius-pill: 999px;
 
-  --rail-width: 256px;
-  --rail-width-collapsed: 72px;
+  --rail-width: 72px;
+  --side-width: 264px;
   --panel-width: 320px;
+
+  --glass-blur: 24px;
+  --glass-saturate: 140%;
 
   --duration-fast: 120ms;
   --duration-base: 200ms;
@@ -42,61 +47,86 @@
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0b1020;
-  --bg-elevated: #111830;
-  --rail: #0e1428;
-  --surface: #151d38;
-  --surface-hover: #1b2546;
-  --surface-selected: #1f2b55;
-  --border: #253157;
-  --border-strong: #34437a;
+  --bg: #0d0e12;
+  --bg-elevated: #17181e;
+  --rail: #121318;
+  --surface: #1a1b22;
+  --surface-hover: #22232b;
+  --surface-selected: #2a2737;
+  --border: #2a2b33;
+  --border-strong: #3a3b46;
 
-  --text: #eef1fb;
-  --text-muted: #a3acc8;
-  --text-subtle: #7d87a8;
+  --text: #f2f2f5;
+  --text-muted: #a9abb8;
+  --text-subtle: #7e8090;
 
-  --accent: #5b7cfa;
-  --accent-strong: #7c5cff;
+  --accent: #8b6cff;
+  --accent-strong: #a855f7;
   --accent-text: #ffffff;
-  --accent-soft: rgba(91, 124, 250, 0.16);
-  --accent-gradient: linear-gradient(135deg, #4f6ff5 0%, #7c5cff 100%);
+  --accent-soft: rgba(139, 108, 255, 0.16);
+  --accent-gradient: linear-gradient(135deg, #6d5dfc 0%, #a855f7 100%);
+  --teal: #2dd4bf;
 
-  --focus: #9db4ff;
+  --focus: #b7a6ff;
 
   --ok: #3ccf91;
   --ok-soft: rgba(60, 207, 145, 0.14);
   --warn: #f5b84b;
   --warn-soft: rgba(245, 184, 75, 0.14);
   --danger: #ff6b81;
-  --danger-soft: rgba(255, 107, 129, 0.14);
-  --info: #6cb6ff;
-  --info-soft: rgba(108, 182, 255, 0.14);
+  --danger-soft: rgba(255, 107, 129, 0.13);
+  --info: #7fb2ff;
+  --info-soft: rgba(127, 178, 255, 0.13);
 
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  /* Frosted glass (DEC-015). Surfaces are translucent over --backdrop. */
+  --backdrop:
+    radial-gradient(900px 520px at 62% -14%, rgba(45, 212, 191, 0.2), transparent 64%),
+    radial-gradient(760px 620px at 104% 10%, rgba(139, 92, 246, 0.22), transparent 60%),
+    radial-gradient(700px 600px at -6% 108%, rgba(109, 93, 252, 0.18), transparent 62%),
+    linear-gradient(180deg, #121318 0%, #0b0c10 100%);
+  --glass-bg: rgba(30, 31, 39, 0.55);
+  --glass-bg-strong: rgba(22, 23, 29, 0.72);
+  --glass-inset: rgba(255, 255, 255, 0.04);
+  --glass-inset-hover: rgba(255, 255, 255, 0.075);
+  --glass-border: rgba(255, 255, 255, 0.075);
+  --glass-border-strong: rgba(255, 255, 255, 0.14);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --glass-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+  --glow: 0 6px 26px rgba(139, 92, 246, 0.42);
+  --field-bg: rgba(0, 0, 0, 0.22);
+  --pill-bg: rgba(255, 255, 255, 0.06);
+
+  /* The context panel next to the rail. */
+  --side-bg: rgba(22, 23, 29, 0.6);
+  --side-active: rgba(255, 255, 255, 0.08);
+  --tree-line: rgba(255, 255, 255, 0.12);
 }
 
 [data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f5fb;
+  --bg: #f3f2f8;
   --bg-elevated: #ffffff;
-  --rail: #1a1530;
+  --rail: #ffffff;
   --surface: #ffffff;
-  --surface-hover: #f1effb;
-  --surface-selected: #ebe6ff;
-  --border: #e1e3ef;
-  --border-strong: #c9cce0;
+  --surface-hover: #f2f0fa;
+  --surface-selected: #ece7ff;
+  --border: #e4e2ee;
+  --border-strong: #cfcce0;
 
-  --text: #161a2e;
-  --text-muted: #555c78;
-  --text-subtle: #6c7390;
+  --text: #17151f;
+  --text-muted: #565366;
+  --text-subtle: #706c82;
 
-  --accent: #4c5ee6;
-  --accent-strong: #6d4ce6;
+  --accent: #7046e8;
+  --accent-strong: #8b5cf6;
   --accent-text: #ffffff;
-  --accent-soft: rgba(109, 76, 230, 0.12);
-  --accent-gradient: linear-gradient(135deg, #4c5ee6 0%, #7b4ff0 100%);
+  --accent-soft: rgba(112, 70, 232, 0.12);
+  --accent-gradient: linear-gradient(135deg, #6d4ce6 0%, #a855f7 100%);
+  --teal: #0f9d8a;
 
-  --focus: #4c5ee6;
+  --focus: #7046e8;
 
   --ok: #13865a;
   --ok-soft: rgba(19, 134, 90, 0.12);
@@ -108,16 +138,63 @@
   --info-soft: rgba(29, 111, 196, 0.1);
 
   --shadow: 0 8px 24px rgba(22, 26, 46, 0.08);
+
+  --backdrop:
+    radial-gradient(900px 600px at 70% -16%, rgba(170, 140, 255, 0.32), transparent 62%),
+    radial-gradient(800px 640px at 0% 110%, rgba(120, 200, 230, 0.26), transparent 62%),
+    linear-gradient(180deg, #f6f5fb 0%, #eeedf6 100%);
+  --glass-bg: rgba(255, 255, 255, 0.62);
+  --glass-bg-strong: rgba(255, 255, 255, 0.78);
+  --glass-inset: rgba(255, 255, 255, 0.6);
+  --glass-inset-hover: rgba(255, 255, 255, 0.9);
+  --glass-border: rgba(255, 255, 255, 0.8);
+  --glass-border-strong: rgba(80, 60, 150, 0.16);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  --glass-shadow: 0 18px 44px rgba(60, 40, 130, 0.1);
+  --glow: 0 6px 22px rgba(112, 70, 232, 0.32);
+  --field-bg: rgba(255, 255, 255, 0.75);
+  --pill-bg: rgba(112, 70, 232, 0.07);
+
+  --side-bg: rgba(22, 16, 40, 0.92);
+  --side-active: rgba(139, 92, 246, 0.9);
+  --tree-line: rgba(255, 255, 255, 0.16);
 }
 
-/* The navigation rail stays dark in both themes (reference 03). */
-[data-theme="light"] .rail {
-  --text: #eeeaff;
-  --text-muted: #b9b2d9;
-  --surface-hover: #2a2348;
-  --surface-selected: #3a2f66;
-  --border: #2d2650;
-  --focus: #b9a8ff;
+/* In the light theme the context panel is deep violet glass (reference 06),
+   so its contents use dark-theme text colours. */
+[data-theme="light"] .side {
+  --text: #f3f0ff;
+  --text-muted: #c4bce0;
+  --text-subtle: #9a92bd;
+  --glass-inset: rgba(255, 255, 255, 0.06);
+  --glass-inset-hover: rgba(255, 255, 255, 0.1);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-border-strong: rgba(255, 255, 255, 0.18);
+  --field-bg: rgba(255, 255, 255, 0.07);
+  --pill-bg: rgba(255, 255, 255, 0.1);
+  --focus: #c9b8ff;
+}
+
+/* Glass off (setting) or the OS asks for less transparency: solid surfaces, no blur. */
+[data-glass="off"] {
+  --glass-blur: 0px;
+  --glass-saturate: 100%;
+  --glass-bg: var(--surface);
+  --glass-bg-strong: var(--bg-elevated);
+}
+[data-glass="off"][data-theme="light"] {
+  --side-bg: #1a1430;
+}
+[data-glass="off"]:not([data-theme="light"]) {
+  --side-bg: var(--rail);
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-blur: 0px;
+    --glass-saturate: 100%;
+    --glass-bg: var(--surface);
+    --glass-bg-strong: var(--bg-elevated);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

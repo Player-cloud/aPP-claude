@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AppStatus, Settings } from '../shared/api.ts';
+import type { AppStatus, Project, Settings } from '../shared/api.ts';
 import { call, iap } from './api.ts';
 import { Icon } from './icons.tsx';
+import { SidePanel } from './SidePanel.tsx';
 import { ActivityView } from './views/ActivityView.tsx';
 import { IterativeView } from './views/IterativeView.tsx';
 import { ProjectDetail } from './views/ProjectDetail.tsx';
@@ -11,10 +12,15 @@ import { SettingsView } from './views/SettingsView.tsx';
 
 export type Section = 'projects' | 'activity' | 'iterative' | 'settings';
 
-const NAV: { id: Section; label: string; icon: 'projects' | 'activity' | 'iterate' | 'settings'; group: string; tag?: string }[] = [
-  { id: 'projects', label: 'Projects', icon: 'projects', group: 'Project Layer' },
-  { id: 'activity', label: 'Activity', icon: 'activity', group: 'Project Layer' },
-  { id: 'iterative', label: 'Improvements', icon: 'iterate', group: 'Iterative Layer', tag: 'Planned' },
+type NavIcon = 'projects' | 'activity' | 'iterate' | 'settings';
+
+// Groups are separated by a divider in the rail: Project Layer, then Iterative Layer.
+const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
+  [
+    { id: 'projects', label: 'Projects', icon: 'projects' },
+    { id: 'activity', label: 'Activity', icon: 'activity' },
+  ],
+  [{ id: 'iterative', label: 'Improvements', icon: 'iterate', tag: 'Planned' }],
 ];
 
 const SECTION_LABEL: Record<Section, string> = {
@@ -30,6 +36,18 @@ function applyTheme(theme: Settings['theme']) {
   document.documentElement.dataset.theme = resolved;
 }
 
+function RailButton({ label, icon, tag, current, onClick }: { label: string; icon: NavIcon; tag?: string; current: boolean; onClick: () => void }) {
+  const name = tag ? `${label} (${tag})` : label;
+  return (
+    <button type="button" className="rail-item" aria-current={current ? 'page' : undefined} aria-label={name} onClick={onClick}>
+      <Icon name={icon} size={20} />
+      <span className="rail-tip" aria-hidden="true">
+        {name}
+      </span>
+    </button>
+  );
+}
+
 export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
@@ -37,19 +55,32 @@ export function App() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [creating, setCreating] = useState<{ idea: string } | null>(null);
+  const [activityProject, setActivityProject] = useState<string | null>(null);
+
+  const loadProjects = useCallback(async () => {
+    try {
+      setProjects(await call(iap().listProjects()));
+      setProjectsError(null);
+    } catch (e) {
+      setProjectsError((e as Error).message);
+    }
+  }, []);
 
   const refreshStatus = useCallback(async () => {
     try {
       const s = await call(iap().status());
       setStatus(s);
       if (s.state === 'ready') {
-        const loaded = await call(iap().getSettings());
-        setSettings(loaded);
+        setSettings(await call(iap().getSettings()));
+        await loadProjects();
       }
     } catch (e) {
       setFatal((e as Error).message);
     }
-  }, []);
+  }, [loadProjects]);
 
   useEffect(() => {
     void refreshStatus();
@@ -58,6 +89,7 @@ export function App() {
   useEffect(() => {
     if (!settings) return;
     applyTheme(settings.theme);
+    document.documentElement.dataset.glass = settings.glass;
     if (settings.theme !== 'system') return;
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const onChange = () => applyTheme('system');
@@ -80,6 +112,18 @@ export function App() {
     setSection(next);
     setProjectId(null);
     setProjectName(null);
+    setCreating(null);
+    setActivityProject(null);
+  };
+  const openProject = (id: string, name: string) => {
+    setSection('projects');
+    setProjectId(id);
+    setProjectName(name);
+    setCreating(null);
+  };
+  const startCreating = (idea = '') => {
+    go('projects');
+    setCreating({ idea });
   };
 
   return (
@@ -88,49 +132,31 @@ export function App() {
         Skip to content
       </a>
       <nav className="rail" aria-label="Primary">
-        <div className="brand">
-          <span className="brand-mark">
-            <Icon name="logo" />
-          </span>
-          <span className="brand-name">Iterative Platform</span>
+        <div className="brand-mark" title="Iterative Platform">
+          <Icon name="logo" />
         </div>
-        {['Project Layer', 'Iterative Layer'].map((group) => (
-          <div key={group} role="group" aria-label={group}>
-            <div className="rail-group" aria-hidden="true">
-              {group}
-            </div>
-            {NAV.filter((n) => n.group === group).map((n) => (
-              <button
-                key={n.id}
-                type="button"
-                className="nav-item"
-                aria-current={section === n.id ? 'page' : undefined}
-                aria-label={n.tag ? `${n.label} (${n.tag})` : n.label}
-                onClick={() => go(n.id)}
-              >
-                <span className="nav-icon">
-                  <Icon name={n.icon} />
-                </span>
-                <span className="nav-label">{n.label}</span>
-                {n.tag && <span className="nav-tag">{n.tag}</span>}
-              </button>
+        {NAV.map((group, i) => (
+          <div key={i} className="rail-group" role="group" aria-label={i === 0 ? 'Project Layer' : 'Iterative Layer'}>
+            {group.map((n) => (
+              <RailButton key={n.id} label={n.label} icon={n.icon} tag={n.tag} current={section === n.id} onClick={() => go(n.id)} />
             ))}
           </div>
         ))}
         <div className="rail-spacer" />
-        <button
-          type="button"
-          className="nav-item"
-          aria-current={section === 'settings' ? 'page' : undefined}
-          aria-label="Settings"
-          onClick={() => go('settings')}
-        >
-          <span className="nav-icon">
-            <Icon name="settings" />
-          </span>
-          <span className="nav-label">Settings</span>
-        </button>
+        <RailButton label="Settings" icon="settings" current={section === 'settings'} onClick={() => go('settings')} />
       </nav>
+
+      <SidePanel
+        section={section}
+        projects={projects}
+        selected={section === 'activity' ? activityProject : projectId}
+        onSelect={(p) => {
+          if (section === 'activity') setActivityProject(p?.id ?? null);
+          else if (p) openProject(p.id, p.name);
+          else go('projects');
+        }}
+        onCreate={() => startCreating()}
+      />
 
       <div className="main">
         <header className="topbar">
@@ -146,23 +172,31 @@ export function App() {
             </li>
             {projectId && <li aria-current="page">{projectName ?? 'Project'}</li>}
           </ol>
-          <div className="topbar-actions subtle">v{status.version}</div>
+          <div className="topbar-actions">
+            <span className="pill">Iterative Platform v{status.version}</span>
+          </div>
         </header>
         <main className="content" id="main" tabIndex={-1}>
           {section === 'projects' && !projectId && (
             <ProjectsView
-              onOpen={(id, name) => {
-                setProjectId(id);
-                setProjectName(name);
+              projects={projects}
+              error={projectsError}
+              creating={creating}
+              onCreate={startCreating}
+              onCancelCreate={() => setCreating(null)}
+              onCreated={(id, name) => {
+                void loadProjects();
+                openProject(id, name);
               }}
+              onOpen={openProject}
             />
           )}
           {section === 'projects' && projectId && <ProjectDetail projectId={projectId} onLoaded={setProjectName} />}
-          {section === 'activity' && <ActivityView />}
-          {section === 'iterative' && <IterativeView />}
-          {section === 'settings' && settings && (
-            <SettingsView status={status} settings={settings} onSettings={setSettings} />
+          {section === 'activity' && (
+            <ActivityView projectId={activityProject} projectName={projects?.find((p) => p.id === activityProject)?.name ?? null} />
           )}
+          {section === 'iterative' && <IterativeView />}
+          {section === 'settings' && settings && <SettingsView status={status} settings={settings} onSettings={setSettings} />}
         </main>
       </div>
     </div>

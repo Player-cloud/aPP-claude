@@ -19,15 +19,17 @@ const describe = (type: string, payload: Record<string, unknown>) => {
   }
 };
 
-export function ActivityView() {
-  const { data, error, loading } = useAsync(() => call(iap().listEvents({ limit: 200 })), []);
+export function ActivityView({ projectId, projectName }: { projectId: string | null; projectName: string | null }) {
+  const { data, error, loading } = useAsync(() => call(iap().listEvents({ projectId: projectId ?? undefined, limit: 200 })), [projectId]);
   return (
     <>
       <h1 className="page-title">Activity</h1>
-      <p className="page-lede">Every change is recorded here. The log is append-only: entries cannot be edited or deleted.</p>
+      <p className="page-lede">
+        {projectName ? `Changes to ${projectName}. ` : 'Every change is recorded here. '}The log is append-only: entries cannot be edited or deleted.
+      </p>
       <section className="card" aria-labelledby="activity-title">
         <h2 className="card-title" id="activity-title">
-          Audit log {data && <span className="count">latest {data.length}</span>}
+          Audit log {data && <span className="count-pill">latest {data.length}</span>}
         </h2>
         {loading && !data && <p className="loading">Loading activity…</p>}
         {error && <Alert tone="danger">{error}</Alert>}

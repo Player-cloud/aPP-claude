@@ -14,6 +14,44 @@ const paths: Record<string, ReactElement> = {
   plus: <path d="M12 5v14M5 12h14" />,
   logo: <path d="M5 5l6 7-6 7M13 5l6 7-6 7" />,
   back: <path d="M15 5l-7 7 7 7" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="M20 20l-4.2-4.2" />
+    </>
+  ),
+  arrow: <path d="M8 16L16 8M9 8h7v7" />,
+  calendar: (
+    <>
+      <rect x="4" y="5.5" width="16" height="14" rx="3" />
+      <path d="M8 3.5v4M16 3.5v4M4 10.5h16" />
+    </>
+  ),
+  list: <path d="M9 7h11M9 12h11M9 17h11M4.5 7h.01M4.5 12h.01M4.5 17h.01" />,
+  sparkle: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" />,
+  send: <path d="M5 12h13M13 6l6 6-6 6" />,
+  tools: <path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17l3 3 5.2-5.2a4 4 0 0 0 5.3-5.3l-2.6 2.6-2.4-.6-.6-2.4z" />,
+  radar: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 12l5.5-5.5" />
+    </>
+  ),
+  palette: (
+    <>
+      <path d="M12 4a8 8 0 1 0 0 16c1.1 0 1.6-.8 1.6-1.6 0-1.3-1-1.6-1-2.6 0-.9.7-1.6 1.6-1.6H17a3 3 0 0 0 3-3C20 7.4 16.4 4 12 4z" />
+      <circle cx="8" cy="11" r=".6" />
+      <circle cx="11" cy="7.8" r=".6" />
+      <circle cx="15" cy="8.4" r=".6" />
+    </>
+  ),
+  database: (
+    <>
+      <ellipse cx="12" cy="6.5" rx="7" ry="2.8" />
+      <path d="M5 6.5v11c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-11M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8" />
+    </>
+  ),
 };
 
 export function Icon({ name, size = 18 }: { name: keyof typeof paths; size?: number }) {

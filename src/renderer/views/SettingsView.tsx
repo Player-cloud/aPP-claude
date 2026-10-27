@@ -10,23 +10,32 @@ const THEMES: { id: Settings['theme']; label: string }[] = [
   { id: 'system', label: 'Match system' },
 ];
 
+const GLASS: { id: Settings['glass']; label: string }[] = [
+  { id: 'on', label: 'Frosted glass' },
+  { id: 'off', label: 'Solid panels' },
+];
+
 export function SettingsView({ status, settings, onSettings }: { status: AppStatus; settings: Settings; onSettings: (s: Settings) => void }) {
   const [error, setError] = useState<string | null>(null);
   // Show the choice immediately; roll back if the main process rejects it.
-  const [pending, setPending] = useState<string | null>(null);
+  const [pending, setPending] = useState<Partial<Settings>>({});
   const health = useAsync(() => call(iap().health()), []);
 
-  const setTheme = async (theme: string) => {
+  const change = async <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setError(null);
-    setPending(theme);
+    setPending((p) => ({ ...p, [key]: value }));
     try {
-      onSettings(await call(iap().updateSetting({ key: 'theme', value: theme })));
+      onSettings(await call(iap().updateSetting({ key, value })));
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setPending(null);
+      setPending((p) => {
+        const { [key]: _, ...rest } = p;
+        return rest as Partial<Settings>;
+      });
     }
   };
+  const shown = { ...settings, ...pending };
 
   return (
     <>
@@ -43,13 +52,24 @@ export function SettingsView({ status, settings, onSettings }: { status: AppStat
             <div className="radio-row">
               {THEMES.map((t) => (
                 <label key={t.id} className="radio-pill">
-                  <input type="radio" name="theme" value={t.id} checked={(pending ?? settings.theme) === t.id} onChange={() => void setTheme(t.id)} />
+                  <input type="radio" name="theme" value={t.id} checked={shown.theme === t.id} onChange={() => void change('theme', t.id)} />
                   {t.label}
                 </label>
               ))}
             </div>
           </fieldset>
-          <p className="subtle">Animations follow your operating system's reduced-motion setting.</p>
+          <fieldset className="field">
+            <legend>Surfaces</legend>
+            <div className="radio-row">
+              {GLASS.map((g) => (
+                <label key={g.id} className="radio-pill">
+                  <input type="radio" name="glass" value={g.id} checked={shown.glass === g.id} onChange={() => void change('glass', g.id)} />
+                  {g.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <p className="subtle">Solid panels can be easier to read and lighter on older graphics hardware. Animations follow your operating system's reduced-motion setting.</p>
         </section>
         <aside>
           <section className="card" aria-labelledby="data-title">
