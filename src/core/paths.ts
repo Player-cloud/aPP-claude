@@ -2,7 +2,7 @@
 // IAP_HOME overrides everything; otherwise follow each OS's convention.
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 
 export const APP_DIR_NAME = 'IterativePlatform';
 
@@ -12,9 +12,10 @@ export function resolveAppHome(
   home: string = homedir(),
 ): string {
   if (env.IAP_HOME?.trim()) return env.IAP_HOME.trim();
-  if (platform === 'win32') return join(env.APPDATA ?? join(home, 'AppData', 'Roaming'), APP_DIR_NAME);
-  if (platform === 'darwin') return join(home, 'Library', 'Application Support', APP_DIR_NAME);
-  return join(env.XDG_DATA_HOME ?? join(home, '.local', 'share'), APP_DIR_NAME);
+  // Join with the target platform's separator, not the host's.
+  if (platform === 'win32') return win32.join(env.APPDATA ?? win32.join(home, 'AppData', 'Roaming'), APP_DIR_NAME);
+  if (platform === 'darwin') return posix.join(home, 'Library', 'Application Support', APP_DIR_NAME);
+  return posix.join(env.XDG_DATA_HOME ?? posix.join(home, '.local', 'share'), APP_DIR_NAME);
 }
 
 export interface AppPaths {
