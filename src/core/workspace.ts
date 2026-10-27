@@ -15,7 +15,7 @@ import { redact, redactString } from './redact.ts';
 import { NotFoundError, StateCorruptError, StateTooNewError, ValidationError } from './errors.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type FactKind = 'confirmed' | 'assumption';
 export interface Fact {
@@ -101,7 +101,22 @@ const MIGRATIONS: Record<number, string> = {
     CREATE TRIGGER events_no_delete BEFORE DELETE ON events
       BEGIN SELECT RAISE(ABORT, 'audit events are append-only'); END;
   `,
+  2: `
+    CREATE TABLE settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `,
 };
+
+// Known settings and their allowed values. Unknown keys are rejected so the
+// settings table cannot become an unvalidated dumping ground.
+export const SETTINGS = {
+  theme: { values: ['system', 'dark', 'light'], default: 'dark' },
+} as const satisfies Record<string, { values: readonly string[]; default: string }>;
+export type SettingKey = keyof typeof SETTINGS;
+export type Settings = { [K in SettingKey]: (typeof SETTINGS)[K]['values'][number] };
 
 function defaultActor(): string {
   try {
@@ -314,6 +329,38 @@ export class Workspace {
       ? this.db.prepare('SELECT * FROM runs WHERE project_id = ? ORDER BY created_at, id').all(projectId)
       : this.db.prepare('SELECT * FROM runs ORDER BY created_at, id').all();
     return (rows as Record<string, unknown>[]).map(toRun);
+  }
+
+  // ---- Settings -----------------------------------------------------------
+
+  getSettings(): Settings {
+    const rows = this.db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+    const out = Object.fromEntries(Object.entries(SETTINGS).map(([k, def]) => [k, def.default])) as Record<string, string>;
+    for (const row of rows) {
+      const def = (SETTINGS as Record<string, { values: readonly string[] }>)[row.key];
+      if (def?.values.includes(row.value)) out[row.key] = row.value;
+    }
+    return out as Settings;
+  }
+
+  updateSetting(key: string, value: string): Settings {
+    const def = (SETTINGS as Record<string, { values: readonly string[] }>)[key];
+    if (!def) throw new ValidationError(`Unknown setting "${key}".`);
+    if (!def.values.includes(value)) {
+      throw new ValidationError(`Setting "${key}" must be one of: ${def.values.join(', ')}.`);
+    }
+    const previous = (this.getSettings() as Record<string, string>)[key];
+    if (previous === value) return this.getSettings();
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        )
+        .run(key, value, this.timestamp());
+      this.record('setting.changed', null, null, { key, from: previous, to: value });
+    });
+    return this.getSettings();
   }
 
   // ---- Audit log ----------------------------------------------------------

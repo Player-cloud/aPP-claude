@@ -1,0 +1,128 @@
+/*
+ * Design tokens (FR-DESIGN-004). Every colour, size and duration used by the
+ * UI comes from here. Direction from docs/spec/design-references: deep navy
+ * surfaces, restrained blue-to-violet accents, high-contrast text.
+ * Themes: [data-theme="dark"] (default), [data-theme="light"]; "system" is
+ * resolved in the renderer from prefers-color-scheme.
+ */
+:root {
+  --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, ui-monospace, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+  --leading: 1.5;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  --rail-width: 256px;
+  --rail-width-collapsed: 72px;
+  --panel-width: 320px;
+
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --bg-elevated: #111830;
+  --rail: #0e1428;
+  --surface: #151d38;
+  --surface-hover: #1b2546;
+  --surface-selected: #1f2b55;
+  --border: #253157;
+  --border-strong: #34437a;
+
+  --text: #eef1fb;
+  --text-muted: #a3acc8;
+  --text-subtle: #7d87a8;
+
+  --accent: #5b7cfa;
+  --accent-strong: #7c5cff;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(91, 124, 250, 0.16);
+  --accent-gradient: linear-gradient(135deg, #4f6ff5 0%, #7c5cff 100%);
+
+  --focus: #9db4ff;
+
+  --ok: #3ccf91;
+  --ok-soft: rgba(60, 207, 145, 0.14);
+  --warn: #f5b84b;
+  --warn-soft: rgba(245, 184, 75, 0.14);
+  --danger: #ff6b81;
+  --danger-soft: rgba(255, 107, 129, 0.14);
+  --info: #6cb6ff;
+  --info-soft: rgba(108, 182, 255, 0.14);
+
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f5fb;
+  --bg-elevated: #ffffff;
+  --rail: #1a1530;
+  --surface: #ffffff;
+  --surface-hover: #f1effb;
+  --surface-selected: #ebe6ff;
+  --border: #e1e3ef;
+  --border-strong: #c9cce0;
+
+  --text: #161a2e;
+  --text-muted: #555c78;
+  --text-subtle: #6c7390;
+
+  --accent: #4c5ee6;
+  --accent-strong: #6d4ce6;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(109, 76, 230, 0.12);
+  --accent-gradient: linear-gradient(135deg, #4c5ee6 0%, #7b4ff0 100%);
+
+  --focus: #4c5ee6;
+
+  --ok: #13865a;
+  --ok-soft: rgba(19, 134, 90, 0.12);
+  --warn: #9a6200;
+  --warn-soft: rgba(154, 98, 0, 0.12);
+  --danger: #c4253f;
+  --danger-soft: rgba(196, 37, 63, 0.1);
+  --info: #1d6fc4;
+  --info-soft: rgba(29, 111, 196, 0.1);
+
+  --shadow: 0 8px 24px rgba(22, 26, 46, 0.08);
+}
+
+/* The navigation rail stays dark in both themes (reference 03). */
+[data-theme="light"] .rail {
+  --text: #eeeaff;
+  --text-muted: #b9b2d9;
+  --surface-hover: #2a2348;
+  --surface-selected: #3a2f66;
+  --border: #2d2650;
+  --focus: #b9a8ff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+  }
+}

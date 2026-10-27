@@ -1,0 +1,23 @@
+# Windows-first installer (DEC-001). Unsigned until a code-signing certificate
+# is available, so Windows SmartScreen will warn on first run.
+appId: dev.iterativeplatform.app
+productName: Iterative Platform
+directories:
+  output: release
+files:
+  - dist/**/*
+  - "!dist/**/*.map"
+  - package.json
+asar: true
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: IterativePlatform-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

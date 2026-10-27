@@ -7,9 +7,16 @@ An installable AI development platform with two layers:
 
 The specification lives in [`docs/spec/`](docs/spec/). Start with [`docs/IMPLEMENTATION_ASSESSMENT.md`](docs/IMPLEMENTATION_ASSESSMENT.md) for the current plan, [`docs/DECISIONS.md`](docs/DECISIONS.md) for architecture decisions, and [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) for what is actually implemented and verified.
 
-## Current state: milestone M1 (workspace core + CLI)
+## Current state: milestone M2 (desktop shell)
 
-Implemented: projects, an explicit workflow-run state machine, an append-only audit log, SQLite persistence with corruption recovery, secret redaction, and the `iap` CLI. Not yet built: the desktop UI, agents, integrations, installer.
+Implemented and tested: a Windows desktop app (Electron) with project creation, workflow runs with explicit states and blockers, an activity log, dark/light/system themes, and a recovery screen for a damaged database, built on the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI. Not yet built: agents, integrations, the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
+
+```bash
+npm install
+npm start          # launch the desktop app
+```
+
+The CLI works against the same data:
 
 ```bash
 npm install

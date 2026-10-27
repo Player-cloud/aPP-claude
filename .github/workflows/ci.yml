@@ -19,3 +19,61 @@ jobs:
           node-version: '22.18'
       - run: npm ci
       - run: npm run check
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18'
+      - run: npm ci
+      - run: npm run build
+      - name: End-to-end tests against the real Electron app
+        run: xvfb-run -a node --disable-warning=ExperimentalWarning --test "e2e/**/*.e2e.ts"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots
+          path: e2e/screenshots/
+          retention-days: 14
+
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18'
+      - run: npm ci
+      - name: Build Windows installer
+        run: npm run dist:win
+      - name: Silent install, launch, and check the workspace (FR-APP-001)
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem release\IterativePlatform-Setup-*.exe | Select-Object -First 1
+          $target = Join-Path $env:RUNNER_TEMP 'iap-install'
+          $data = Join-Path $env:RUNNER_TEMP 'iap-data'
+          $report = Join-Path $env:RUNNER_TEMP 'smoke.json'
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installer exited with $($p.ExitCode)" }
+          $exe = Join-Path $target 'Iterative Platform.exe'
+          if (-not (Test-Path $exe)) { Get-ChildItem -Recurse $target | Select-Object -First 30; throw "App not installed at $exe" }
+          $env:IAP_HOME = $data
+          $env:IAP_SMOKE_OUT = $report
+          $run = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -Wait -PassThru
+          Get-Content $report
+          if ($run.ExitCode -ne 0) { throw "Smoke test exited with $($run.ExitCode)" }
+          $json = Get-Content $report | ConvertFrom-Json
+          if ($json.status.state -ne 'ready' -or $json.health.value.integrity -ne 'ok') { throw 'Workspace not healthy' }
+          if (-not (Test-Path (Join-Path $data 'iap.db'))) { throw 'Database was not created in IAP_HOME' }
+          $u = Start-Process -FilePath (Join-Path $target 'Uninstall Iterative Platform.exe') -ArgumentList '/S' -Wait -PassThru
+          Write-Host "Uninstaller exit code: $($u.ExitCode)"
+          Start-Sleep -Seconds 5
+          if (Test-Path $exe) { throw 'Uninstall left the app executable behind' }
+          if (-not (Test-Path (Join-Path $data 'iap.db'))) { throw 'Uninstall removed user data' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: release/IterativePlatform-Setup-*.exe
+          retention-days: 14
