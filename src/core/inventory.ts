@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, relative } from 'node:path';
+import { basename, join, posix, relative, win32 } from 'node:path';
 import { redactString } from './redact.ts';
 
 export type ToolKind = 'plugin' | 'marketplace' | 'skill' | 'command' | 'agent' | 'hook' | 'mcp_server';
@@ -81,10 +81,12 @@ export function defaultScanRoots(
   home: string = homedir(),
   projectDirs: string[] = [],
 ): ScanRoots {
+  // Join with the target platform's separator, not the host's (as in paths.ts).
+  const pjoin = platform === 'win32' ? win32.join : posix.join;
   const custom = env.CLAUDE_CONFIG_DIR?.trim();
-  const configDir = custom || join(home, '.claude');
+  const configDir = custom || pjoin(home, '.claude');
   // With CLAUDE_CONFIG_DIR set, Claude Code keeps .claude.json inside that directory.
-  const userConfigFile = custom ? join(custom, '.claude.json') : join(home, '.claude.json');
+  const userConfigFile = custom ? pjoin(custom, '.claude.json') : pjoin(home, '.claude.json');
   const managedDirs =
     platform === 'win32'
       ? ['C:\\Program Files\\ClaudeCode', 'C:\\ProgramData\\ClaudeCode']

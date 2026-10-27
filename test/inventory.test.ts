@@ -158,6 +158,7 @@ test('M4: default locations per OS and CLAUDE_CONFIG_DIR', () => {
   });
   assert.deepEqual(defaultScanRoots({}, 'darwin', '/Users/u').managedDirs, ['/Library/Application Support/ClaudeCode']);
   assert.ok(defaultScanRoots({}, 'win32', 'C:\\Users\\u').managedDirs.includes('C:\\Program Files\\ClaudeCode'));
+  assert.equal(defaultScanRoots({}, 'win32', 'C:\\Users\\u').configDir, 'C:\\Users\\u\\.claude');
   const custom = defaultScanRoots({ CLAUDE_CONFIG_DIR: '/cfg' }, 'linux', '/home/u');
   assert.equal(custom.configDir, '/cfg');
   assert.match(custom.userConfigFile, /^\/cfg[\\/]\.claude\.json$/);
