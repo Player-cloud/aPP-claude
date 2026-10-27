@@ -7,9 +7,15 @@ An installable AI development platform with two layers:
 
 The specification lives in [`docs/spec/`](docs/spec/). Start with [`docs/IMPLEMENTATION_ASSESSMENT.md`](docs/IMPLEMENTATION_ASSESSMENT.md) for the current plan, [`docs/DECISIONS.md`](docs/DECISIONS.md) for architecture decisions, and [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) for what is actually implemented and verified.
 
-## Current state: milestone M2 (desktop shell)
+## Current state: milestone M4 (tool inventory)
 
-Implemented and tested: a Windows desktop app (Electron) with project creation, workflow runs with explicit states and blockers, an activity log, dark/light/system themes, and a recovery screen for a damaged database, built on the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI. Not yet built: agents, integrations, the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
+Implemented and tested:
+
+- A Windows desktop app (Electron) with project creation, workflow runs with explicit states and blockers, an activity log, dark/light/system themes, a frosted-glass look, and a recovery screen for a damaged database.
+- A **read-only inventory of your Claude Code tools** (plugins, skills, commands, subagents, hooks, MCP servers) with conflict detection, on the Tools screen and in `iap tools scan`.
+- Under both: the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI.
+
+Not yet built: agents (M3), integrations, safe cleanup of tools, and the rest of the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
 
 ```bash
 npm install
@@ -27,6 +33,7 @@ npm run iap -- run start <projectId> --workflow plan
 npm run iap -- run move <runId> planned
 npm run iap -- run move <runId> blocked --reason "EGM not installed" --resolution "Install EGM or use the native planner"
 npm run iap -- events --project <projectId>
+npm run iap -- tools scan [--include <projectDir>]   # read-only; changes nothing
 npm run iap -- doctor
 ```
 

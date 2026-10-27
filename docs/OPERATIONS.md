@@ -36,6 +36,19 @@ Set `IAP_HOME` to use another directory. Contents:
 
 No credentials are stored here. Secret-looking values are redacted before anything is written.
 
+## Tool inventory (M4)
+
+The Tools screen and `iap tools scan` read, and never write, these locations:
+
+| What | Where |
+|---|---|
+| Claude Code configuration folder | `$CLAUDE_CONFIG_DIR`, or `~/.claude` (`settings.json`, `skills/`, `commands/`, `agents/`, `plugins/installed_plugins.json`, `plugins/known_marketplaces.json`, and each installed plugin's folder) |
+| Global config file | `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`. Only `mcpServers` and the per-project `mcpServers` and MCP approvals are read; account data is ignored |
+| Projects | Folders recorded in the global config file that still exist (up to 100), plus any `--include` folders: `.claude/settings*.json`, `.claude/skills`, `.claude/commands`, `.claude/agents`, `.mcp.json` |
+| Organisation policy | Windows `C:\Program Files\ClaudeCode` and `C:\ProgramData\ClaudeCode`; macOS `/Library/Application Support/ClaudeCode`; Linux `/etc/claude-code` (`managed-settings.json`, `managed-mcp.json`) |
+
+MCP server environment variables and headers are reduced to their names, URLs lose query strings and credentials, and hook commands are redacted. The last 20 scans are kept in `iap.db`, and each scan is recorded in the audit log.
+
 ## Backup
 Close the app, then copy the whole data directory. SQLite WAL files must be copied together with `iap.db`.
 

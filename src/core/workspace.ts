@@ -13,9 +13,13 @@ import { userInfo } from 'node:os';
 import { appPaths, type AppPaths } from './paths.ts';
 import { redact, redactString } from './redact.ts';
 import { NotFoundError, StateCorruptError, StateTooNewError, ValidationError } from './errors.ts';
+import type { ToolScan } from './tools.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+/** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
+const KEEP_TOOL_SCANS = 20;
 
 export type FactKind = 'confirmed' | 'assumption';
 export interface Fact {
@@ -107,6 +111,14 @@ const MIGRATIONS: Record<number, string> = {
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+  `,
+  3: `
+    CREATE TABLE tool_scans (
+      id TEXT PRIMARY KEY,
+      scanned_at TEXT NOT NULL,
+      data TEXT NOT NULL
+    );
+    CREATE INDEX tool_scans_at ON tool_scans(scanned_at);
   `,
 };
 
@@ -392,6 +404,26 @@ export class Workspace {
   }
 
   /** Read-only health summary for `iap doctor`. */
+  // ---- Tool inventory (M4) -------------------------------------------------
+
+  /** Stores a read-only tool scan (redacted) and records it in the audit log. */
+  saveToolScan(scan: Omit<ToolScan, 'id' | 'scannedAt'>): ToolScan {
+    const saved = redact({ ...scan, id: `scan_${randomUUID()}`, scannedAt: this.timestamp() }) as ToolScan;
+    this.transaction(() => {
+      this.db.prepare('INSERT INTO tool_scans (id, scanned_at, data) VALUES (?, ?, ?)').run(saved.id, saved.scannedAt, JSON.stringify(saved));
+      this.db
+        .prepare('DELETE FROM tool_scans WHERE id NOT IN (SELECT id FROM tool_scans ORDER BY scanned_at DESC, rowid DESC LIMIT ?)')
+        .run(KEEP_TOOL_SCANS);
+      this.record('tools.scanned', null, null, { scanId: saved.id, ...saved.summary });
+    });
+    return saved;
+  }
+
+  latestToolScan(): ToolScan | null {
+    const row = this.db.prepare('SELECT data FROM tool_scans ORDER BY scanned_at DESC, rowid DESC LIMIT 1').get() as { data: string } | undefined;
+    return row ? (JSON.parse(row.data) as ToolScan) : null;
+  }
+
   health(): { schemaVersion: number; integrity: string; projects: number; runs: number; events: number } {
     const count = (table: string) => Number((this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
     return {

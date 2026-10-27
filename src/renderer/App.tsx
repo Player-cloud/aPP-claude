@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AppStatus, Project, Settings } from '../shared/api.ts';
+import type { AppStatus, Project, Settings, ToolScan } from '../shared/api.ts';
 import { call, iap } from './api.ts';
 import { Icon } from './icons.tsx';
 import { SidePanel } from './SidePanel.tsx';
@@ -9,10 +9,11 @@ import { ProjectDetail } from './views/ProjectDetail.tsx';
 import { ProjectsView } from './views/ProjectsView.tsx';
 import { RecoveryView } from './views/RecoveryView.tsx';
 import { SettingsView } from './views/SettingsView.tsx';
+import { ToolsView, type ToolFilter } from './views/ToolsView.tsx';
 
-export type Section = 'projects' | 'activity' | 'iterative' | 'settings';
+export type Section = 'projects' | 'activity' | 'tools' | 'iterative' | 'settings';
 
-type NavIcon = 'projects' | 'activity' | 'iterate' | 'settings';
+type NavIcon = 'projects' | 'activity' | 'tools' | 'iterate' | 'settings';
 
 // Groups are separated by a divider in the rail: Project Layer, then Iterative Layer.
 const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
@@ -20,12 +21,16 @@ const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
     { id: 'projects', label: 'Projects', icon: 'projects' },
     { id: 'activity', label: 'Activity', icon: 'activity' },
   ],
-  [{ id: 'iterative', label: 'Improvements', icon: 'iterate', tag: 'Planned' }],
+  [
+    { id: 'tools', label: 'Tools', icon: 'tools' },
+    { id: 'iterative', label: 'Improvements', icon: 'iterate', tag: 'Planned' },
+  ],
 ];
 
 const SECTION_LABEL: Record<Section, string> = {
   projects: 'Projects',
   activity: 'Activity',
+  tools: 'Tools',
   iterative: 'Improvements',
   settings: 'Settings',
 };
@@ -59,6 +64,10 @@ export function App() {
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [creating, setCreating] = useState<{ idea: string } | null>(null);
   const [activityProject, setActivityProject] = useState<string | null>(null);
+  // undefined = not loaded yet, null = never scanned.
+  const [toolScan, setToolScan] = useState<ToolScan | null | undefined>(undefined);
+  const [toolError, setToolError] = useState<string | null>(null);
+  const [toolFilter, setToolFilter] = useState<ToolFilter>('all');
 
   const loadProjects = useCallback(async () => {
     try {
@@ -85,6 +94,22 @@ export function App() {
   useEffect(() => {
     void refreshStatus();
   }, [refreshStatus]);
+
+  useEffect(() => {
+    if (section !== 'tools' || toolScan !== undefined) return;
+    call(iap().getToolScan())
+      .then(setToolScan)
+      .catch((e: Error) => setToolError(e.message));
+  }, [section, toolScan]);
+
+  const scanTools = useCallback(async () => {
+    setToolError(null);
+    try {
+      setToolScan(await call(iap().scanTools()));
+    } catch (e) {
+      setToolError((e as Error).message);
+    }
+  }, []);
 
   useEffect(() => {
     if (!settings) return;
@@ -114,6 +139,7 @@ export function App() {
     setProjectName(null);
     setCreating(null);
     setActivityProject(null);
+    setToolFilter('all');
   };
   const openProject = (id: string, name: string) => {
     setSection('projects');
@@ -156,6 +182,9 @@ export function App() {
           else go('projects');
         }}
         onCreate={() => startCreating()}
+        toolScan={toolScan ?? null}
+        toolFilter={toolFilter}
+        onToolFilter={setToolFilter}
       />
 
       <div className="main">
@@ -195,6 +224,7 @@ export function App() {
           {section === 'activity' && (
             <ActivityView projectId={activityProject} projectName={projects?.find((p) => p.id === activityProject)?.name ?? null} />
           )}
+          {section === 'tools' && <ToolsView scan={toolScan} error={toolError} filter={toolFilter} onScan={scanTools} />}
           {section === 'iterative' && <IterativeView />}
           {section === 'settings' && settings && <SettingsView status={status} settings={settings} onSettings={setSettings} />}
         </main>

@@ -12,9 +12,10 @@ export function tempHome() {
   return { home, cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }
 
-export async function launch(home: string): Promise<{ app: ElectronApplication; page: Page }> {
+export async function launch(home: string, extraEnv: Record<string, string> = {}): Promise<{ app: ElectronApplication; page: Page }> {
   const electronPath = (await import('electron')).default as unknown as string;
-  const env = { ...process.env, IAP_HOME: home } as Record<string, string>;
+  // Never scan the real machine's Claude Code setup from tests: point at an empty folder unless a test supplies one.
+  const env = { ...process.env, IAP_HOME: home, CLAUDE_CONFIG_DIR: join(home, 'no-claude'), ...extraEnv } as Record<string, string>;
   delete env.NODE_OPTIONS; // Electron rejects some Node options (e.g. --use-openssl-ca)
   const app = await electron.launch({
     executablePath: electronPath,

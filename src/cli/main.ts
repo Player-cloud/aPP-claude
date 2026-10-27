@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { resolveAppHome } from '../core/paths.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { moveCorruptStateAside, Workspace, type Fact, type WorkflowRun } from '../core/workspace.ts';
+import { defaultScanRoots } from '../core/inventory.ts';
+import { runToolScan, type ToolScan } from '../core/tools.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
 
 const USAGE = `Usage: iap <command> [options]
@@ -23,6 +25,10 @@ Workflow runs
   run move <runId> <state> [--reason <text>] [--resolution <text>]
   run list [projectId]
   run show <runId>
+
+Claude Code tools (read-only: nothing is changed or removed)
+  tools scan [--include <projectDir>]...   Inventory plugins, skills, commands, agents, hooks and MCP servers, and report conflicts
+  tools show                               Show the latest scan
 
 Audit and health
   events [--project <id>] [--run <id>] [--limit <n>]
@@ -55,6 +61,7 @@ export function run(argv: string[], out: Out = console.log, err: Out = console.e
       limit: { type: 'string' },
       json: { type: 'boolean', default: false },
       confirm: { type: 'boolean', default: false },
+      include: { type: 'string', multiple: true },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -182,6 +189,16 @@ export function run(argv: string[], out: Out = console.log, err: Out = console.e
         });
         return 0;
       }
+      case 'tools scan': {
+        const scan = ws.saveToolScan(runToolScan(defaultScanRoots(process.env, process.platform, undefined, (values.include ?? []).map((d) => resolve(d)))));
+        print(scan, () => describeScan(scan, out));
+        return 0;
+      }
+      case 'tools show': {
+        const scan = ws.latestToolScan();
+        print(scan, () => (scan ? describeScan(scan, out) : out('No scan yet. Run: iap tools scan')));
+        return 0;
+      }
       case 'doctor': {
         const health = ws.health();
         print({ home, db: ws.paths.db, ...health }, () => {
@@ -214,6 +231,25 @@ function describeRun(r: WorkflowRun): string {
   return r.state === 'blocked'
     ? `${base}\n      BLOCKED (from ${r.blockedFrom}): ${r.blockerReason}\n      To resolve: ${r.blockerResolution}`
     : base;
+}
+
+function describeScan(scan: ToolScan, out: Out): void {
+  out(`Scan ${scan.id} at ${scan.scannedAt} (read-only)`);
+  out(`  config: ${scan.roots.configDir}   projects scanned: ${scan.roots.projectDirs.length}`);
+  out(`  found: ${Object.entries(scan.summary.entries).map(([k, n]) => `${n} ${k}`).join(', ') || 'nothing'}`);
+  for (const e of scan.entries) {
+    out(`  ${e.kind.padEnd(11)} ${e.scope.padEnd(8)} ${(e.invocation ?? e.name).padEnd(32)} ${e.version ?? '-'}  ${e.status}`);
+  }
+  out(`Findings (${scan.findings.length}):`);
+  for (const f of scan.findings) {
+    out(`  [${f.severity}] ${f.title}`);
+    for (const ev of f.evidence) out(`      evidence: ${ev}`);
+    if (f.inference) out(`      meaning:  ${f.inference}`);
+    out(`      suggest:  ${f.recommendation}`);
+  }
+  for (const i of scan.issues) out(`  issue: ${i.path}: ${i.problem}`);
+  out('Not checked:');
+  for (const n of scan.notChecked) out(`  - ${n}`);
 }
 
 function fail(e: unknown, err: Out): number {

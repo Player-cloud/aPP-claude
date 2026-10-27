@@ -10,10 +10,10 @@ export function IterativeView() {
       <section className="card">
         <h2 className="card-title">What comes first</h2>
         <ol className="muted">
-          <li>Read-only inventory of your Claude Code tools, with conflict detection.</li>
           <li>Workflow telemetry and an improvement backlog in observe-and-recommend mode.</li>
           <li>Monitoring of updates to Claude, plugins, skills and MCP servers.</li>
         </ol>
+        <p className="muted">The read-only inventory of your Claude Code tools, with conflict detection, is already available under Tools.</p>
         <p className="subtle">Nothing here changes the platform on its own. Every improvement goes through your approval and the normal review gates.</p>
       </section>
     </>

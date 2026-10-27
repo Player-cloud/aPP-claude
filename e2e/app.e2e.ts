@@ -2,10 +2,11 @@
 // data directory. Screenshots are saved to e2e/screenshots/ as evidence.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ElectronApplication, Page } from 'playwright-core';
 import { launch, SHOTS, tempHome } from './helpers.ts';
+import { buildClaudeFixture, CANARIES } from '../test/claude-fixture.ts';
 
 mkdirSync(SHOTS, { recursive: true });
 
@@ -221,6 +222,41 @@ test('M2-AC7/AC9: keyboard navigation, visible focus, and layouts at target size
       else assert.ok(layout.side >= 200, `side panel should be shown at ${w}px`);
       await shot(page, `07-projects-dark-${w}`);
     }
+  } finally {
+    await app.close();
+  }
+});
+
+test('M4: the Tools screen scans a Claude Code setup read-only and explains conflicts', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const fixture = buildClaudeFixture(join(home, 'machine'));
+  // With CLAUDE_CONFIG_DIR set, Claude Code keeps .claude.json inside that folder.
+  copyFileSync(fixture.userConfigFile, join(fixture.configDir, '.claude.json'));
+  const { app, page } = await launch(join(home, 'app'), { CLAUDE_CONFIG_DIR: fixture.configDir });
+  try {
+    await resize(app, 1280, 800);
+    await page.getByRole('button', { name: 'Tools', exact: true }).click();
+    await page.getByRole('heading', { name: 'No scan yet' }).waitFor();
+    await page.getByRole('button', { name: 'Scan now' }).click();
+    await page.getByText('Plugin ghost@acme is enabled but not installed').waitFor();
+    await page.getByText('2 tools answer /deploy').waitFor();
+    const text = await page.locator('#main').innerText();
+    for (const canary of CANARIES) assert.ok(!text.includes(canary), `leaked ${canary}`);
+    await shot(page, '09-tools-findings-dark-1280');
+
+    // Filter to MCP servers from the side panel and open one entry's details.
+    await page.getByRole('navigation', { name: 'Tool filters' }).getByRole('button', { name: /MCP servers/ }).click();
+    const table = page.getByRole('table', { name: 'Inventory' });
+    assert.equal(await table.getByRole('row').count(), 1 + 6);
+    await table.getByText('db', { exact: true }).click();
+    await table.getByText('PGPASSWORD').waitFor();
+    await shot(page, '10-tools-mcp-dark-1280');
+
+    // The scan is stored: it is still there after switching away and back.
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'Tools', exact: true }).click();
+    await page.getByText('Plugin ghost@acme is enabled but not installed').waitFor();
   } finally {
     await app.close();
   }

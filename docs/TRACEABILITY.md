@@ -16,6 +16,8 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | FR-DESIGN-004 Application visual system | Shared tokens, nav rail / header / work surface / context panel, dark + light + system themes, focus, empty/loading/error states, responsive at 1024/1280/1920 | **Partial** (no Learning Studio yet; contrast not measured with a tool) | `src/renderer/styles/tokens.css`, `app.css` | `e2e/app.e2e.ts` M2-AC6/7/9, screenshots artifact |
 | FR-SEC-004 Auditability | Project and run changes, settings changes, schema migrations; append-only via triggers | **Partial** (approvals, tool/config changes, connections, deployments not yet produced) | `src/core/workspace.ts` | `test/workspace.test.ts` AC6 |
 | FR-BUILD-002 Test-driven verification | Test suite + CI on Linux and Windows | **Verified** for M1 scope | `.github/workflows/ci.yml` | 24/24 pass locally (Linux, Node 22.22) and in CI on ubuntu-latest and windows-latest (Node 22.18), PR #1 |
+| FR-TOOL-001 Tool inventory and installation scope | Plugins (with marketplace, version, scope, enabled state), marketplaces, skills, commands, subagents, hooks and MCP servers across managed, user, project, local and plugin scopes; provenance; supported removal method described (not run); unknowns kept unknown; nothing marked app-managed | **Verified** against a fixture setup (Linux). Not yet run against a real Windows Claude Code install. Dependencies and permissions recorded only where the files state them (plugin → components, skill `allowed-tools`, agent `tools`) | `src/core/inventory.ts` | `test/inventory.test.ts` M4-AC1/2/3/5, `test/cli.test.ts`, `e2e/app.e2e.ts` M4 |
+| FR-TOOL-002 Conflict and duplication detection | Duplicate slash names, duplicate subagents, same-name across plugin namespaces (overlap), duplicate MCP names and duplicate MCP servers, duplicate and overlapping hooks, enabled-but-missing plugins, missing plugin files, version mismatches, plugin name clashes across marketplaces, unparseable config; evidence vs inference; severity classes | **Partial**: MCP tool-name collisions and workflow dependencies are not checked (servers are not started; no workflows use tools yet), and release-blocking is never raised yet. Both gaps are shown in the report | `src/core/conflicts.ts` | `test/inventory.test.ts` M4-AC4 |
 | All other FRs | — | Planned | — | See `IMPLEMENTATION_ASSESSMENT.md` §6 |
 
 ## Milestone M1 acceptance criteria
@@ -56,3 +58,16 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | *Surfaces* setting (Frosted glass / Solid panels) validated, persisted, audited; solid removes the blur | Verified | `workspace.test.ts`, `app.e2e.ts` test 2 |
 | Context panel: project explorer (search, select, current marked), Activity filtered by project | Verified (explorer); filter implemented, covered by `listEvents` unit tests | `app.e2e.ts` test 1 |
 | Reduced transparency (OS setting) falls back to solid panels | Implemented, not automatically tested | `tokens.css` media query |
+
+## Milestone M4 acceptance criteria (read-only tool inventory)
+
+| AC | Criterion | Status | Evidence |
+|---|---|---|---|
+| M4-AC1 | Inventory of plugins, marketplaces, skills, commands, subagents, hooks, MCP servers with scope, provenance, version and status; unknowns not guessed | Verified (fixture) | `inventory.test.ts` |
+| M4-AC2 | No credentials in scan output, storage or UI (env and header values, URL queries, account data) | Verified (canary values) | `inventory.test.ts`, `cli.test.ts`, `e2e/app.e2e.ts` M4 |
+| M4-AC3 | The scan changes nothing on disk outside the app's database | Verified (tree hash before and after) | `inventory.test.ts` |
+| M4-AC4 | Conflicts classified with evidence; harmless overlap is not reported as an error; no destructive suggestions | Verified (fixture) | `inventory.test.ts` |
+| M4-AC5 | An empty or missing Claude Code setup scans cleanly | Verified | `inventory.test.ts` |
+| M4-AC6 | Scans stored redacted, audited, pruned to 20; the renderer cannot choose what is scanned | Verified | `inventory.test.ts`, `service.ts` |
+| M4-AC7 | Tools screen: scan, findings, filter by kind, entry details; scan persists across navigation | Verified | `e2e/app.e2e.ts` M4, screenshots |
+| M4-AC8 | Works on joshua's real Windows setup | **Not verified yet**: needs a run on that machine | — |
