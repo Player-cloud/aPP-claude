@@ -61,8 +61,8 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     await run.getByText('Planned', { exact: true }).waitFor();
 
     await page.getByRole('button', { name: 'Activity' }).click();
-    const rows = await page.getByRole('row').allTextContents();
-    assert.ok(rows.some((r) => r.includes('Run moved planned → blocked: EGM is not installed')), rows.join('\n'));
+    // The log loads asynchronously: wait for the entry rather than reading the table once.
+    await page.getByRole('cell', { name: 'Run moved planned → blocked: EGM is not installed' }).waitFor();
     await shot(page, '03-activity-dark-1280');
   } finally {
     await app.close();
