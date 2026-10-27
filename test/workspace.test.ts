@@ -140,3 +140,36 @@ test('a database from a newer app version is refused, not downgraded', (t) => {
   assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, SCHEMA_VERSION + 1);
   check.close();
 });
+
+test('M2-AC6: settings are validated, persisted and audited', (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  let ws = Workspace.open(home, { actor: 'tester' });
+  assert.equal(ws.getSettings().theme, 'dark');
+  assert.throws(() => ws.updateSetting('theme', 'neon'), ValidationError);
+  assert.throws(() => ws.updateSetting('telemetry', 'on'), ValidationError);
+  ws.updateSetting('theme', 'light');
+  ws.updateSetting('theme', 'light'); // no-op: no duplicate audit event
+  ws.close();
+  ws = Workspace.open(home);
+  assert.equal(ws.getSettings().theme, 'light');
+  const changes = ws.listEvents().filter((e) => e.type === 'setting.changed');
+  assert.deepEqual(changes.map((e) => e.payload), [{ key: 'theme', from: 'dark', to: 'light' }]);
+  ws.close();
+});
+
+test('a version 1 database is migrated forward without losing data', (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  let ws = Workspace.open(home);
+  const p = ws.createProject({ name: 'Old' });
+  ws.close();
+  const raw = new DatabaseSync(appPaths(home).db);
+  raw.exec('DROP TABLE settings; PRAGMA user_version = 1;');
+  raw.close();
+  ws = Workspace.open(home);
+  assert.equal(ws.getProject(p.id).name, 'Old');
+  assert.equal(ws.health().schemaVersion, SCHEMA_VERSION);
+  ws.updateSetting('theme', 'system');
+  ws.close();
+});

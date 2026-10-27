@@ -1,6 +1,6 @@
 {
   "name": "iterative-platform",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Installable AI development platform: Project Layer and Iterative Layer (core + CLI).",
   "type": "module",
@@ -11,10 +11,24 @@
     "iap": "node --disable-warning=ExperimentalWarning src/cli/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "test:e2e": "npm run build && node --test \"e2e/**/*.e2e.ts\"",
+    "dist:win": "node scripts/build.mjs --prod && electron-builder --win nsis --publish never"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "electron": "^45.1.0",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "playwright-core": "^1.64.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "^5.9.0"
-  }
+  },
+  "main": "dist/main.cjs",
+  "author": "joshua"
 }

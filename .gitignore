@@ -1,3 +1,6 @@
 node_modules/
 .iap-home/
 *.log
+e2e/screenshots/
+dist/
+release/
