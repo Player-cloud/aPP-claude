@@ -12,7 +12,7 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | FR-PROJ-001 Create a project | Stable ID, workspace, status, `docs/designs/`, confirmed vs assumption facts | **Verified** (CLI only) | `src/core/workspace.ts` | `test/workspace.test.ts` AC1/AC2, `test/cli.test.ts` |
 | FR-SEC-002 Secrets protection | Redaction of keys and known token formats before storage | **Partial** (safety net only; credential store planned) | `src/core/redact.ts` | `test/redact.test.ts`, raw-DB scan in `test/workspace.test.ts` AC8 |
 | FR-SEC-004 Auditability | Project and run changes, schema migrations; append-only via triggers | **Partial** (approvals, tool/config changes, connections, deployments not yet produced) | `src/core/workspace.ts` | `test/workspace.test.ts` AC6 |
-| FR-BUILD-002 Test-driven verification | Test suite + CI on Linux and Windows | **Implemented, not fully verified** (CI has not run yet on GitHub) | `.github/workflows/ci.yml` | Local run: 24/24 pass (Linux, Node 22.22) |
+| FR-BUILD-002 Test-driven verification | Test suite + CI on Linux and Windows | **Verified** for M1 scope | `.github/workflows/ci.yml` | 24/24 pass locally (Linux, Node 22.22) and in CI on ubuntu-latest and windows-latest (Node 22.18), PR #1 |
 | All other FRs | — | Planned | — | See `IMPLEMENTATION_ASSESSMENT.md` §6 |
 
 ## Milestone M1 acceptance criteria
@@ -28,4 +28,4 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M1-AC7 corrupt state recoverable, not overwritten | Verified | `workspace.test.ts`, `cli.test.ts` |
 | M1-AC8 secret redaction | Verified for listed formats | `redact.test.ts`, raw DB scan |
 | M1-AC9 documented, overridable data location | Verified | `paths.test.ts`, `OPERATIONS.md` |
-| M1-AC10 type check + tests pass | Verified locally (Linux); Windows CI pending | `npm run check` |
+| M1-AC10 type check + tests pass | Verified (Linux local, CI Linux + Windows) | `npm run check`, PR #1 CI |
