@@ -2,8 +2,8 @@
 // interface, so policy (budget, timeouts, permissions, output contracts) is
 // enforced in deterministic code, not by the model (ARCH §5).
 //
-// Only the simulated adapter exists: joshua chose "no real calls yet"
-// (DEC-017). A real Claude adapter will implement the same interface.
+// The simulated adapter is used until a monthly budget and an API key are set
+// (DEC-017); the Claude adapter (claude.ts, DEC-018) implements the same interface.
 
 export interface ToolRequest {
   tool: string;
@@ -25,6 +25,8 @@ export interface ModelResponse {
   usage: { inputTokens: number; outputTokens: number };
   /** Cost in US dollars as reported or computed by the adapter. */
   costUsd: number;
+  /** Set when the model answered but did not finish properly (cut off, declined). The call is still paid for. */
+  problem?: string;
 }
 
 export interface ModelAdapter {

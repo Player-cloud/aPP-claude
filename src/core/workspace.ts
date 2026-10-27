@@ -603,6 +603,11 @@ export class Workspace {
     return value === 'none' ? null : Number(value);
   }
 
+  /** Audits that a credential was stored or removed. Only its name is recorded, never the value. */
+  recordCredentialChange(action: 'stored' | 'removed', name: string): void {
+    this.record(`credential.${action}`, null, null, { name });
+  }
+
   private projectOfRun(runId: string | null): string | null {
     return runId ? this.getRun(runId).projectId : null;
   }

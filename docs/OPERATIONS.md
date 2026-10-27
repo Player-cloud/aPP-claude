@@ -49,6 +49,19 @@ The Tools screen and `iap tools scan` read, and never write, these locations:
 
 MCP server environment variables and headers are reduced to their names, URLs lose query strings and credentials, and hook commands are redacted. The last 20 scans are kept in `iap.db`, and each scan is recorded in the audit log.
 
+## Real model calls (M3, DEC-018)
+
+Real Claude calls need **both** a monthly budget and an Anthropic API key, set in *Settings → AI usage*. Without either, the agent uses the free simulated model.
+
+| What | Where / how |
+|---|---|
+| API key | `<data directory>/secrets/anthropic-api-key.bin`, encrypted with Electron `safeStorage` (Windows DPAPI: readable only by the same Windows user on the same machine). Never stored in the database, logs or audit events, and never sent back to the UI. *Remove key* deletes the file |
+| CLI | Reads the key from `ANTHROPIC_API_KEY`; real calls only when the app's budget setting is not "No real calls" |
+| Spend | Append-only `spend` table in the database, per calendar month (UTC). Each call is checked before it is made against the budget minus the month's spend minus calls in flight, assuming the longest possible answer. A call abandoned at its timeout is counted at its estimate |
+| Model and price | `claude-opus-5-5`, $4 per million input tokens, $20 per million output tokens (checked 2026-10-27; update `src/core/agents/claude.ts` if Anthropic's prices change) |
+
+The app's budget is a safety stop inside this app only. Also set a spend limit in the Anthropic Console, which covers every use of the key.
+
 ## Backup
 Close the app, then copy the whole data directory. SQLite WAL files must be copied together with `iap.db`.
 

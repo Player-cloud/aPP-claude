@@ -1,8 +1,9 @@
-// Main agent requests for one run (M3: FR-APP-003). Only a simulated model is
-// installed (DEC-017), and the panel says so wherever results appear, so a
-// placeholder can never be mistaken for real AI work.
+// Main agent requests for one run (M3: FR-APP-003). The panel says whether
+// the agent is simulated or calling Claude (DEC-017, DEC-018), and labels each
+// result by the model that produced it, so a placeholder can never be mistaken
+// for real AI work.
 import { useState, type FormEvent } from 'react';
-import type { AgentTask, RunWithNext } from '../../shared/api.ts';
+import type { AgentStatus, AgentTask, RunWithNext } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Alert, Badge } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
@@ -29,11 +30,13 @@ const STRATEGY: Record<string, string> = {
 function Request({ root, tasks }: { root: AgentTask; tasks: AgentTask[] }) {
   const status = STATUS[root.status];
   const children = tasks.filter((t) => t.parentId === root.id);
+  const total = root.costUsd + children.reduce((sum, c) => sum + c.costUsd, 0);
   return (
     <details className="finding agent-request" open={root.status !== 'succeeded'}>
       <summary>
         <Badge tone={status.tone}>{status.label}</Badge>
         <span className="finding-title">{root.title}</span>
+        {root.model === 'simulated' && <span className="pill">Simulated</span>}
         {root.strategy && <span className="pill">{STRATEGY[root.strategy] ?? root.strategy}</span>}
       </summary>
       <div className="finding-body">
@@ -68,9 +71,17 @@ function Request({ root, tasks }: { root: AgentTask; tasks: AgentTask[] }) {
             <p>{root.resolution}</p>
           </>
         )}
+        {total > 0 && (
+          <>
+            <h4>Cost</h4>
+            <p>
+              ${total.toFixed(3)} (planning ${root.costUsd.toFixed(3)})
+            </p>
+          </>
+        )}
         {root.output && (
           <>
-            <h4>Result (simulated)</h4>
+            <h4>{root.model === 'simulated' ? 'Result (simulated)' : 'Result'}</h4>
             <pre className="agent-output">{root.output}</pre>
           </>
         )}
@@ -79,8 +90,23 @@ function Request({ root, tasks }: { root: AgentTask; tasks: AgentTask[] }) {
   );
 }
 
+function ModeBadge({ status }: { status: AgentStatus }) {
+  if (status.mode === 'claude') return <Badge tone="ok">Claude</Badge>;
+  if (status.mode === 'needs_key') return <Badge tone="danger">Needs API key</Badge>;
+  return <Badge tone="warn">Simulated</Badge>;
+}
+
+function modeText(status: AgentStatus): string {
+  if (status.mode === 'claude') {
+    return `Uses Claude (${status.model}). $${status.spentUsd.toFixed(2)} of your $${status.budgetUsd} monthly budget used. The agent stops before any call that would go over it.`;
+  }
+  if (status.mode === 'needs_key') return 'A monthly budget is set, but no API key is stored. Add it in Settings → AI usage.';
+  return 'Real calls are off, so the agent uses a stand-in that shows the plan, delegation and checks without doing real work. Nothing is billed.';
+}
+
 export function AgentPanel({ run }: { run: RunWithNext }) {
   const tasks = useAsync(() => call(iap().listAgentTasks(run.id)), [run.id]);
+  const agent = useAsync(() => call(iap().agentStatus()), [run.id]);
   const [goal, setGoal] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,7 +121,7 @@ export function AgentPanel({ run }: { run: RunWithNext }) {
     try {
       await call(iap().runAgent({ runId: run.id, goal }));
       setGoal('');
-      await tasks.reload();
+      await Promise.all([tasks.reload(), agent.reload()]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -107,11 +133,9 @@ export function AgentPanel({ run }: { run: RunWithNext }) {
     <section className="agent-panel" aria-label={`Main agent for ${run.title}`}>
       <div className="agent-head">
         <h4>Main agent</h4>
-        <Badge tone="warn">Simulated</Badge>
+        {agent.data && <ModeBadge status={agent.data} />}
       </div>
-      <p className="subtle">
-        No AI model is connected yet, so the agent uses a stand-in that shows the plan, delegation and checks without doing real work. Nothing is billed.
-      </p>
+      {agent.data && <p className="subtle">{modeText(agent.data)}</p>}
       {running && (
         <form className="agent-form" onSubmit={submit}>
           <textarea

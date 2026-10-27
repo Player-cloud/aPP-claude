@@ -3,7 +3,9 @@
 // treated as untrusted and validated here, the security boundary (ARCH §3.2):
 // UI controls are not relied on for authorization or validation.
 
-import { SimulatedModel } from '../core/agents/model.ts';
+import Anthropic from '@anthropic-ai/sdk';
+import { CLAUDE_MODEL, ClaudeModel, type ClaudeClient } from '../core/agents/claude.ts';
+import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
@@ -11,7 +13,8 @@ import { appPaths } from '../core/paths.ts';
 import { runToolScan } from '../core/tools.ts';
 import { allowedTransitions, isRunState } from '../core/workflow.ts';
 import { moveCorruptStateAside, Workspace, type Fact, type WorkflowRun } from '../core/workspace.ts';
-import type { AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
+import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
+import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent waits for (simulated) model calls.
 type AsyncMethod = 'runAgent';
@@ -40,6 +43,16 @@ function facts(value: unknown): Fact[] | undefined {
   });
 }
 
+/** Anthropic API keys start with this; anything else is rejected before it is stored. */
+const API_KEY_PATTERN = /^sk-ant-[A-Za-z0-9_-]{20,300}$/;
+
+export interface ServiceOptions {
+  scanRoots?: () => ScanRoots;
+  keyStore?: KeyStore;
+  /** Builds the API client from the stored key. Tests pass a fake so no real call is ever made. */
+  claudeClient?: (apiKey: string) => ClaudeClient;
+}
+
 const withNext = (run: WorkflowRun): RunWithNext => ({ ...run, next: allowedTransitions(run.state, run.blockedFrom) });
 
 export class AppService {
@@ -48,12 +61,42 @@ export class AppService {
   private readonly home: string;
   private readonly version: string;
   private readonly scanRoots: () => ScanRoots;
+  private readonly keys: KeyStore;
+  private readonly claudeClient: (apiKey: string) => ClaudeClient;
 
-  constructor(home: string, version: string, scanRoots: () => ScanRoots = () => defaultScanRoots()) {
+  constructor(home: string, version: string, options: ServiceOptions = {}) {
     this.home = home;
     this.version = version;
-    this.scanRoots = scanRoots;
+    this.scanRoots = options.scanRoots ?? (() => defaultScanRoots());
+    this.keys = options.keyStore ?? new MemoryKeyStore();
+    this.claudeClient = options.claudeClient ?? ((apiKey) => new Anthropic({ apiKey, maxRetries: 1 }));
     this.tryOpen();
+  }
+
+  agentStatus(): AgentStatus {
+    const ws = this.workspace();
+    const budgetUsd = ws.monthlyBudgetUsd();
+    const keyStored = this.keys.has();
+    const mode = budgetUsd === null ? 'simulated' : keyStored ? 'claude' : 'needs_key';
+    return {
+      mode,
+      model: mode === 'claude' ? CLAUDE_MODEL : 'simulated',
+      budgetUsd,
+      spentUsd: ws.spentThisMonth(),
+      keyStored,
+      keyStorageAvailable: this.keys.available(),
+    };
+  }
+
+  /** Real calls need both a budget and a key; otherwise the simulated model runs and says so. */
+  private agentModel(): ModelAdapter {
+    const status = this.agentStatus();
+    if (status.mode === 'simulated') return new SimulatedModel();
+    const key = this.keys.get();
+    if (!key) {
+      throw new ValidationError('A monthly budget is set but no API key is stored. Add your Anthropic API key in Settings → AI usage, or choose "No real calls" to use the simulated agent.');
+    }
+    return new ClaudeModel(this.claudeClient(key));
   }
 
   private tryOpen(): void {
@@ -152,14 +195,31 @@ export class AppService {
     // The renderer cannot choose what is scanned: locations come from the main process only.
     scanTools: () => wrap(() => this.workspace().saveToolScan(runToolScan(this.scanRoots()))),
     getToolScan: () => wrap(() => this.workspace().latestToolScan()),
-    // Only the simulated model exists (DEC-017). The renderer cannot grant tools: delegated tasks get none.
+    // The renderer cannot grant tools: delegated tasks get none (DEC-017).
     runAgent: (input) =>
       wrapAsync(async () => {
         const i = obj(input, 'Agent request');
         const goal = str(i.goal, 'Goal')!;
         if (goal.length > 4_000) throw new ValidationError('The goal must be at most 4,000 characters.');
         const title = goal.trim().split('\n')[0]!.slice(0, 80);
-        return new Orchestrator(this.workspace(), new SimulatedModel()).run({ runId: str(i.runId, 'Run id')!, title, goal });
+        return new Orchestrator(this.workspace(), this.agentModel()).run({ runId: str(i.runId, 'Run id')!, title, goal });
+      }),
+    agentStatus: () => wrap(() => this.agentStatus()),
+    // The key goes in and never comes back out: no handler returns it.
+    setApiKey: (input) =>
+      wrap(() => {
+        const key = str(obj(input, 'API key').key, 'API key')!.trim();
+        if (!API_KEY_PATTERN.test(key)) throw new ValidationError('That does not look like an Anthropic API key (it should start with "sk-ant-").');
+        if (!this.keys.available()) throw new ValidationError('This computer offers no secure storage, so the key was not saved.');
+        this.keys.set(key);
+        this.workspace().recordCredentialChange('stored', 'Anthropic API key');
+        return this.agentStatus();
+      }),
+    clearApiKey: () =>
+      wrap(() => {
+        this.keys.clear();
+        this.workspace().recordCredentialChange('removed', 'Anthropic API key');
+        return this.agentStatus();
       }),
     listAgentTasks: (runId) => wrap(() => this.workspace().listAgentTasks({ runId: str(runId, 'Run id')! })),
   };

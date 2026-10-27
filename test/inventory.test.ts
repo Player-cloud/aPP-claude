@@ -128,7 +128,7 @@ test('M4-AC5: an empty or missing setup scans cleanly', (t) => {
 test('M4-AC6: scans are stored redacted, audited and pruned; the IPC handler scans only main-process roots', (t) => {
   const { home, cleanup } = tempHome();
   const roots = buildClaudeFixture(join(home, 'fixture'));
-  const s = new AppService(join(home, 'app'), '0.0.0-test', () => roots);
+  const s = new AppService(join(home, 'app'), '0.0.0-test', { scanRoots: () => roots });
   t.after(() => {
     s.close();
     cleanup();
