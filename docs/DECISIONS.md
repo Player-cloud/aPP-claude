@@ -1,0 +1,16 @@
+# Architecture Decision Log
+
+Each decision records status, alternatives and trade-offs (ROADMAP Phase 0 exit criterion). **Proposed** decisions are defaults the code currently follows; they are not final until approved.
+
+| ID | Decision | Status | Alternatives considered | Trade-off / reason |
+|---|---|---|---|---|
+| DEC-001 | App shell: **Electron**, Windows 10/11 x64 first (NSIS installer) | **Approved 2026-10-27** (decision card) | Tauri + Node sidecar; local web app first | Core and Claude Agent SDK are Node; Electron needs no sidecar. Costs: ~100 MB installer, higher memory. |
+| DEC-002 | Core language: **TypeScript on Node ≥ 22.18**, run directly via Node type stripping (no build step for core/CLI) | Adopted for M1 (low risk) | Python core; compiled TS | One language across core, CLI, UI, Agent SDK. Erasable-only TS syntax required (`erasableSyntaxOnly`). |
+| DEC-003 | Storage: **SQLite** via built-in `node:sqlite`, one file in the app data dir; artifacts as plain files per project | Adopted for M1 (behind `Workspace`) | `better-sqlite3`; JSON files; Postgres | No native build, transactional, easy backup. `node:sqlite` is experimental in Node 22; swap to `better-sqlite3` if its API shifts. |
+| DEC-004 | `blocked` is **resumable** to the state it was blocked from; `completed`/`cancelled`/`failed` are terminal | Adopted for M1 | Treat `blocked` as terminal (as ARCH §4 lists it) | FR-APP-004 requires a blocked run to explain how to resolve the blocker, which implies resumption. ARCH §4 should be updated to match once approved. |
+| DEC-005 | Execution: **local**; one directory per project; Git worktrees for isolated changes | **Approved 2026-10-27** (bundled in DEC-001 card) | Remote sandbox; hybrid | Keeps source local; sandbox design still required before running untrusted code (M3). |
+| DEC-006 | Secrets: OS credential store via Electron `safeStorage`; DB stores references only; redaction at storage boundary as a safety net | Redaction adopted; store proposed | Encrypted file; external vault | FR-SEC-002. |
+| DEC-007 | Single local user for v1; approvals recorded as audit events with the OS username as actor | **Approved 2026-10-27** (bundled in DEC-001 card) | Multi-user with accounts | Nothing in the spec requires multi-user yet. |
+| DEC-008 | Model runtime: **Claude via Claude Agent SDK** | **Approved 2026-10-27** (bundled in DEC-001 card) | Direct Messages API; multi-provider | Reuses Claude Code skills/plugins/MCP the Tool Registry depends on. |
+| DEC-009 | Audit log is append-only, enforced by database triggers | Adopted | App-level only | Defence against accidental edits (ARCH §7). Not tamper-proof against someone with file access; formal protection is "later enterprise hardening". |
+| DEC-010 | Roadmap reorder: read-only tool inventory (FR-TOOL-001/002) right after Phase 2; import/assessment (Phase 7) before design (Phase 5) | Proposed | Follow roadmap order exactly | Phases 3 and 6 need verified tool inventory; assessment is read-only and independent of UI. Scope and exit criteria unchanged. |
