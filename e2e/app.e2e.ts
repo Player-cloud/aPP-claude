@@ -13,7 +13,10 @@ async function resize(app: ElectronApplication, width: number, height: number) {
   await app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0]!.setContentSize(w!, h!), [width, height]);
 }
 
-const shot = (page: Page, name: string) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
+const shot = async (page: Page, name: string) => {
+  await page.mouse.move(1, 1); // no hover tooltips in the evidence
+  await page.screenshot({ path: join(SHOTS, `${name}.png`) });
+};
 
 test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it again after restart', async (t) => {
   const { home, cleanup } = tempHome();
@@ -36,6 +39,8 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     await page.getByRole('button', { name: 'Create project' }).click();
 
     await page.getByRole('heading', { level: 1, name: 'Recipe sharing app' }).waitFor();
+    // The side panel lists the new project and marks it as current.
+    await page.getByRole('navigation', { name: 'Projects' }).getByRole('button', { name: 'Recipe sharing app' }).and(page.locator('[aria-current="page"]')).waitFor();
     assert.deepEqual(await page.getByRole('list', { name: 'Confirmed facts' }).getByRole('listitem').allTextContents(), ['Windows desktop first', 'Single user']);
     assert.deepEqual(await page.getByRole('list', { name: 'Assumptions' }).getByRole('listitem').allTextContents(), ['Users want offline access']);
 
@@ -60,10 +65,15 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     await run.getByRole('button', { name: 'Resume (Planned)' }).click();
     await run.getByText('Planned', { exact: true }).waitFor();
 
-    await page.getByRole('button', { name: 'Activity' }).click();
+    await page.getByRole('button', { name: 'Activity', exact: true }).click();
     // The log loads asynchronously: wait for the entry rather than reading the table once.
     await page.getByRole('cell', { name: 'Run moved planned → blocked: EGM is not installed' }).waitFor();
     await shot(page, '03-activity-dark-1280');
+
+    // Back on the overview, the project appears as a card.
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('list', { name: 'All projects' }).getByRole('button', { name: /Recipe sharing app/ }).waitFor();
+    await shot(page, '08-projects-overview-dark-1280');
   } finally {
     await app.close();
   }
@@ -71,7 +81,8 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
   // Restart: everything is still there (FR-APP-002).
   ({ app, page } = await launch(home));
   try {
-    await page.getByRole('button', { name: 'Recipe sharing app' }).click();
+    // The project is listed in the side panel's explorer.
+    await page.getByRole('navigation', { name: 'Projects' }).getByRole('button', { name: 'Recipe sharing app' }).click();
     await page.getByRole('article', { name: /Initial plan, Planned/ }).waitFor();
   } finally {
     await app.close();
@@ -85,21 +96,21 @@ test('M2-AC6: theme preference applies immediately and persists', async (t) => {
   try {
     await resize(app, 1280, 800);
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
-    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('radio', { name: 'Light' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
     await shot(page, '04-settings-light-1280');
-    await page.getByRole('button', { name: 'Projects' }).click();
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await shot(page, '05-projects-empty-light-1280');
 
     // Frosted glass is on by default and can be switched to solid panels.
     assert.equal(await page.evaluate(() => document.documentElement.dataset.glass), 'on');
     const blur = () => page.locator('.rail').evaluate((el) => getComputedStyle(el).backdropFilter);
-    assert.match(await blur(), /blur\(22px\)/);
-    await page.getByRole('button', { name: 'Settings' }).click();
+    assert.match(await blur(), /blur\(24px\)/);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('radio', { name: 'Solid panels' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.glass === 'off');
-    assert.doesNotMatch(await blur(), /blur\(22px\)/);
+    assert.doesNotMatch(await blur(), /blur\(24px\)/);
     await shot(page, '07-settings-solid-light-1280');
     await page.getByRole('radio', { name: 'Frosted glass' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.glass === 'on');
@@ -197,15 +208,17 @@ test('M2-AC7/AC9: keyboard navigation, visible focus, and layouts at target size
       [1024, 768],
     ] as const) {
       await resize(app, w, h);
-      await page.getByRole('button', { name: 'Projects' }).click();
+      await page.getByRole('button', { name: 'Projects', exact: true }).click();
       await page.waitForTimeout(100);
       const layout = await page.evaluate(() => ({
         rail: document.querySelector('.rail')!.getBoundingClientRect().width,
+        side: document.querySelector('.side')!.getBoundingClientRect().width,
         overflow: document.documentElement.scrollWidth > window.innerWidth,
       }));
       assert.equal(layout.overflow, false, `horizontal overflow at ${w}x${h}`);
-      if (w === 1024) assert.ok(layout.rail <= 80, `rail should collapse at ${w}px, was ${layout.rail}`);
-      else assert.ok(layout.rail >= 200, `rail should be expanded at ${w}px`);
+      assert.ok(layout.rail <= 80, `rail should stay slim at ${w}px, was ${layout.rail}`);
+      if (w === 1024) assert.equal(layout.side, 0, `side panel should be hidden at ${w}px`);
+      else assert.ok(layout.side >= 200, `side panel should be shown at ${w}px`);
       await shot(page, `07-projects-dark-${w}`);
     }
   } finally {

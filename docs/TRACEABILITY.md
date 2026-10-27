@@ -45,7 +45,7 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M2-AC6 | Shared design tokens; dark, light, system themes; preference persisted and audited | Verified | `app.e2e.ts` test 2, `workspace.test.ts` |
 | M2-AC7 | Keyboard: skip link, tab order, visible focus; reduced motion respected (durations → 0) | Verified for tested paths (no screen-reader test) | `app.e2e.ts` test 5, `tokens.css` |
 | M2-AC8 | Renderer isolation and IPC validation | Verified | `app.e2e.ts` test 4, `service.test.ts` |
-| M2-AC9 | No horizontal overflow at 1024×768, 1280×800, 1920×1080; nav collapses below 1060 px | Verified | `app.e2e.ts` test 5 |
+| M2-AC9 | No horizontal overflow at 1024×768, 1280×800, 1920×1080; context panel hides below 1060 px (icon rail always shown, DEC-015) | Verified | `app.e2e.ts` test 5 |
 | M2-AC10 | CI runs type check, unit tests (Linux + Windows), e2e (Linux), installer (Windows) | Verified, all green | PR #2 CI |
 
 ## UI refresh: frosted glass (DEC-015)
@@ -54,4 +54,5 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 |---|---|---|
 | Glass surfaces in dark and light themes; layouts still fit 1024, 1280, 1920 px | Verified | `app.e2e.ts` tests 1, 2, 5 and their screenshots |
 | *Surfaces* setting (Frosted glass / Solid panels) validated, persisted, audited; solid removes the blur | Verified | `workspace.test.ts`, `app.e2e.ts` test 2 |
+| Context panel: project explorer (search, select, current marked), Activity filtered by project | Verified (explorer); filter implemented, covered by `listEvents` unit tests | `app.e2e.ts` test 1 |
 | Reduced transparency (OS setting) falls back to solid panels | Implemented, not automatically tested | `tokens.css` media query |
