@@ -5,7 +5,7 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 
 | Requirement | Scope covered so far | Status | Code | Tests / evidence |
 |---|---|---|---|---|
-| FR-APP-001 Installable application | Windows NSIS installer; silent install → launch → health check → uninstall keeps data; OS + data locations documented | **Implemented, not fully verified** until the `installer` CI job passes on this PR. Auto-update and signing not started. | `electron-builder.yml`, `src/main/main.ts` (`--smoke-test`), `docs/OPERATIONS.md` | CI job `installer` (windows-latest) |
+| FR-APP-001 Installable application | Windows NSIS installer; silent install → launch → health check → uninstall keeps data; OS + data locations documented | **Verified** for Windows x64 per-user install (CI `installer` job, PR #2). Auto-update and code signing not started; clean install on a physical machine not yet reported. | `electron-builder.yml`, `src/main/main.ts` (`--smoke-test`), `docs/OPERATIONS.md` | CI job `installer` (windows-latest) |
 | FR-APP-002 Persistent workspace | Projects, runs, events persist across restarts; run states; corrupt/missing state handled | **Verified** for projects + runs + events (specs, evidence, tool inventory, approvals, proposals not yet stored) | `src/core/workspace.ts`, `src/core/workflow.ts` | `test/workspace.test.ts` (AC3, AC7, too-new), `test/cli.test.ts` (separate processes) |
 | FR-APP-003 Orchestration | — | Planned (M3) | — | — |
 | FR-APP-004 Workflow visibility | Runs show state, progress, allowed next actions only, blocker + resolution, failures; activity log screen | **Partial** (no tool activity or agent progress yet; nothing long-running to resume) | `src/core/workflow.ts`, `src/cli/main.ts` | `test/workflow.test.ts`, `test/cli.test.ts` |
@@ -37,7 +37,7 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 
 | AC | Criterion | Status | Evidence |
 |---|---|---|---|
-| M2-AC1 | Installer builds; silent install launches and opens a healthy workspace; uninstall keeps user data | Implemented, verification pending (CI `installer` job) | `.github/workflows/ci.yml` |
+| M2-AC1 | Installer builds; silent install launches and opens a healthy workspace; uninstall keeps user data | Verified (CI, windows-latest) | `installer` job, PR #2 |
 | M2-AC2 | Shell: persistent nav rail (Project Layer, Iterative Layer, Settings), header with breadcrumbs, work surface, context panel | Verified | e2e screenshots |
 | M2-AC3 | Create, list and open projects in the UI; data survives app restart | Verified | `app.e2e.ts` test 1 |
 | M2-AC4 | Runs offer only allowed next steps; blocking needs reason + resolution (enforced server-side); blocked runs show how to resolve | Verified | `app.e2e.ts` test 1 |
@@ -46,4 +46,4 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M2-AC7 | Keyboard: skip link, tab order, visible focus; reduced motion respected (durations → 0) | Verified for tested paths (no screen-reader test) | `app.e2e.ts` test 5, `tokens.css` |
 | M2-AC8 | Renderer isolation and IPC validation | Verified | `app.e2e.ts` test 4, `service.test.ts` |
 | M2-AC9 | No horizontal overflow at 1024×768, 1280×800, 1920×1080; nav collapses below 1060 px | Verified | `app.e2e.ts` test 5 |
-| M2-AC10 | CI runs type check, unit tests (Linux + Windows), e2e (Linux), installer (Windows) | Pending first CI run | `.github/workflows/ci.yml` |
+| M2-AC10 | CI runs type check, unit tests (Linux + Windows), e2e (Linux), installer (Windows) | Verified, all green | PR #2 CI |
