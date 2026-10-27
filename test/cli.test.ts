@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { tempHome } from './helpers.ts';
+import { buildClaudeFixture, CANARIES } from './claude-fixture.ts';
 import { appPaths } from '../src/core/paths.ts';
 
 const CLI = fileURLToPath(new URL('../src/cli/main.ts', import.meta.url));
@@ -93,3 +95,25 @@ test('usage errors exit 1 with guidance', (t) => {
   assert.equal(iap(home, 'run', 'start', 'prj_nope', '--workflow', 'plan').code, 1);
   assert.equal(iap(home, 'project', 'create', '--bogus').code, 1);
 });
+
+test('M4: `tools scan` reports conflicts and `tools show` reads the stored scan in a new process', (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const roots = buildClaudeFixture(join(home, 'fixture'));
+  const env = { CLAUDE_CONFIG_DIR: roots.configDir };
+  const scan = iapEnv(env, join(home, 'app'), 'tools', 'scan', '--include', roots.project);
+  assert.equal(scan.code, 0, scan.err);
+  assert.match(scan.out, /\[confirmed\] Plugin ghost@acme is enabled but not installed/);
+  assert.match(scan.out, /\[potential\] 2 tools answer \/deploy/);
+  const shown = JSON.parse(iapEnv(env, join(home, 'app'), 'tools', 'show', '--json').out);
+  assert.equal(shown.roots.projectDirs[0], roots.project);
+  for (const canary of CANARIES) assert.ok(!scan.out.includes(canary));
+});
+
+function iapEnv(extra: Record<string, string>, home: string, ...args: string[]) {
+  const r = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', CLI, ...args], {
+    env: { ...process.env, ...extra, IAP_HOME: home },
+    encoding: 'utf8',
+  });
+  return { code: r.status, out: r.stdout, err: r.stderr };
+}

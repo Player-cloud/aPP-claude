@@ -2,9 +2,12 @@
 // sees these types; it never touches the database or filesystem directly.
 
 import type { AuditEvent, Fact, Project, Settings, WorkflowRun } from '../core/workspace.ts';
+import type { ToolScan } from '../core/tools.ts';
 import type { RunState, Workflow } from '../core/workflow.ts';
 
-export type { AuditEvent, Fact, Project, RunState, Settings, Workflow, WorkflowRun };
+export type { AuditEvent, Fact, Project, RunState, Settings, ToolScan, Workflow, WorkflowRun };
+export type { Finding, Severity } from '../core/conflicts.ts';
+export type { ToolEntry, ToolKind } from '../core/inventory.ts';
 
 export interface ApiError {
   code: string;
@@ -48,6 +51,9 @@ export interface IapApi {
   getSettings(): Promise<Result<Settings>>;
   updateSetting(input: { key: string; value: string }): Promise<Result<Settings>>;
   health(): Promise<Result<Health>>;
+  /** Read-only scan of the user's Claude Code tools (M4). Changes nothing outside the app's database. */
+  scanTools(): Promise<Result<ToolScan>>;
+  getToolScan(): Promise<Result<ToolScan | null>>;
 }
 
 export type IapMethod = keyof IapApi;
@@ -65,6 +71,8 @@ export const IAP_METHODS = [
   'getSettings',
   'updateSetting',
   'health',
+  'scanTools',
+  'getToolScan',
 ] as const satisfies readonly IapMethod[];
 
 export const channel = (method: IapMethod) => `iap:${method}`;

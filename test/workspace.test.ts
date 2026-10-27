@@ -166,7 +166,7 @@ test('a version 1 database is migrated forward without losing data', (t) => {
   const p = ws.createProject({ name: 'Old' });
   ws.close();
   const raw = new DatabaseSync(appPaths(home).db);
-  raw.exec('DROP TABLE settings; PRAGMA user_version = 1;');
+  raw.exec('DROP TABLE settings; DROP TABLE tool_scans; PRAGMA user_version = 1;');
   raw.close();
   ws = Workspace.open(home);
   assert.equal(ws.getProject(p.id).name, 'Old');

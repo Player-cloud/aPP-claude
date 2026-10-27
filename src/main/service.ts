@@ -4,7 +4,9 @@
 // UI controls are not relied on for authorization or validation.
 
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
+import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
+import { runToolScan } from '../core/tools.ts';
 import { allowedTransitions, isRunState } from '../core/workflow.ts';
 import { moveCorruptStateAside, Workspace, type Fact, type WorkflowRun } from '../core/workspace.ts';
 import type { AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
@@ -41,10 +43,12 @@ export class AppService {
   private openError: IapError | null = null;
   private readonly home: string;
   private readonly version: string;
+  private readonly scanRoots: () => ScanRoots;
 
-  constructor(home: string, version: string) {
+  constructor(home: string, version: string, scanRoots: () => ScanRoots = () => defaultScanRoots()) {
     this.home = home;
     this.version = version;
+    this.scanRoots = scanRoots;
     this.tryOpen();
   }
 
@@ -141,6 +145,9 @@ export class AppService {
         return this.workspace().updateSetting(str(i.key, 'Setting key')!, str(i.value, 'Setting value')!);
       }),
     health: () => wrap(() => this.workspace().health()),
+    // The renderer cannot choose what is scanned: locations come from the main process only.
+    scanTools: () => wrap(() => this.workspace().saveToolScan(runToolScan(this.scanRoots()))),
+    getToolScan: () => wrap(() => this.workspace().latestToolScan()),
   };
 }
 
