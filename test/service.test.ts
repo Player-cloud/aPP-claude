@@ -73,3 +73,31 @@ test('a closed workspace returns a clean error, not internals', (t) => {
   assert.equal(r.ok, false);
   assert.ok(!r.ok && !/at |\.ts/.test(r.error.message));
 });
+
+test('M3: the agent handlers validate input and only run on a started run', async (t) => {
+  const { home, cleanup } = tempHome();
+  const s = new AppService(home, '0.0.0-test');
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
+  const h = s.handlers;
+  for (const bad of [undefined, 'x', { runId: 1, goal: 'g' }, { runId: 'run_x' }, { runId: 'run_x', goal: 'x'.repeat(4_001) }]) {
+    const r = await h.runAgent(bad);
+    assert.equal(r.ok, false, JSON.stringify(bad)?.slice(0, 40));
+  }
+  const p = h.createProject({ name: 'Agent' });
+  assert.ok(p.ok);
+  const run = h.startRun({ projectId: p.value.id, workflow: 'build' });
+  assert.ok(run.ok);
+  const early = await h.runAgent({ runId: run.value.id, goal: 'Build it' });
+  assert.ok(!early.ok && /only work on a run that has been started/.test(early.error.message));
+  for (const to of ['planned', 'approved', 'running']) h.moveRun({ runId: run.value.id, to });
+  const done = await h.runAgent({ runId: run.value.id, goal: 'Build it', allowedTools: ['Bash'] });
+  assert.ok(done.ok);
+  assert.equal(done.value.status, 'succeeded');
+  assert.match(done.value.output ?? '', /Simulated model/);
+  assert.deepEqual(done.value.spec.allowedTools, [], 'the renderer cannot grant tools');
+  const listed = h.listAgentTasks(run.value.id);
+  assert.ok(listed.ok && listed.value.length === 3);
+});

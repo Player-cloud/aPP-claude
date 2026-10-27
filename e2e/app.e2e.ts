@@ -261,3 +261,37 @@ test('M4: the Tools screen scans a Claude Code setup read-only and explains conf
     await app.close();
   }
 });
+
+test('M3: the main agent runs on a started run and is clearly labelled simulated', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 800);
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByLabel('Name').fill('Agent demo');
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByLabel('Title').fill('Build the importer');
+    await page.getByRole('button', { name: 'Start run' }).click();
+    const run = page.getByRole('article', { name: /Build the importer/ });
+    // No agent before the run has started.
+    assert.equal(await run.getByRole('region', { name: /Main agent/ }).count(), 0);
+    for (const step of ['Mark planned', 'Approve plan', 'Start']) await run.getByRole('button', { name: step, exact: true }).click();
+
+    const agent = run.getByRole('region', { name: /Main agent/ });
+    await agent.getByText('Simulated', { exact: true }).waitFor();
+    await agent.getByLabel('What should the agent do?').fill('Import recipes from a CSV file');
+    await agent.getByRole('button', { name: 'Ask the agent' }).click();
+    await agent.getByText('Succeeded', { exact: true }).first().waitFor();
+    await agent.getByText('Single agent', { exact: true }).waitFor();
+    await agent.getByText('Import recipes from a CSV file').first().click();
+    await agent.getByText(/Simulated model: no AI was called/).waitFor();
+    await shot(page, '11-agent-simulated-dark-1280');
+
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    assert.equal(await page.getByRole('radio', { name: 'No real calls' }).isChecked(), true);
+    await page.getByText('This version only includes a simulated model').waitFor();
+  } finally {
+    await app.close();
+  }
+});

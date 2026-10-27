@@ -3,6 +3,8 @@
 // treated as untrusted and validated here, the security boundary (ARCH §3.2):
 // UI controls are not relied on for authorization or validation.
 
+import { SimulatedModel } from '../core/agents/model.ts';
+import { Orchestrator } from '../core/agents/orchestrator.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -11,7 +13,9 @@ import { allowedTransitions, isRunState } from '../core/workflow.ts';
 import { moveCorruptStateAside, Workspace, type Fact, type WorkflowRun } from '../core/workspace.ts';
 import type { AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
 
-type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => Awaited<ReturnType<IapApi[K]>> };
+// Most handlers answer synchronously; the agent waits for (simulated) model calls.
+type AsyncMethod = 'runAgent';
+type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
   if (value === undefined || value === null) {
@@ -148,6 +152,16 @@ export class AppService {
     // The renderer cannot choose what is scanned: locations come from the main process only.
     scanTools: () => wrap(() => this.workspace().saveToolScan(runToolScan(this.scanRoots()))),
     getToolScan: () => wrap(() => this.workspace().latestToolScan()),
+    // Only the simulated model exists (DEC-017). The renderer cannot grant tools: delegated tasks get none.
+    runAgent: (input) =>
+      wrapAsync(async () => {
+        const i = obj(input, 'Agent request');
+        const goal = str(i.goal, 'Goal')!;
+        if (goal.length > 4_000) throw new ValidationError('The goal must be at most 4,000 characters.');
+        const title = goal.trim().split('\n')[0]!.slice(0, 80);
+        return new Orchestrator(this.workspace(), new SimulatedModel()).run({ runId: str(i.runId, 'Run id')!, title, goal });
+      }),
+    listAgentTasks: (runId) => wrap(() => this.workspace().listAgentTasks({ runId: str(runId, 'Run id')! })),
   };
 }
 
@@ -155,9 +169,21 @@ function wrap<T>(fn: () => T): Result<T> {
   try {
     return { ok: true, value: fn() };
   } catch (e) {
-    if (e instanceof IapError) return { ok: false, error: { code: e.code, message: e.message } };
-    // Never leak stack traces or internals to the renderer.
-    console.error(e);
-    return { ok: false, error: { code: 'INTERNAL', message: 'Something went wrong. Details were written to the application log.' } };
+    return failure(e);
   }
+}
+
+async function wrapAsync<T>(fn: () => Promise<T>): Promise<Result<T>> {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+function failure(e: unknown): { ok: false; error: { code: string; message: string } } {
+  if (e instanceof IapError) return { ok: false, error: { code: e.code, message: e.message } };
+  // Never leak stack traces or internals to the renderer.
+  console.error(e);
+  return { ok: false, error: { code: 'INTERNAL', message: 'Something went wrong. Details were written to the application log.' } };
 }

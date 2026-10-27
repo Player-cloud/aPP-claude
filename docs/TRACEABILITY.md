@@ -7,7 +7,7 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 |---|---|---|---|---|
 | FR-APP-001 Installable application | Windows NSIS installer; silent install → launch → health check → uninstall keeps data; OS + data locations documented | **Verified** for Windows x64 per-user install (CI `installer` job, PR #2). Auto-update and code signing not started; clean install on a physical machine not yet reported. | `electron-builder.yml`, `src/main/main.ts` (`--smoke-test`), `docs/OPERATIONS.md` | CI job `installer` (windows-latest) |
 | FR-APP-002 Persistent workspace | Projects, runs, events persist across restarts; run states; corrupt/missing state handled | **Verified** for projects + runs + events (specs, evidence, tool inventory, approvals, proposals not yet stored) | `src/core/workspace.ts`, `src/core/workflow.ts` | `test/workspace.test.ts` (AC3, AC7, too-new), `test/cli.test.ts` (separate processes) |
-| FR-APP-003 Orchestration | — | Planned (M3) | — | — |
+| FR-APP-003 Orchestration | Main agent plans, chooses single / subagents / team by scope, parallelism, file conflicts, risk, context size and budget, records strategy and rationale, gives each delegated task a goal, output contract, tool allow-list and timeout, and reconciles before a request counts as done; single agent preferred | **Implemented, simulated model only** (DEC-017). No real model is connected, so the quality of real plans is unverified; tools are allow-list checked but not executed | `src/core/agents/` | `test/orchestrator.test.ts`, `test/service.test.ts` M3, `test/cli.test.ts` M3, `e2e/app.e2e.ts` M3 |
 | FR-APP-004 Workflow visibility | Runs show state, progress, allowed next actions only, blocker + resolution, failures; activity log screen | **Partial** (no tool activity or agent progress yet; nothing long-running to resume) | `src/core/workflow.ts`, `src/cli/main.ts` | `test/workflow.test.ts`, `test/cli.test.ts` |
 | FR-PROJ-001 Create a project | Stable ID, workspace, status, `docs/designs/`, confirmed vs assumption facts, in CLI and desktop UI | **Verified** | `src/core/workspace.ts` | `test/workspace.test.ts` AC1/AC2, `test/cli.test.ts` |
 | FR-SEC-002 Secrets protection | Redaction of keys and known token formats before storage | **Partial** (safety net only; credential store planned) | `src/core/redact.ts` | `test/redact.test.ts`, raw-DB scan in `test/workspace.test.ts` AC8 |
@@ -71,3 +71,17 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M4-AC6 | Scans stored redacted, audited, pruned to 20; the renderer cannot choose what is scanned | Verified | `inventory.test.ts`, `service.ts` |
 | M4-AC7 | Tools screen: scan, findings, filter by kind, entry details; scan persists across navigation | Verified | `e2e/app.e2e.ts` M4, screenshots |
 | M4-AC8 | Works on joshua's real Windows setup | **Not verified yet**: needs a run on that machine | — |
+
+## Milestone M3 acceptance criteria (main agent, simulated model)
+
+| AC | Criterion | Status | Evidence |
+|---|---|---|---|
+| M3-AC1 | Strategy chosen by rules and recorded with its rationale; single agent preferred when delegation adds nothing | Verified | `orchestrator.test.ts` (single, subagents, team, conflicting writes, high risk, unaffordable team) |
+| M3-AC2 | Each delegated task has a goal, output contract, tool allow-list and timeout | Verified | `orchestrator.test.ts`, `workspace.ts` `AgentTaskSpec` |
+| M3-AC3 | Sequential tasks run in dependency order; independent tasks run in parallel; a failed task cancels its dependents | Verified | `orchestrator.test.ts` |
+| M3-AC4 | Failures, timeouts, denied tools and budget stops are never reported as success; the request succeeds only if every subtask succeeded | Verified | `orchestrator.test.ts` |
+| M3-AC5 | No billable call without a budget; a call that would exceed the budget is blocked with a resolution; spend ledger is append-only | Verified (with a billable test double) | `orchestrator.test.ts` |
+| M3-AC6 | The model's plan is validated as untrusted input; the renderer cannot grant tools | Verified | `orchestrator.test.ts`, `service.test.ts` |
+| M3-AC7 | Agent works only on a started run; tasks and strategy are audited | Verified | `orchestrator.test.ts`, `cli.test.ts` |
+| M3-AC8 | UI and CLI label simulated output; budget is set in Settings | Verified | `e2e/app.e2e.ts` M3, screenshot `11-agent-simulated-dark-1280` |
+| M3-AC9 | Real Claude calls under the budget | **Not started**: waits for joshua to choose a monthly budget | — |

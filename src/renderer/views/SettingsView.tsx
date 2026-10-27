@@ -15,6 +15,13 @@ const GLASS: { id: Settings['glass']; label: string }[] = [
   { id: 'off', label: 'Solid panels' },
 ];
 
+const BUDGETS: { id: Settings['budget']; label: string }[] = [
+  { id: 'none', label: 'No real calls' },
+  { id: '20', label: '$20 a month' },
+  { id: '50', label: '$50 a month' },
+  { id: '100', label: '$100 a month' },
+];
+
 export function SettingsView({ status, settings, onSettings }: { status: AppStatus; settings: Settings; onSettings: (s: Settings) => void }) {
   const [error, setError] = useState<string | null>(null);
   // Show the choice immediately; roll back if the main process rejects it.
@@ -72,6 +79,26 @@ export function SettingsView({ status, settings, onSettings }: { status: AppStat
           <p className="subtle">Solid panels can be easier to read and lighter on older graphics hardware. Animations follow your operating system's reduced-motion setting.</p>
         </section>
         <aside>
+          <section className="card" aria-labelledby="ai-title">
+            <h2 className="card-title" id="ai-title">
+              AI usage
+            </h2>
+            <fieldset className="field">
+              <legend>Monthly budget for model calls</legend>
+              <div className="radio-row">
+                {BUDGETS.map((b) => (
+                  <label key={b.id} className="radio-pill">
+                    <input type="radio" name="budget" value={b.id} checked={shown.budget === b.id} onChange={() => void change('budget', b.id)} />
+                    {b.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <p className="subtle">
+              The agent stops before any call that would go over this limit. This version only includes a simulated model, so nothing is billed whatever
+              you choose.
+            </p>
+          </section>
           <section className="card" aria-labelledby="data-title">
             <h2 className="card-title" id="data-title">
               Data

@@ -117,3 +117,24 @@ function iapEnv(extra: Record<string, string>, home: string, ...args: string[]) 
   });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
+
+test('M3: iap agent run plans, runs and reconciles with the simulated model', (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const project = JSON.parse(iap(home, 'project', 'create', '--name', 'Agent', '--json').out);
+  const run = JSON.parse(iap(home, 'run', 'start', project.id, '--workflow', 'build', '--json').out);
+  const early = iap(home, 'agent', 'run', run.id, '--goal', 'Write a README');
+  assert.equal(early.code, 1);
+  assert.match(early.err, /only work on a run that has been started/);
+  for (const to of ['planned', 'approved', 'running']) assert.equal(iap(home, 'run', 'move', run.id, to).code, 0);
+
+  const done = iap(home, 'agent', 'run', run.id, '--goal', 'Write a README');
+  assert.equal(done.code, 0, done.err);
+  assert.match(done.out, /request\s+succeeded\s+Write a README\s+\[single\]/);
+  assert.match(done.out, /Simulated model: no AI was called/);
+  assert.match(done.out, /reconcile\s+succeeded/);
+
+  const listed = JSON.parse(iap(home, 'agent', 'list', run.id, '--json').out);
+  assert.deepEqual(listed.map((x: { kind: string }) => x.kind), ['request', 'subtask', 'reconcile']);
+  assert.equal(iap(home, 'agent', 'run', '--goal', '').code, 1);
+});
