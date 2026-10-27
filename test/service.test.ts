@@ -9,9 +9,12 @@ import { AppService } from '../src/main/service.ts';
 
 test('M2-AC8: handlers validate types and shapes of renderer input', (t) => {
   const { home, cleanup } = tempHome();
-  t.after(cleanup);
   const s = new AppService(home, '0.0.0-test');
-  t.after(() => s.close());
+  // Close before deleting: Windows cannot remove an open database file.
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
   const h = s.handlers;
   for (const bad of [undefined, null, 'x', [], { name: 1 }, { name: 'ok', facts: 'nope' }, { name: 'ok', facts: [{ kind: 'confirmed' }] }]) {
     const r = h.createProject(bad);
@@ -26,9 +29,12 @@ test('M2-AC8: handlers validate types and shapes of renderer input', (t) => {
 
 test('M2: a full project and run round-trip through the handlers', (t) => {
   const { home, cleanup } = tempHome();
-  t.after(cleanup);
   const s = new AppService(home, '0.0.0-test');
-  t.after(() => s.close());
+  // Close before deleting: Windows cannot remove an open database file.
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
   const created = s.handlers.createProject({ name: 'Via IPC', facts: [{ kind: 'assumption', text: 'Solo user' }] });
   assert.ok(created.ok);
   const run = s.handlers.startRun({ projectId: created.value.id, workflow: 'plan' });
@@ -40,10 +46,12 @@ test('M2: a full project and run round-trip through the handlers', (t) => {
 
 test('M2-AC5: corrupt state is reported, and recover needs explicit confirmation', (t) => {
   const { home, cleanup } = tempHome();
-  t.after(cleanup);
   writeFileSync(join(home, 'iap.db'), 'garbage '.repeat(400));
   const s = new AppService(home, '0.0.0-test');
-  t.after(() => s.close());
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
   assert.equal(s.status().state, 'corrupt');
   const blocked = s.handlers.listProjects();
   assert.ok(!blocked.ok && blocked.error.code === 'STATE_CORRUPT');
