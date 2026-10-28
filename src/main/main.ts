@@ -174,6 +174,28 @@ if (smokeTest) {
         const { canceled, filePaths } = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
         return canceled ? [] : filePaths;
       },
+      // M14: lesson sources and the skill export folder come only from native dialogs, too.
+      pickSources: async () => {
+        const options = {
+          title: 'Add sources to learn from',
+          buttonLabel: 'Add',
+          properties: ['openFile' as const, 'multiSelections' as const],
+          filters: [
+            { name: 'Transcripts, notes and PDFs', extensions: ['vtt', 'srt', 'txt', 'md', 'pdf'] },
+            { name: 'Transcripts', extensions: ['vtt', 'srt', 'txt'] },
+            { name: 'PDF', extensions: ['pdf'] },
+          ],
+        };
+        const parent = BrowserWindow.getFocusedWindow();
+        const { canceled, filePaths } = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+        return canceled ? [] : filePaths;
+      },
+      pickFolder: async ({ title, button }) => {
+        const options = { title, buttonLabel: button, properties: ['openDirectory' as const, 'createDirectory' as const] };
+        const parent = BrowserWindow.getFocusedWindow();
+        const { canceled, filePaths } = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+        return canceled ? null : (filePaths[0] ?? null);
+      },
     });
     protocol.handle(REF_SCHEME, (request) => {
       const url = new URL(request.url);

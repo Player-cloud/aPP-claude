@@ -21,6 +21,9 @@ import { bundledVersions, claudeVersionReader, httpFetcher, UpdateMonitor, type 
 import { listBackups, Maintenance, restoreBackup } from '../core/maintain/maintain.ts';
 import { Preferences } from '../core/learn/preferences.ts';
 import { Vault } from '../core/learn/vault.ts';
+import { Lessons } from '../core/learn/lessons.ts';
+import { Skills } from '../core/learn/skills.ts';
+import { Addons } from '../core/learn/addons.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -31,7 +34,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference';
+type AsyncMethod = 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -78,6 +81,10 @@ export interface ServiceOptions {
    * person did not choose. Returns nothing when the person cancels.
    */
   pickFiles?: () => Promise<string[]>;
+  /** Lets the person pick transcripts and documents for lessons (M14), the same way. */
+  pickSources?: () => Promise<string[]>;
+  /** Lets the person pick the folder a skill is exported to (M14). Returns null when they cancel. */
+  pickFolder?: (request: { title: string; button: string }) => Promise<string | null>;
   /**
    * Asks the person, outside the renderer, before a tool cleanup changes their
    * Claude Code setup (M11). The desktop app shows a native dialog.
@@ -164,6 +171,8 @@ export class AppService {
   private readonly claudeCommand: string[] | undefined;
   private readonly checkTimeoutMs: number | undefined;
   private readonly pickFiles: () => Promise<string[]>;
+  private readonly pickSources: () => Promise<string[]>;
+  private readonly pickFolder: NonNullable<ServiceOptions['pickFolder']>;
   private readonly fetcher: Fetcher;
   private readonly listModels: (apiKey: string) => Promise<ModelInfo[]>;
   private readonly bundled: Record<string, string | null> | undefined;
@@ -189,6 +198,8 @@ export class AppService {
       });
     this.checkTimeoutMs = options.checkTimeoutMs;
     this.pickFiles = options.pickFiles ?? (async () => []);
+    this.pickSources = options.pickSources ?? (async () => []);
+    this.pickFolder = options.pickFolder ?? (async () => null);
     this.tryOpen();
   }
 
@@ -745,6 +756,87 @@ export class AppService {
         const i = obj(input, 'Line');
         const p = new Vault(this.workspace()).proposePreference(str(i.noteId, 'Note id')!, i.line, i.scope, i.projectId);
         return new Preferences(this.workspace()).detail(p.id);
+      }),
+    // Lessons, skill proposals and add-on reviews (M14). Files and folders come only from native dialogs.
+    importSources: (input) =>
+      wrapAsync(async () => {
+        const i = input === undefined ? {} : obj(input, 'Import');
+        const projectId = str(i.projectId, 'Project id', true) ?? null;
+        const files = await this.pickSources();
+        if (!files.length) return { imported: [], skipped: [] };
+        return new Lessons(this.workspace(), new SimulatedModel()).importFiles(files, projectId);
+      }),
+    listSources: (filter) =>
+      wrap(() => {
+        const f = filter === undefined ? {} : obj(filter, 'Filter');
+        return new Lessons(this.workspace(), new SimulatedModel()).list({ archived: f.archived === true });
+      }),
+    getSource: (id) => wrap(() => new Lessons(this.workspace(), new SimulatedModel()).resolve(str(id, 'Source id')!)),
+    readLessons: (id) => wrapAsync(() => new Lessons(this.workspace(), this.agentModel()).extract(str(id, 'Source id')!)),
+    decideSuggestion: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Decision');
+        const action = str(i.action, 'Action')!;
+        if (action !== 'preference' && action !== 'improvement' && action !== 'dismiss') throw new ValidationError('Choose preference, improvement or dismiss.');
+        if (typeof i.suggestion !== 'number') throw new ValidationError('Suggestion must be a number.');
+        return new Lessons(this.workspace(), new SimulatedModel()).act(str(i.sourceId, 'Source id')!, i.suggestion, action, { scope: i.scope, projectId: i.projectId }).source;
+      }),
+    saveLessonsToVault: (id) => wrap(() => new Lessons(this.workspace(), new SimulatedModel()).saveToVault(str(id, 'Source id')!)),
+    archiveSource: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Source');
+        return new Lessons(this.workspace(), new SimulatedModel()).archive(str(i.id, 'Source id')!, i.archived !== false);
+      }),
+    detectSkills: () => wrap(() => new Skills(this.workspace()).detect()),
+    listSkills: (filter) =>
+      wrap(() => {
+        const f = filter === undefined ? {} : obj(filter, 'Filter');
+        return new Skills(this.workspace()).list({ status: str(f.status, 'Status', true) });
+      }),
+    getSkill: (id) =>
+      wrap(() => {
+        const skills = new Skills(this.workspace());
+        const p = skills.recheck(str(id, 'Skill id')!);
+        return { proposal: p, skillMd: skills.render(p.id) };
+      }),
+    editSkill: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Skill');
+        const skills = new Skills(this.workspace());
+        const p = skills.edit(str(i.id, 'Skill id')!, { name: i.name, description: i.description, workflow: i.workflow, permissions: i.permissions, tests: i.tests, benefit: i.benefit });
+        return { proposal: p, skillMd: skills.render(p.id) };
+      }),
+    approveSkill: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Approval');
+        const skills = new Skills(this.workspace());
+        const p = skills.approve(str(i.id, 'Skill id')!, Array.isArray(i.decisions) ? (i.decisions as { id: string; note: string }[]) : []);
+        return { proposal: p, skillMd: skills.render(p.id) };
+      }),
+    rejectSkill: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Rejection');
+        const skills = new Skills(this.workspace());
+        const p = skills.reject(str(i.id, 'Skill id')!, i.reason);
+        return { proposal: p, skillMd: skills.render(p.id) };
+      }),
+    exportSkill: (id) =>
+      wrapAsync(async () => {
+        const skills = new Skills(this.workspace());
+        const p = skills.resolve(str(id, 'Skill id')!);
+        if (p.status !== 'approved') throw new ValidationError(`Approve SKL-${p.number} before exporting it.`);
+        const folder = await this.pickFolder({ title: `Export SKL-${p.number} as SKILL.md`, button: 'Export here' });
+        if (!folder) return null;
+        const r = skills.export(p.id, folder, [this.scanRoots().configDir]);
+        return { proposal: r.proposal, path: r.path };
+      }),
+    listAddons: () => wrap(() => new Addons(this.workspace()).overview()),
+    reviewAddon: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Review');
+        const addons = new Addons(this.workspace());
+        addons.review(i.key, { criteria: i.criteria, decision: i.decision, reason: i.reason });
+        return addons.overview();
       }),
     // Planning (M5). Content is validated in planner.ts; ids are checked to exist.
     getPlanning: (projectId) => wrap(() => this.planner().overview(str(projectId, 'Project id')!)),

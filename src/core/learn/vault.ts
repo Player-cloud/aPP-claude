@@ -50,7 +50,7 @@ export interface VaultNote {
   summary: SessionSummary | null;
   projectId: string | null;
   status: NoteStatus;
-  source: { type: 'wrap_up' | 'person'; summary: string };
+  source: { type: 'wrap_up' | 'person' | 'lesson'; summary: string; ref?: string };
   createdAt: string;
   updatedAt: string;
 }

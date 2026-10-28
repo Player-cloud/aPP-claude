@@ -268,8 +268,8 @@ export class Backlog {
     return this.ws.getSelfAssessment(id);
   }
 
-  /** Typed feedback becomes an idea. */
-  feedback(input: { text: unknown; title?: unknown }): Improvement {
+  /** Typed feedback becomes an idea. `from` says where it came from when the person did not type it (M14 lessons). */
+  feedback(input: { text: unknown; title?: unknown; from?: string }): Improvement {
     const body = text(input.text, 'Feedback', 4000);
     if (!body) throw new ValidationError('Write the feedback.');
     const title = text(input.title, 'Title', 120) ?? (body.length > 80 ? `${body.slice(0, 79)}…` : body);
@@ -283,7 +283,7 @@ export class Backlog {
       status: 'idea',
       source: 'feedback',
       signature: null,
-      evidence: [{ at: this.ws.nowIso(), source: 'feedback', summary: `Typed by ${this.ws.actorName()}`, assessmentId: null, occurrences: [] }],
+      evidence: [{ at: this.ws.nowIso(), source: 'feedback', summary: input.from ? `${input.from}, added by ${this.ws.actorName()}` : `Typed by ${this.ws.actorName()}`, assessmentId: null, occurrences: [] }],
     });
   }
 

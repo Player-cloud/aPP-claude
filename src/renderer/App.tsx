@@ -29,7 +29,7 @@ const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
     { id: 'projects', label: 'Projects', icon: 'projects' },
     { id: 'activity', label: 'Activity', icon: 'activity' },
     { id: 'studio', label: 'Learning Studio', icon: 'studio' },
-    { id: 'preferences', label: 'Preferences', icon: 'bookmark' },
+    { id: 'preferences', label: 'Preferences and lessons', icon: 'bookmark' },
   ],
   [
     { id: 'tools', label: 'Tools', icon: 'tools' },

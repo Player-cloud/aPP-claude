@@ -48,6 +48,18 @@ import type { Preference, PreferenceDetail, Resolution } from '../core/learn/pre
 import type { NoteKind, NoteStatus, SessionSummary, VaultNote } from '../core/learn/vault.ts';
 export type { Preference, PreferenceDetail, PreferenceMatch, PreferenceScope, PreferenceSource, PreferenceStatus, Resolution } from '../core/learn/preferences.ts';
 export type { NoteKind, NoteStatus, SessionSummary, SummaryItem, VaultNote } from '../core/learn/vault.ts';
+import type { LearningSource, SourceImportResult } from '../core/learn/lessons.ts';
+import type { DetectResult, SkillDraft, SkillProposal } from '../core/learn/skills.ts';
+import type { AddonDecision, AddonsOverview, Criterion, CriterionReview } from '../core/learn/addons.ts';
+export type { Extraction, LearningSource, Lesson, LessonCitation, LessonSuggestion, SourceImportResult, SuggestionKind } from '../core/learn/lessons.ts';
+export type { DetectResult, SkillDecision, SkillDraft, SkillDuplicate, SkillExample, SkillProposal, SkillStatus } from '../core/learn/skills.ts';
+export type { Addon, AddonDecision, AddonReview, AddonsOverview, AddonStatus, Criterion, CriterionReview, ScanFact } from '../core/learn/addons.ts';
+
+/** A skill proposal with the SKILL.md it would export (M14). */
+export interface SkillDetail {
+  proposal: SkillProposal;
+  skillMd: string;
+}
 export type { BackupInfo, MaintenanceOverview, PlatformCandidate, ProtectedArea, RecoveryTest } from '../core/maintain/maintain.ts';
 export type { BuildSource, KnownGood, Measurement, ProtectedApproval } from '../core/workspace.ts';
 export type { Confidence, SourceResult, SourceStatus, UpdateCheck, UpdateImpact, UpdateItem, UpdateKind, UpdatePriority, UpdatesOverview, UpdateStage } from '../core/updates/updates.ts';
@@ -222,6 +234,26 @@ export interface IapApi {
   editVaultNote(input: { id: string; title?: string; body?: string }): Promise<Result<VaultNote>>;
   fileVaultNote(input: { id: string; status: 'kept' | 'archived' }): Promise<Result<VaultNote>>;
   proposePreferenceFromNote(input: { noteId: string; line: string; scope?: 'global' | 'project'; projectId?: string }): Promise<Result<PreferenceDetail>>;
+  /** Lessons (M14): sources come from a native picker; reading one stores lessons and suggestions and changes nothing else. */
+  importSources(input?: { projectId?: string }): Promise<Result<SourceImportResult>>;
+  listSources(filter?: { archived?: boolean }): Promise<Result<LearningSource[]>>;
+  getSource(id: string): Promise<Result<LearningSource>>;
+  readLessons(id: string): Promise<Result<LearningSource>>;
+  decideSuggestion(input: { sourceId: string; suggestion: number; action: 'preference' | 'improvement' | 'dismiss'; scope?: 'global' | 'project'; projectId?: string }): Promise<Result<LearningSource>>;
+  saveLessonsToVault(id: string): Promise<Result<{ source: LearningSource; note: VaultNote }>>;
+  archiveSource(input: { id: string; archived?: boolean }): Promise<Result<LearningSource>>;
+  /** Skill proposals (M14): from repeated work, checked against the tool scan, exported as a file only. */
+  detectSkills(): Promise<Result<DetectResult>>;
+  listSkills(filter?: { status?: string }): Promise<Result<SkillProposal[]>>;
+  getSkill(id: string): Promise<Result<SkillDetail>>;
+  editSkill(input: { id: string } & Partial<Omit<SkillDraft, 'workflow' | 'permissions' | 'tests'> & { workflow: string[]; permissions: string[]; tests: string[] }>): Promise<Result<SkillDetail>>;
+  approveSkill(input: { id: string; decisions?: { id: string; note: string }[] }): Promise<Result<SkillDetail>>;
+  rejectSkill(input: { id: string; reason: string }): Promise<Result<SkillDetail>>;
+  /** Asks for a folder in a native dialog; null when the person cancels. Never writes into Claude Code's folders. */
+  exportSkill(id: string): Promise<Result<{ proposal: SkillProposal; path: string } | null>>;
+  /** Add-on reviews (M14): a decision is a record; the app never installs or changes an add-on. */
+  listAddons(): Promise<Result<AddonsOverview>>;
+  reviewAddon(input: { key: string; criteria: Partial<Record<Criterion, CriterionReview>>; decision: AddonDecision; reason: string }): Promise<Result<AddonsOverview>>;
   /** Planning (M5): concept brief and specification, versioned. */
   getPlanning(projectId: string): Promise<Result<PlanningOverview>>;
   draftBrief(projectId: string): Promise<Result<PlanDoc>>;
@@ -333,6 +365,22 @@ export const IAP_METHODS = [
   'editVaultNote',
   'fileVaultNote',
   'proposePreferenceFromNote',
+  'importSources',
+  'listSources',
+  'getSource',
+  'readLessons',
+  'decideSuggestion',
+  'saveLessonsToVault',
+  'archiveSource',
+  'detectSkills',
+  'listSkills',
+  'getSkill',
+  'editSkill',
+  'approveSkill',
+  'rejectSkill',
+  'exportSkill',
+  'listAddons',
+  'reviewAddon',
   'getPlanning',
   'draftBrief',
   'draftSpec',

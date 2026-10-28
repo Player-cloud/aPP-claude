@@ -1008,7 +1008,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.16.0', { exact: true }).waitFor();
+    await kg.getByText('0.17.0', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.
@@ -1141,6 +1141,96 @@ test('M14: feedback about the work becomes an approved preference, a duplicate n
     await page.getByRole('button', { name: 'Keep', exact: true }).waitFor({ state: 'detached' });
     await page.getByRole('button', { name: 'Kept', exact: true }).click();
     await page.getByRole('list', { name: 'Vault notes' }).getByRole('button', { name: /NOTE-1/ }).waitFor();
+  } finally {
+    await app.close();
+  }
+});
+
+test('M14: lessons from a transcript are cited and kept apart from suggestions, repeated work becomes an exported skill, and add-ons are reviewed', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const incoming = join(home, 'Downloads');
+  mkdirSync(incoming);
+  writeFileSync(
+    join(incoming, 'review-talk.vtt'),
+    'WEBVTT\n\n00:00:01.000 --> 00:00:06.000\nSmall pull requests get reviewed faster, so keep each change to one idea.\n\n00:00:07.000 --> 00:00:12.000\nWrite the failing test before you fix a bug, then make it pass.\n',
+  );
+  writeFileSync(join(incoming, 'review-talk.mp4'), 'not a real video');
+  const exports = join(home, 'exports');
+  mkdirSync(exports);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 900);
+    await page.evaluate(async () => {
+      const p = await window.iap.createProject({ name: 'Club HR' });
+      if (!p.ok) throw new Error(p.error.message);
+      for (const title of ['Fix the CSV export of the members list', 'Fix the CSV export of the events list', 'Fix the CSV export for payments']) {
+        const b = await window.iap.createBuild({ projectId: p.value.id, kind: 'bugfix', title, goal: title, repro: 'Export, then open the file', components: ['src/export.ts'], checks: [{ id: 'unit', command: 'npm test' }] });
+        if (!b.ok) throw new Error(b.error.message);
+      }
+    });
+    await page.reload();
+    await page.waitForSelector('#main');
+    await page.getByRole('button', { name: 'Preferences and lessons' }).click();
+    await page.getByRole('button', { name: 'Lessons', exact: true }).first().click();
+
+    // Sources come from the native picker, stubbed here; the video is refused.
+    await app.evaluate(({ dialog }, paths) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: paths })) as typeof dialog.showOpenDialog;
+    }, [join(incoming, 'review-talk.vtt'), join(incoming, 'review-talk.mp4')]);
+    await page.getByRole('button', { name: 'Add sources' }).click();
+    await page.getByText(/review-talk\.mp4: Claude cannot watch videos here/).waitFor();
+    const detail = page.getByRole('region', { name: 'SRC-1 review talk' });
+    await detail.getByText('Not read yet.', { exact: false }).waitFor();
+    await detail.getByRole('button', { name: 'Read for lessons' }).click();
+    const lessons = detail.getByRole('list', { name: 'Lessons' });
+    await lessons.getByText(/\[Simulated\] The source says: “Small pull requests get reviewed faster/).waitFor();
+    await lessons.getByText('00:01–00:12').waitFor();
+    await detail.getByText('simulated, no AI read it', { exact: false }).waitFor();
+    const suggestions = detail.getByRole('list', { name: 'Suggestions' });
+    await suggestions.getByText(/No AI read this source/).waitFor();
+    assert.equal(await page.evaluate(async () => ((await window.iap.listPreferences()) as { ok: true; value: unknown[] }).value.length), 0, 'reading changed nothing else');
+    await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
+    await shot(page, '33-lessons-dark-1280');
+    await suggestions.getByRole('button', { name: 'Set aside' }).click();
+    await detail.getByText('Suggestion 1 set aside.').waitFor();
+    await detail.getByRole('button', { name: 'Save to the Vault inbox' }).click();
+    await detail.getByText('Saved to the Vault inbox. It is a note, not a rule.').waitFor();
+
+    // Repeated work becomes a proposal; approval needs a tool scan first.
+    await page.getByRole('button', { name: 'Skills', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Look for repeated work' }).click();
+    await page.getByText(/Proposed SKL-1 from \d+ pieces of work/).waitFor();
+    const skill = page.getByRole('region', { name: 'SKL-1 fix-csv-export-list' });
+    await skill.getByRole('list', { name: 'Examples' }).getByText('Fix the CSV export of the events list').waitFor();
+    await skill.getByLabel('SKILL.md preview').getByText(/## Permissions/).waitFor();
+    await skill.getByRole('button', { name: 'Approve' }).click();
+    await skill.getByText(/Scan your tools first/).first().waitFor();
+    await page.evaluate(() => window.iap.scanTools());
+    await skill.getByRole('button', { name: 'Approve' }).click();
+    await skill.getByText('approved', { exact: true }).waitFor();
+    await app.evaluate(({ dialog }, folder) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [folder] })) as typeof dialog.showOpenDialog;
+    }, exports);
+    await skill.getByRole('button', { name: 'Export SKILL.md…' }).click();
+    await skill.getByText(/Wrote .*SKILL\.md\. Copy it into Claude Code yourself/).waitFor();
+    assert.match(readFileSync(join(exports, 'fix-csv-export-list', 'SKILL.md'), 'utf8'), /^---\nname: fix-csv-export-list\n/);
+    await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
+    await shot(page, '34-skill-proposal-dark-1280');
+
+    // Add-ons: twelve, each reviewed on its own; none is found, so none can be included.
+    await page.getByRole('button', { name: 'Add-ons', exact: true }).first().click();
+    await page.getByText('The app works without any of these').waitFor();
+    assert.equal(await page.locator('.addon-grid > .card').count(), 12);
+    const cache = page.getByRole('region', { name: 'cache-tax / keepwarm' });
+    await cache.getByText('Review', { exact: true }).click();
+    assert.equal(await cache.getByRole('radio', { name: 'Include' }).isDisabled(), true, 'an add-on the scan did not find cannot be included');
+    await cache.getByRole('radio', { name: 'Exclude' }).check();
+    await cache.getByLabel('Reason for cache-tax / keepwarm').fill('Keeping the cache warm makes model calls; not worth it at $20 a month.');
+    await cache.getByRole('button', { name: 'Record the decision' }).click();
+    await cache.getByText('exclude', { exact: true }).waitFor();
+    await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
+    await shot(page, '35-addons-dark-1280');
   } finally {
     await app.close();
   }
