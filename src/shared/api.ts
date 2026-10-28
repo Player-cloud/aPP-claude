@@ -18,6 +18,11 @@ export type { Diff, ChangedFile } from '../core/build/git.ts';
 export type { Build, BuildAgentRun, CheckRun } from '../core/workspace.ts';
 export type { Risk } from '../core/build/review.ts';
 export type { Check } from '../core/build/checks.ts';
+export type { LiveEvent, LiveState } from '../core/build/live.ts';
+import type { LiveState } from '../core/build/live.ts';
+
+/** A build with the name of its project, for the Build screen's list (M15). */
+export type RecentBuild = Build & { projectName: string; running: boolean };
 import type { ReleaseDetail, ReleaseInput } from '../core/release/releaser.ts';
 import type { Release } from '../core/workspace.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
@@ -151,6 +156,15 @@ export interface IapApi {
   completeBuild(input: { buildId: string; note?: string | null }): Promise<Result<BuildDetail>>;
   abandonBuild(input: { buildId: string; reason?: string | null }): Promise<Result<BuildDetail>>;
   buildDiff(buildId: string): Promise<Result<Diff>>;
+  /** M15: a task from one sentence. The person approves the commands, then the work runs in the background. */
+  quickBuild(input: { projectId: string; goal: string }): Promise<Result<Build>>;
+  /** M15: asks Claude to change the reviewed work further, in the same work folder. */
+  followUpBuild(input: { buildId: string; text: string }): Promise<Result<Build>>;
+  /** M15: live progress since a sequence number; null when nothing ran since the app started. */
+  buildLive(input: { buildId: string; since?: number }): Promise<Result<LiveState | null>>;
+  answerBuildQuestion(input: { buildId: string; approvalId: string; allow: boolean }): Promise<Result<null>>;
+  stopBuild(buildId: string): Promise<Result<null>>;
+  recentBuilds(): Promise<Result<RecentBuild[]>>;
   /** Releases (M7): quality gate and ship-check. Preparing a release never deploys it. */
   listReleases(projectId: string): Promise<Result<Release[]>>;
   getRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
@@ -311,6 +325,12 @@ export const IAP_METHODS = [
   'completeBuild',
   'abandonBuild',
   'buildDiff',
+  'quickBuild',
+  'followUpBuild',
+  'buildLive',
+  'answerBuildQuestion',
+  'stopBuild',
+  'recentBuilds',
   'listReleases',
   'getRelease',
   'createRelease',

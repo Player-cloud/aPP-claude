@@ -66,6 +66,7 @@ jobs:
           if ($run.ExitCode -ne 0) { throw "Smoke test exited with $($run.ExitCode)" }
           $json = Get-Content $report | ConvertFrom-Json
           if ($json.status.state -ne 'ready' -or $json.health.value.integrity -ne 'ok') { throw 'Workspace not healthy' }
+          if (-not $json.engine.ok -or -not $json.engine.version) { throw "Claude Code engine did not run: $($json.engine.error)" }
           if (-not (Test-Path (Join-Path $data 'iap.db'))) { throw 'Database was not created in IAP_HOME' }
           $u = Start-Process -FilePath (Join-Path $target 'Uninstall Iterative Platform.exe') -ArgumentList '/S' -Wait -PassThru
           Write-Host "Uninstaller exit code: $($u.ExitCode)"

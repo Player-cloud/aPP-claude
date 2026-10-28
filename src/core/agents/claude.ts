@@ -12,7 +12,7 @@ import type { CitedText, ModelAdapter, ModelRequest, ModelResponse, SourceCitati
 export const CLAUDE_MODEL = 'claude-opus-5-5';
 
 /** US dollars per million tokens, Anthropic first-party API (checked 2026-10-27). */
-const PRICE = { input: 4, output: 20 };
+export const PRICE = { input: 4, output: 20 };
 
 /** The part of the SDK client this adapter uses, so tests can pass a fake. */
 export interface ClaudeClient {

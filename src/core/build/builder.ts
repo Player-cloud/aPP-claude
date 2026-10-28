@@ -25,8 +25,9 @@ import { ValidationError } from '../errors.ts';
 import type { Spec } from '../planning.ts';
 import { redactString } from '../redact.ts';
 import type { Build, BuildKind, BuildSource, CheckRun, Workspace } from '../workspace.ts';
-import { runBuildAgent } from './agent.ts';
-import { normalizeChecks, ranNoTests, runCheck, type Check, type CheckResult } from './checks.ts';
+import { runBuildAgent, type AgentOutcome } from './agent.ts';
+import type { AgentHooks } from './live.ts';
+import { detectChecks, normalizeChecks, ranNoTests, runCheck, type Check, type CheckResult } from './checks.ts';
 import { MANDATORY_CHECKS, protectedApproved, protectedChanges, protectedFiles, TEST_CHECKS } from '../maintain/maintain.ts';
 import { addWorktree, commitWorktree, diffWorktree, git, inspectRepo, trackedFiles, type Diff } from './git.ts';
 import { reviewChange } from './review.ts';
@@ -53,6 +54,12 @@ const KIND_WORD: Record<BuildKind, { title: string; branch: string; commit: stri
   bugfix: { title: 'Bug fix', branch: 'fix', commit: 'Fix' },
   ui_polish: { title: 'UI polish', branch: 'polish', commit: 'Polish' },
 };
+
+/** Runs the agent for one build. The default is the tool loop with the builder's model (DEC-020); real work uses Claude Code's engine (DEC-032). */
+export interface AgentEngine {
+  id: string;
+  run(input: { title: string; instructions: string; worktree: string; checks: Check[]; checkTimeoutMs?: number; maxCostUsd?: number; signal?: AbortSignal; hooks?: AgentHooks }): Promise<AgentOutcome>;
+}
 
 export interface BuildDetail {
   build: Build;
@@ -101,11 +108,27 @@ export class Builder {
   }
 
   /** `source` is set only by platform maintenance (M13), never from a renderer's build definition. */
-  create(projectId: string, input: BuildInput, source: BuildSource | null = null): Build {
+  create(projectId: string, input: BuildInput, source: BuildSource | null = null, options: { quick?: boolean } = {}): Build {
     const platform = this.ws.getProject(projectId).kind === 'maintenance';
     if (platform && !source) throw new ValidationError('Platform work starts from an approved improvement or update (Improvements or Updates → Build as platform work).');
     if (!platform && source) throw new ValidationError('Only the platform-maintenance project builds improvements and updates.');
-    return this.ws.createBuild({ projectId, ...this.validate(projectId, input), source });
+    return this.ws.createBuild({ projectId, ...this.validate(projectId, input, options), source });
+  }
+
+  /**
+   * A task from one sentence (M15): "Build" or "Fix" with the checks found in
+   * the repository. The person approves the checks before anything runs.
+   */
+  quick(projectId: string, goal: string): Build {
+    const project = this.ws.getProject(projectId);
+    if (project.kind === 'maintenance') throw new ValidationError('Platform work starts from an approved improvement or update.');
+    if (!project.repoPath) throw new ValidationError('Choose the git repository for this project first.');
+    const text = typeof goal === 'string' ? goal.trim() : '';
+    if (text.length < 3) throw new ValidationError('Say what you want built or fixed.');
+    const kind: BuildKind = /^(fix|bug|broken|repair)\b/i.test(text) ? 'bugfix' : 'feature';
+    const first = text.split(/\r?\n/)[0]!.replace(/[.!?]+$/, '');
+    const title = first.length > 80 ? `${first.slice(0, 79).trimEnd()}…` : first;
+    return this.create(projectId, { kind, title, goal: text, checks: detectChecks(project.repoPath), repro: kind === 'bugfix' ? text : null }, null, { quick: true });
   }
 
   edit(buildId: string, input: BuildInput): Build {
@@ -116,7 +139,7 @@ export class Builder {
   }
 
   /** Creates the worktree on a new branch and runs every check once, before anything changes. */
-  async start(buildId: string): Promise<BuildDetail> {
+  async start(buildId: string, options: { setup?: string | null; hooks?: AgentHooks } = {}): Promise<BuildDetail> {
     return this.exclusive(buildId, async () => {
       const build = this.ws.getBuild(buildId);
       if (build.status !== 'draft') throw new ValidationError('This work has already started.');
@@ -137,44 +160,63 @@ export class Builder {
         const audit = auditUi(worktree, await trackedFiles(worktree));
         this.ws.updateBuild(buildId, { uiAudit: audit }, { type: 'build.ui_audited', payload: { tokens: audit.tokenCount, components: audit.componentCount, reducedMotion: audit.reducedMotion.handled, filesRead: audit.filesRead } });
       }
-      await this.runChecks(buildId, 'baseline');
+      if (options.setup) {
+        // A fresh worktree has no installed dependencies. The person approved this command with the checks.
+        options.hooks?.emit({ kind: 'phase', text: 'Installing dependencies' });
+        const r = await runCheck(worktree, { id: 'setup', command: options.setup }, { timeoutMs: this.checkTimeoutMs });
+        options.hooks?.emit({ kind: 'step', tool: 'Setup', target: options.setup, ok: r.status === 'passed', note: r.status === 'passed' ? '' : r.output.slice(-600) });
+        this.ws.updateBuild(buildId, {}, { type: 'build.setup', payload: { command: options.setup, status: r.status, exitCode: r.exitCode } });
+      }
+      if (build.checks.length) options.hooks?.emit({ kind: 'phase', text: 'Running the checks before any change' });
+      await this.runChecks(buildId, 'baseline', options.hooks);
       return this.detail(buildId);
     });
   }
 
   /** Lets the agent change the worktree. It may run approved checks; its results are stored as "agent" evidence. */
-  async runAgent(buildId: string, options: { maxCostUsd?: number } = {}): Promise<BuildDetail> {
+  async runAgent(buildId: string, options: { maxCostUsd?: number; hooks?: AgentHooks; signal?: AbortSignal; followUp?: string | null; engine?: AgentEngine } = {}): Promise<BuildDetail> {
     return this.exclusive(buildId, async () => {
       const build = this.ws.getBuild(buildId);
       if (build.status !== 'in_progress' && build.status !== 'review') throw new ValidationError('Start the work before running the agent.');
-      const outcome = await runBuildAgent(this.ws, this.model, {
+      const engine = options.engine ?? { id: this.model.id, run: (input) => runBuildAgent(this.ws, this.model, input) };
+      const followUp = options.followUp?.trim().slice(0, 10_000);
+      let instructions = this.instructions(build);
+      if (followUp) {
+        instructions += `\n\nThis folder already holds the earlier attempt${build.agent ? `, which ended with: ${build.agent.summary.slice(0, 2_000)}` : ''}.\nThe person reviewed it and asks for this next:\n${followUp}`;
+      }
+      options.hooks?.emit({ kind: 'phase', text: followUp ? 'Claude is working on your follow-up' : 'Claude is working' });
+      const outcome = await engine.run({
         title: build.title,
-        instructions: this.instructions(build),
+        instructions,
         worktree: build.worktree!,
         checks: build.checks,
         checkTimeoutMs: this.checkTimeoutMs,
         maxCostUsd: options.maxCostUsd,
+        signal: options.signal,
+        hooks: options.hooks,
       });
       for (const r of outcome.checkResults) this.ws.recordCheckRun(buildId, 'agent', r);
       const { checkResults: _results, ...rest } = outcome;
       this.ws.updateBuild(
         buildId,
-        { status: 'in_progress', agent: { ...rest, model: this.model.id, at: new Date().toISOString() } },
-        { type: 'build.agent', payload: { model: this.model.id, status: outcome.status, files: outcome.filesWritten, costUsd: outcome.costUsd } },
+        { status: 'in_progress', agent: { ...rest, model: engine.id, at: new Date().toISOString() } },
+        { type: 'build.agent', payload: { model: engine.id, status: outcome.status, files: outcome.filesWritten, costUsd: outcome.costUsd, followUp: Boolean(followUp) } },
       );
       return this.detail(buildId);
     });
   }
 
   /** Runs every check again, reads the diff against the base commit, and reviews the change. */
-  async verify(buildId: string): Promise<BuildDetail> {
+  async verify(buildId: string, hooks?: AgentHooks): Promise<BuildDetail> {
     return this.exclusive(buildId, async () => {
       const build = this.ws.getBuild(buildId);
       if (build.status !== 'in_progress' && build.status !== 'review') throw new ValidationError('Start the work before verifying it.');
-      const final = await this.runChecks(buildId, 'verify');
+      hooks?.emit({ kind: 'phase', text: 'Checking the result' });
+      const final = await this.runChecks(buildId, 'verify', hooks);
       const diff = await diffWorktree(build.worktree!, build.baseCommit!);
       const baseline = this.latest(buildId, 'baseline');
       const risks = reviewChange({ kind: build.kind, files: diff.files, patch: diff.patch, truncated: diff.truncated, components: build.components, baseline, final });
+      if (build.checks.length === 0) risks.push({ kind: 'not_run', detail: 'No check commands were found for this repository, so nothing tested the change. Look at it yourself, or add a test command next time.' });
       if (build.kind === 'ui_polish') risks.push(...reviewUi({ files: diff.files, patch: diff.patch, audit: build.uiAudit, motion: build.motion }));
       if (build.source) {
         for (const c of protectedChanges(diff.files.map((f) => f.path))) risks.push({ kind: 'protected_change', detail: `Changes ${c.area.title.toLowerCase()}: ${c.files.join(', ')}. This needs your separate approval.` });
@@ -263,12 +305,13 @@ export class Builder {
     }
   }
 
-  private async runChecks(buildId: string, phase: 'baseline' | 'verify'): Promise<CheckResult[]> {
+  private async runChecks(buildId: string, phase: 'baseline' | 'verify', hooks?: AgentHooks): Promise<CheckResult[]> {
     const build = this.ws.getBuild(buildId);
     const results: CheckResult[] = [];
     for (const check of build.checks) {
       const r = await runCheck(build.worktree!, check, { timeoutMs: this.checkTimeoutMs });
       this.ws.recordCheckRun(buildId, phase, r);
+      hooks?.emit({ kind: 'step', tool: 'Check', target: `${check.id}: ${check.command}`, ok: r.status === 'passed', note: r.status === 'passed' ? '' : r.status.replace('_', ' ') });
       results.push(r);
     }
     return results;
@@ -281,7 +324,7 @@ export class Builder {
     return [...byCheck.values()];
   }
 
-  private validate(projectId: string, input: BuildInput) {
+  private validate(projectId: string, input: BuildInput, options: { quick?: boolean } = {}) {
     if (!(input.kind in KIND_WORD)) throw new ValidationError('Kind must be "feature", "bugfix" or "ui_polish".');
     const title = text('Title', input.title, 200);
     const goal = text(input.kind === 'feature' ? 'What to build' : input.kind === 'ui_polish' ? 'What to improve' : 'What is wrong', input.goal, 10_000);
@@ -290,7 +333,7 @@ export class Builder {
     const known = new Set((spec?.content as Spec | undefined)?.requirements.map((r) => r.id) ?? []);
     const platform = this.ws.getProject(projectId).kind === 'maintenance';
     // Platform work implements an approved backlog item or update instead of a product specification.
-    if (input.kind === 'feature' && ids.length === 0 && !platform) {
+    if (input.kind === 'feature' && ids.length === 0 && !platform && !options.quick) {
       throw new ValidationError(spec ? 'Name the requirement IDs this feature implements.' : 'Approve a specification first: a feature implements its requirements.');
     }
     const unknown = ids.filter((id) => !known.has(id));
@@ -303,7 +346,7 @@ export class Builder {
       return p.replace(/^\.\//, '');
     });
     const checks = normalizeChecks(input.checks);
-    if (checks.length === 0) throw new ValidationError('Add at least one check command (for example "npm test") so the change can be verified.');
+    if (checks.length === 0 && !options.quick) throw new ValidationError('Add at least one check command (for example "npm test") so the change can be verified.');
     if (platform) {
       for (const m of MANDATORY_CHECKS) {
         if (!checks.some((c) => c.id === m.id && c.command === m.command)) throw new ValidationError(`Platform work always runs the mandatory checks (${MANDATORY_CHECKS.map((c) => c.command).join(', ')}); "${m.command}" cannot be removed or changed.`);
@@ -331,7 +374,7 @@ export class Builder {
       ...(reqs.length ? ['', 'Requirements:', ...reqs.flatMap((r) => [`- ${r.id} (${r.priority}) ${r.title}`, ...r.acceptanceCriteria.map((c) => `  - accept: ${c}`)])] : []),
       ...(build.components.length ? ['', `Expected to change: ${build.components.join(', ')}. Say why if you need to change anything else.`] : []),
       '',
-      'Approved checks (run them with run_check):',
+      'Approved checks:',
       ...build.checks.map((c) => `- ${c.id}: ${c.command}`),
       '',
       'Results before any change:',

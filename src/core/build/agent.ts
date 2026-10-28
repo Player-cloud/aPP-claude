@@ -7,6 +7,7 @@ import { guardedCall } from '../agents/guard.ts';
 import type { LoopTool, LoopTurn, ModelAdapter } from '../agents/model.ts';
 import { redactString } from '../redact.ts';
 import type { Workspace } from '../workspace.ts';
+import type { AgentHooks } from './live.ts';
 import { runCheck, type Check, type CheckResult } from './checks.ts';
 import { listFiles, readFile, searchFiles, ToolInputError, writeFile } from './files.ts';
 
@@ -68,7 +69,7 @@ export const DEFAULT_RUN_CAP_USD = 3;
 export async function runBuildAgent(
   ws: Workspace,
   model: ModelAdapter,
-  input: { title: string; instructions: string; worktree: string; checks: Check[]; checkTimeoutMs?: number; maxCostUsd?: number; signal?: AbortSignal },
+  input: { title: string; instructions: string; worktree: string; checks: Check[]; checkTimeoutMs?: number; maxCostUsd?: number; signal?: AbortSignal; hooks?: AgentHooks },
 ): Promise<AgentOutcome> {
   const turns: LoopTurn[] = [];
   const steps: AgentStep[] = [];
@@ -97,7 +98,9 @@ export async function runBuildAgent(
     if (!outcome.ok) return end(outcome.status === 'blocked' ? 'blocked' : outcome.status === 'timed_out' ? 'timed_out' : 'failed', outcome.failure, outcome.resolution);
     const { response } = outcome;
     spent += response.costUsd;
+    input.hooks?.cost(spent);
     const calls = response.calls ?? [];
+    if (response.text.trim() && calls.length > 0) input.hooks?.emit({ kind: 'say', text: redactString(response.text.trim()) });
     turns.push({ kind: 'assistant', text: response.text, calls, raw: response.raw });
     if (calls.length === 0) return end('done', response.text || '(The agent gave no summary.)');
 
@@ -133,10 +136,12 @@ export async function runBuildAgent(
             throw new ToolInputError(`Unknown tool "${call.name}".`);
         }
         steps.push({ tool: call.name, target, ok: true, note: call.name === 'run_check' ? (checkResults.at(-1)?.status ?? '') : '' });
+        input.hooks?.emit({ kind: 'step', ...steps.at(-1)! });
         results.push({ id: call.id, content: content.slice(0, MAX_RESULT), isError: false });
       } catch (e) {
         const message = e instanceof ToolInputError ? e.message : `The tool failed: ${(e as Error).message}`;
         steps.push({ tool: call.name, target, ok: false, note: message });
+        input.hooks?.emit({ kind: 'step', ...steps.at(-1)! });
         results.push({ id: call.id, content: message, isError: true });
       }
     }
