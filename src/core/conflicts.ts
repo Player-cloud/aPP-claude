@@ -22,6 +22,7 @@ export type FindingCategory =
   | 'plugin_files_missing'
   | 'plugin_version_mismatch'
   | 'plugin_name_clash'
+  | 'overlapping_memory'
   | 'invalid_config';
 
 export interface Finding {
@@ -45,6 +46,10 @@ export const NOT_CHECKED = [
   'Skills and plugins the Claude desktop app supplies from its own data folder: only Claude Code\'s configuration folder and project folders are read.',
   'Hooks that a plugin registers from code (a hooks.json "modules" list): the scan does not run code, so they are not listed.',
 ];
+
+/** Names of tools that save feedback, corrections or session notes (TOOL_REGISTRY §6). */
+export const MEMORY_TOOLS = new Set(['feedback', 'reflect-mod', 'reflect', 'remember', 'wrap-up']);
+const baseName = (e: ToolEntry) => (e.kind === 'plugin' && e.name.includes('@') ? e.name.slice(0, e.name.lastIndexOf('@')) : e.name).toLowerCase();
 
 const SEVERITY_ORDER: Record<Severity, number> = { release_blocking: 0, confirmed: 1, potential: 2, informational: 3 };
 
@@ -258,6 +263,23 @@ export function detectConflicts(inventory: Inventory): Finding[] {
       inference: `Both use the "${name}:" prefix for their commands and skills, so they can shadow each other when both are enabled.`,
       recommendation: 'Enable only one of them.',
       entryIds: list.map((e) => e.id),
+    });
+  }
+
+  // Memory and feedback tools (M14, C6): each keeps its own notes or rules, so several of them
+  // learn the same thing in different places. Only enabled entries count; disabled ones do nothing.
+  const memory = entries.filter((e) => e.status !== 'disabled' && (e.kind === 'skill' || e.kind === 'command' || e.kind === 'plugin') && MEMORY_TOOLS.has(baseName(e)));
+  const memoryTools = new Set(memory.map(baseName));
+  if (memory.length) {
+    add({
+      severity: memoryTools.size > 1 ? 'potential' : 'informational',
+      category: 'overlapping_memory',
+      title: memoryTools.size > 1 ? `${memoryTools.size} tools save feedback or memory: ${[...memoryTools].sort().join(', ')}` : `"${[...memoryTools][0]}" saves feedback or memory on its own`,
+      evidence: memory.map((e) => `${e.kind} "${e.name}" in ${where(e)}`),
+      inference:
+        'Each keeps its own notes or rules, so the same lesson can be saved in several places and drift apart. The app keeps approved preferences and session notes itself (Preferences and the Vault), and does not need these tools.',
+      recommendation: 'Choose one place for preferences and notes. If that is the app, disable the others with Resolve; nothing is changed without your approval.',
+      entryIds: memory.map((e) => e.id),
     });
   }
 

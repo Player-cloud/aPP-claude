@@ -36,7 +36,7 @@ export function solidPng(width: number, height: number, top: [number, number, nu
 }
 
 /** The version the platform stand-in claims (M13 tests). */
-export const PLATFORM_VERSION = '0.15.0';
+export const PLATFORM_VERSION = '0.16.0';
 const VERSION = PLATFORM_VERSION;
 const BUGGY = 'export const sum = (a, b) => a - b;\n';
 

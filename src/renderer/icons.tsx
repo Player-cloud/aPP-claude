@@ -14,6 +14,7 @@ const paths: Record<string, ReactElement> = {
   home: <path d="M4 10.5L12 4l8 6.5M6 9.5V19a1 1 0 0 0 1 1h3.5v-5h3v5H17a1 1 0 0 0 1-1V9.5" />,
   board: <path d="M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z" />,
   check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  bookmark: <path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" />,
   close: <path d="M6 6l12 12M18 6L6 18" />,
   plus: <path d="M12 5v14M5 12h14" />,
   logo: <path d="M5 5l6 7-6 7M13 5l6 7-6 7" />,

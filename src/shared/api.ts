@@ -44,6 +44,10 @@ export type { CleanupAction, CleanupOption, CleanupPlan, CleanupResult, CleanupS
 import type { UpdateCheck, UpdateItem, UpdatesOverview } from '../core/updates/updates.ts';
 import type { BackupInfo, MaintenanceOverview, RecoveryTest } from '../core/maintain/maintain.ts';
 import type { KnownGood } from '../core/workspace.ts';
+import type { Preference, PreferenceDetail, Resolution } from '../core/learn/preferences.ts';
+import type { NoteKind, NoteStatus, SessionSummary, VaultNote } from '../core/learn/vault.ts';
+export type { Preference, PreferenceDetail, PreferenceMatch, PreferenceScope, PreferenceSource, PreferenceStatus, Resolution } from '../core/learn/preferences.ts';
+export type { NoteKind, NoteStatus, SessionSummary, SummaryItem, VaultNote } from '../core/learn/vault.ts';
 export type { BackupInfo, MaintenanceOverview, PlatformCandidate, ProtectedArea, RecoveryTest } from '../core/maintain/maintain.ts';
 export type { BuildSource, KnownGood, Measurement, ProtectedApproval } from '../core/workspace.ts';
 export type { Confidence, SourceResult, SourceStatus, UpdateCheck, UpdateImpact, UpdateItem, UpdateKind, UpdatePriority, UpdatesOverview, UpdateStage } from '../core/updates/updates.ts';
@@ -201,6 +205,23 @@ export interface IapApi {
   testRecovery(file: string): Promise<Result<RecoveryTest>>;
   /** Asks in a native dialog first. The current database is moved aside, never deleted. */
   restoreBackup(file: string): Promise<Result<{ restored: string; movedAside: string | null; status: AppStatus }>>;
+  /** Preferences (M14): proposed wording becomes active only when the person approves it; duplicates and conflicts need a decision. */
+  listPreferences(filter?: { status?: string; projectId?: string }): Promise<Result<Preference[]>>;
+  getPreference(id: string): Promise<Result<PreferenceDetail>>;
+  /** With fromFeedback, the text is recorded as the feedback it came from. */
+  proposePreference(input: { text: string; scope?: 'global' | 'project'; projectId?: string; fromFeedback?: boolean }): Promise<Result<PreferenceDetail>>;
+  editPreference(input: { id: string; text?: string; scope?: 'global' | 'project'; projectId?: string | null; resolutions?: Resolution[] }): Promise<Result<PreferenceDetail>>;
+  approvePreference(input: { id: string; resolutions?: { id: string; action: 'keep_both' | 'replace' }[] }): Promise<Result<PreferenceDetail>>;
+  rejectPreference(input: { id: string; reason?: string }): Promise<Result<PreferenceDetail>>;
+  removePreference(input: { id: string; reason?: string }): Promise<Result<PreferenceDetail>>;
+  /** Session wrap-up (M14): built from the records, saved to the Vault inbox only on request. */
+  wrapUp(input?: { from?: string; hours?: number }): Promise<Result<SessionSummary>>;
+  saveWrapUp(input: { from: string; to: string; title?: string }): Promise<Result<VaultNote>>;
+  listVaultNotes(filter?: { status?: NoteStatus; kind?: NoteKind }): Promise<Result<VaultNote[]>>;
+  addVaultNote(input: { title: string; body: string; projectId?: string }): Promise<Result<VaultNote>>;
+  editVaultNote(input: { id: string; title?: string; body?: string }): Promise<Result<VaultNote>>;
+  fileVaultNote(input: { id: string; status: 'kept' | 'archived' }): Promise<Result<VaultNote>>;
+  proposePreferenceFromNote(input: { noteId: string; line: string; scope?: 'global' | 'project'; projectId?: string }): Promise<Result<PreferenceDetail>>;
   /** Planning (M5): concept brief and specification, versioned. */
   getPlanning(projectId: string): Promise<Result<PlanningOverview>>;
   draftBrief(projectId: string): Promise<Result<PlanDoc>>;
@@ -298,6 +319,20 @@ export const IAP_METHODS = [
   'listBackups',
   'testRecovery',
   'restoreBackup',
+  'listPreferences',
+  'getPreference',
+  'proposePreference',
+  'editPreference',
+  'approvePreference',
+  'rejectPreference',
+  'removePreference',
+  'wrapUp',
+  'saveWrapUp',
+  'listVaultNotes',
+  'addVaultNote',
+  'editVaultNote',
+  'fileVaultNote',
+  'proposePreferenceFromNote',
   'getPlanning',
   'draftBrief',
   'draftSpec',

@@ -139,6 +139,17 @@ The database is the source of truth: editing these files does not change the app
 | Duplicates | `iap iter merge IMP-<dup> --into IMP-<kept>`. Nothing is deleted |
 | What approval does | Nothing in the app changes. Building an improvement is separate Project Layer work |
 
+## Preferences and the Vault (M14, DEC-030)
+
+| What | Where / how |
+|---|---|
+| Propose a preference | Desktop: Preferences → *Propose*, or Improvements → *Give feedback* → *How I want work done*. CLI: `iap pref propose <text> [--project <id>] [--feedback]`. The app drafts the wording; nothing is used until you approve it |
+| Approve | `iap pref approve PREF-<n>`. A likely duplicate or conflict with an active preference needs `--keep PREF-<m>` (both stay) or `--replace PREF-<m>` (the old one is removed) |
+| Edit, reject, remove | `iap pref edit PREF-<n> [<wording>] [--scope global|project --project <id>]`, `iap pref reject PREF-<n> [--reason]`, `iap pref remove PREF-<n> [--reason]`. Nothing is deleted |
+| Where they are used | Active preferences for all work and for the build's project are given to the build agent as guidance. They never change approvals, checks or release gates |
+| Wrap-up | Desktop: Preferences → *Wrap-up*. CLI: `iap wrapup [--hours <n>] [--save]`. Built from the app's records, no AI call. Without a period it starts where the last saved wrap-up ended, or 24 hours ago |
+| Vault | `iap vault list | show | keep | archive NOTE-<n>`, `iap vault note --title <t> <text>`, `iap vault prefer NOTE-<n> <line>` (propose one line as a preference) |
+
 ## Real model calls (M3, DEC-018)
 
 The main agent, the planning drafts and the build agent all use this. A build agent run is also capped at $3 and 40 turns. Real Claude calls need **both** a monthly budget and an Anthropic API key, set in *Settings → AI usage*. Without either, the agent uses the free simulated model.

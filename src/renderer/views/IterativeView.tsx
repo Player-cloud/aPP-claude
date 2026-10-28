@@ -429,12 +429,14 @@ function Inspector({ id, items, onChanged, onClose }: { id: string; items: Impro
   );
 }
 
-export function IterativeView({ filter, onFilter }: { filter: ImprovementFilter; onFilter: (f: ImprovementFilter) => void }) {
+export function IterativeView({ filter, onFilter, onOpenPreferences }: { filter: ImprovementFilter; onFilter: (f: ImprovementFilter) => void; onOpenPreferences: () => void }) {
   const [overview, setOverview] = useState<ImprovementsOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [assessing, setAssessing] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const [about, setAbout] = useState<'app' | 'work'>('app');
+  const [proposed, setProposed] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
 
   const load = useCallback(async () => {
@@ -468,6 +470,14 @@ export function IterativeView({ filter, onFilter }: { filter: ImprovementFilter;
     setAdding(true);
     setError(null);
     try {
+      setProposed(null);
+      if (about === 'work') {
+        // One feedback box, two stores (DEC-030): how the person wants work done is a preference, not an app improvement.
+        const d = await call(iap().proposePreference({ text: feedback, fromFeedback: true }));
+        setFeedback('');
+        setProposed(d.preference.number);
+        return;
+      }
       const item = await call(iap().addFeedback({ text: feedback }));
       setFeedback('');
       await load();
@@ -544,16 +554,38 @@ export function IterativeView({ filter, onFilter }: { filter: ImprovementFilter;
 
           <form className="card" onSubmit={addIdea} aria-labelledby="feedback-title">
             <h2 className="card-title" id="feedback-title">
-              Add an idea
+              Give feedback
             </h2>
-            <div className="field">
-              <label htmlFor="imp-feedback">What should work better?</label>
-              <textarea id="imp-feedback" className="textarea" rows={3} value={feedback} onChange={(e) => setFeedback(e.target.value)} />
-              <p className="hint">It becomes an idea in the backlog. Add the expected outcome and success criteria before proposing it.</p>
+            <div className="radio-row" role="radiogroup" aria-label="The feedback is about">
+              <label className="radio-pill">
+                <input type="radio" name="feedback-about" checked={about === 'app'} onChange={() => setAbout('app')} />
+                The app
+              </label>
+              <label className="radio-pill">
+                <input type="radio" name="feedback-about" checked={about === 'work'} onChange={() => setAbout('work')} />
+                How I want work done
+              </label>
             </div>
+            <div className="field">
+              <label htmlFor="imp-feedback">{about === 'app' ? 'What should work better?' : 'What would you like done differently?'}</label>
+              <textarea id="imp-feedback" className="textarea" rows={3} value={feedback} onChange={(e) => setFeedback(e.target.value)} />
+              <p className="hint">
+                {about === 'app'
+                  ? 'It becomes an idea in the backlog. Add the expected outcome and success criteria before proposing it.'
+                  : 'It becomes a proposed preference with your words as its source. Nothing is used until you approve the wording.'}
+              </p>
+            </div>
+            {proposed !== null && (
+              <Alert title={`Proposed as PREF-${proposed}`}>
+                Approve or change the wording in Preferences.{' '}
+                <button type="button" className="link-btn" onClick={onOpenPreferences}>
+                  Open Preferences
+                </button>
+              </Alert>
+            )}
             <div className="btn-row">
               <button type="submit" className="btn" disabled={adding || !feedback.trim()}>
-                <Icon name="plus" size={16} /> Add idea
+                <Icon name="plus" size={16} /> {about === 'app' ? 'Add idea' : 'Propose preference'}
               </button>
             </div>
           </form>

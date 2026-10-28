@@ -1008,7 +1008,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.15.0', { exact: true }).waitFor();
+    await kg.getByText('0.16.0', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.
@@ -1068,6 +1068,79 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByText('Recovery test passed').waitFor();
     await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
     await shot(page, '30-platform-dark-1280');
+  } finally {
+    await app.close();
+  }
+});
+
+test('M14: feedback about the work becomes an approved preference, a duplicate needs a decision, and a wrap-up is saved to the Vault', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 900);
+    await page.evaluate(async () => {
+      const p = await window.iap.createProject({ name: 'Club HR', facts: [{ kind: 'assumption', text: 'About 40 members' }] });
+      if (!p.ok) throw new Error(p.error.message);
+      const r = await window.iap.startRun({ projectId: p.value.id, workflow: 'plan', title: 'Plan payroll' });
+      if (!r.ok) throw new Error(r.error.message);
+      await window.iap.moveRun({ runId: r.value.id, to: 'planned' });
+      await window.iap.moveRun({ runId: r.value.id, to: 'blocked', reason: 'Waiting on the treasurer', resolution: 'Ask for the pay rates' });
+    });
+
+    // One feedback box: feedback about how the work is done becomes a proposed preference.
+    await page.getByRole('button', { name: 'Improvements', exact: true }).first().click();
+    await page.getByRole('radio', { name: 'How I want work done' }).check();
+    await page.getByLabel('What would you like done differently?').fill('Please use British English in the interface text');
+    await page.getByRole('button', { name: 'Propose preference' }).click();
+    await page.getByText('Proposed as PREF-1').waitFor();
+    await page.getByRole('button', { name: 'Open Preferences' }).click();
+
+    const waiting = page.getByRole('list', { name: 'Proposed preferences' });
+    await waiting.getByRole('button', { name: /Use British English in the interface text\./ }).click();
+    const inspector = page.getByRole('region', { name: 'PREF-1' });
+    await inspector.getByText('From feedback').waitFor();
+    await inspector.getByText('“Please use British English in the interface text”').waitFor();
+    await inspector.getByLabel('Wording').fill('Use British English in all interface text');
+    await inspector.getByRole('button', { name: 'Save wording' }).click();
+    await inspector.getByText('The app proposed: Use British English in the interface text.').waitFor();
+    await inspector.getByRole('button', { name: 'Approve' }).click();
+    await page.getByRole('list', { name: 'Active preferences' }).getByText('Use British English in all interface text.').waitFor();
+
+    // A near duplicate is shown, and the person decides.
+    await page.getByLabel('How would you like the work done?').fill('Use British English in interface text');
+    await page.getByRole('button', { name: 'Propose', exact: true }).click();
+    const second = page.getByRole('region', { name: 'PREF-2' });
+    await second.getByText('1 active preference may overlap').waitFor();
+    await second.getByText('May duplicate').waitFor();
+    assert.equal(await second.getByRole('button', { name: 'Approve' }).isDisabled(), true, 'a duplicate needs a decision first');
+    await second.getByRole('radio', { name: 'This one replaces PREF-1' }).check();
+    await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
+    await shot(page, '31-preferences-duplicate-dark-1280');
+    await second.getByRole('button', { name: 'Approve' }).click();
+    await page.getByRole('list', { name: 'Active preferences' }).getByText('Use British English in interface text.').waitFor();
+    await page.getByText('History (1)').click();
+    await page.getByRole('list', { name: 'Rejected and removed preferences' }).getByText('Use British English in all interface text.').waitFor();
+
+    // The wrap-up comes from the records and is saved only when asked.
+    await page.getByRole('button', { name: 'Wrap-up', exact: true }).first().click();
+    const decisions = page.getByRole('region', { name: /Decisions/ });
+    await decisions.getByText(/Approved the preference PREF-2 "Use British English in interface text\."/).waitFor();
+    await page.getByRole('region', { name: /Blockers/ }).getByText(/"Plan payroll" in Club HR is blocked: Waiting on the treasurer/).waitFor();
+    await page.getByRole('region', { name: /Assumptions/ }).getByText('Club HR: About 40 members').waitFor();
+    await page.getByRole('button', { name: 'Save to the Vault inbox' }).click();
+    await page.getByText(/NOTE-1 is in the Vault inbox\. It is a note, not a rule/).waitFor();
+    await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
+    await shot(page, '32-wrap-up-dark-1280');
+
+    await page.getByRole('button', { name: 'Vault', exact: true }).first().click();
+    await page.getByRole('list', { name: 'Vault notes' }).getByRole('button', { name: /NOTE-1/ }).click();
+    const lines = page.getByRole('list', { name: 'Lines of the summary' });
+    await lines.getByText(/"Plan payroll" in Club HR is blocked/).waitFor();
+    await page.getByRole('button', { name: 'Keep', exact: true }).click();
+    await page.getByRole('button', { name: 'Keep', exact: true }).waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: 'Kept', exact: true }).click();
+    await page.getByRole('list', { name: 'Vault notes' }).getByRole('button', { name: /NOTE-1/ }).waitFor();
   } finally {
     await app.close();
   }

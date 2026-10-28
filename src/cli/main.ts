@@ -32,6 +32,8 @@ import { Backlog, type ImprovementDetail, type ImprovementStatus, type SelfAsses
 import type { Assessment } from '../core/workspace.ts';
 import { listBackups, Maintenance, restoreBackup, type MaintenanceOverview } from '../core/maintain/maintain.ts';
 import type { AgentTask } from '../core/workspace.ts';
+import { Preferences, type PreferenceDetail } from '../core/learn/preferences.ts';
+import { renderSummary, Vault, type VaultNote } from '../core/learn/vault.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
 
 const USAGE = `Usage: iap <command> [options]
@@ -129,6 +131,21 @@ Improvements (the app assesses its own records; approving an item changes nothin
   iter measure <IMP-n>                        After release: did the problem come back? (reopens it as a new item if so)
   iter outcome <IMP-n> --verdict <improved|not_improved> --note <what you observed>   Your own judgement, for items no detector counts
 
+Preferences (guidance for the work; nothing is used until you approve it, and nothing is deleted)
+  pref propose <text> [--project <projectId>] [--feedback]   Propose wording from your words (--feedback: record them as feedback)
+  pref list [--status <proposed|active|rejected|removed>] [--project <projectId>]
+  pref show <PREF-n>                          With any active preference it may duplicate or contradict
+  pref edit <PREF-n> [<new wording>] [--scope <global|project>] [--project <projectId>] [--keep <PREF-n>]... [--replace <PREF-n>]...
+  pref approve <PREF-n> [--keep <PREF-n>]... [--replace <PREF-n>]...   Each duplicate or conflict needs --keep (both stay) or --replace
+  pref reject <PREF-n> [--reason <why>] | pref remove <PREF-n> [--reason <why>]
+
+Session wrap-up and Vault (summaries come from the records; saved only with --save)
+  wrapup [--hours <n>] [--save] [--title <t>]   Decisions, progress, blockers, next steps and assumptions since the last saved wrap-up
+  vault list [--status <inbox|kept|archived>] [--kind <session|note>]
+  vault show <NOTE-n> | vault keep <NOTE-n> | vault archive <NOTE-n>
+  vault note --title <t> <text> [--project <projectId>]
+  vault prefer <NOTE-n> <line>                Propose one line of a saved note as a preference
+
 Platform maintenance (approved items are built in worktrees of the app's own source; the running app is never changed)
   platform setup <sourceFolder>              Use the app's source repository (records the running version as known-good)
   platform status
@@ -217,6 +234,11 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       accept: { type: 'boolean', default: false },
       from: { type: 'string' },
       verdict: { type: 'string' },
+      keep: { type: 'string', multiple: true },
+      replace: { type: 'string', multiple: true },
+      hours: { type: 'string' },
+      save: { type: 'boolean', default: false },
+      feedback: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -532,6 +554,96 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
         const m = b.recordOutcome(id, values.verdict, values.note);
         const d = b.detail(id);
         print(d, () => out(`IMP-${d.item.number} ${m.verdict.replace('_', ' ')}.${d.reopenedBy ? ` Reopened as IMP-${d.reopenedBy.number}.` : ''}`));
+        return 0;
+      }
+      case 'pref propose': {
+        const prefs = new Preferences(ws);
+        const words = need(rest.join(' ').trim() || undefined, 'text');
+        const p = prefs.propose({
+          text: words,
+          projectId: values.project,
+          source: values.feedback ? { type: 'feedback', summary: `Feedback typed by ${ws.actorName()}`, ref: null, quote: words } : undefined,
+        });
+        const d = prefs.detail(p.id);
+        print(d, () => {
+          describePreference(d, out);
+          out(`Nothing is used until you approve it: iap pref approve PREF-${p.number}${d.matches.length ? ' --keep <PREF-n> or --replace <PREF-n> for each match' : ''}`);
+        });
+        return 0;
+      }
+      case 'pref list': {
+        const list = new Preferences(ws).list({ status: values.status, projectId: values.project ?? null });
+        print(list, () => {
+          if (!list.length) out('No preferences yet. Propose one with: iap pref propose <text>');
+          for (const p of list) out(`PREF-${p.number}  ${p.status.padEnd(8)} ${p.scope.padEnd(7)} ${p.text}`);
+        });
+        return 0;
+      }
+      case 'pref show': {
+        const d = new Preferences(ws).detail(need(rest[0], 'PREF-n'));
+        print(d, () => describePreference(d, out));
+        return 0;
+      }
+      case 'pref edit':
+      case 'pref approve': {
+        const prefs = new Preferences(ws);
+        const id = prefs.resolve(need(rest[0], 'PREF-n')).id;
+        const resolutions = [...(values.keep ?? []).map((r) => ({ id: prefs.resolve(r).id, action: 'keep_both' })), ...(values.replace ?? []).map((r) => ({ id: prefs.resolve(r).id, action: 'replace' }))];
+        const words = rest.slice(1).join(' ').trim();
+        const p =
+          sub === 'approve'
+            ? prefs.approve(id, resolutions)
+            : prefs.edit(id, { text: words || undefined, scope: values.scope, projectId: values.project, resolutions: resolutions.length ? resolutions : undefined });
+        const d = prefs.detail(p.id);
+        print(d, () => describePreference(d, out));
+        return 0;
+      }
+      case 'pref reject':
+      case 'pref remove': {
+        const prefs = new Preferences(ws);
+        const id = need(rest[0], 'PREF-n');
+        const p = sub === 'reject' ? prefs.reject(id, values.reason) : prefs.remove(id, values.reason);
+        print(p, () => out(`PREF-${p.number} is ${p.status}. It stays in the history.`));
+        return 0;
+      }
+      case 'wrapup': {
+        const vault = new Vault(ws);
+        const s = vault.wrapUp(values.hours === undefined ? {} : { hours: values.hours });
+        if (values.save) {
+          const n = vault.saveWrapUp({ from: s.from, to: s.to, title: values.title });
+          print(n, () => out(`Saved to the Vault inbox as NOTE-${n.number}. It is a note, not a rule.`));
+        } else print(s, () => out(`${renderSummary(s)}
+Not saved. Save it to the Vault inbox with: iap wrapup --save${values.hours ? ` --hours ${values.hours}` : ''}`));
+        return 0;
+      }
+      case 'vault list': {
+        const list = new Vault(ws).list({ status: values.status, kind: values.kind });
+        print(list, () => {
+          if (!list.length) out('The Vault is empty. Save a wrap-up with: iap wrapup --save');
+          for (const n of list) out(`NOTE-${n.number}  ${n.status.padEnd(8)} ${n.kind.padEnd(7)} ${n.title}`);
+        });
+        return 0;
+      }
+      case 'vault show': {
+        const n = new Vault(ws).resolve(need(rest[0], 'NOTE-n'));
+        print(n, () => describeNote(n, out));
+        return 0;
+      }
+      case 'vault keep':
+      case 'vault archive': {
+        const n = new Vault(ws).file(need(rest[0], 'NOTE-n'), sub === 'keep' ? 'kept' : 'archived');
+        print(n, () => out(`NOTE-${n.number} is ${n.status}.`));
+        return 0;
+      }
+      case 'vault note': {
+        const n = new Vault(ws).addNote({ title: values.title, body: rest.join(' '), projectId: values.project });
+        print(n, () => out(`Added NOTE-${n.number} to the Vault inbox.`));
+        return 0;
+      }
+      case 'vault prefer': {
+        const p = new Vault(ws).proposePreference(need(rest[0], 'NOTE-n'), rest.slice(1).join(' ').trim(), undefined, values.project);
+        const d = new Preferences(ws).detail(p.id);
+        print(d, () => describePreference(d, out));
         return 0;
       }
       case 'platform setup':
@@ -1002,6 +1114,24 @@ function describeMaintenance(o: MaintenanceOverview, out: Out): void {
   out(`  backups: ${o.backups.length ? o.backups.map((b) => b.file).join(', ') : 'none (take one before installing a new version: iap platform backup)'}`);
   for (const c of o.candidates) out(`  can build: ${c.ref} ${c.title}${c.blocked ? ` [${c.blocked}]` : ''}`);
   for (const b of o.builds) out(`  build ${b.id} ${b.status.padEnd(11)} ${b.title}`);
+}
+
+function describePreference(d: PreferenceDetail, out: Out) {
+  const p = d.preference;
+  out(`PREF-${p.number}  ${p.status}  ${p.scope === 'global' ? 'all work' : `project ${d.projectName}`}`);
+  out(`  ${p.text}`);
+  if (p.text !== p.proposedText) out(`  Proposed as: ${p.proposedText}`);
+  out(`  From: ${p.source.summary}${p.source.quote && p.source.quote !== p.text ? ` ("${p.source.quote.slice(0, 200)}")` : ''}`);
+  if (p.approver) out(`  Approved by ${p.approver} on ${p.approvedAt}`);
+  if (p.reason) out(`  ${p.status === 'rejected' ? 'Rejected' : 'Removed'}: ${p.reason}`);
+  for (const m of d.matches) out(`  ${m.kind === 'conflict' ? 'May contradict' : 'May duplicate'} PREF-${m.number} (${Math.round(m.similarity * 100)}% the same words): ${m.text}`);
+}
+
+function describeNote(n: VaultNote, out: Out) {
+  out(`NOTE-${n.number}  ${n.status}  ${n.kind}  ${n.title}`);
+  out(`  ${n.source.summary}, ${n.createdAt}`);
+  out('');
+  out(n.body);
 }
 
 function describeImprovement({ item: i, allowed, recurrence, dependencies, mergedFrom, mergedInto, builds, releases, measurements, reopens, reopenedBy }: ImprovementDetail, out: Out): void {

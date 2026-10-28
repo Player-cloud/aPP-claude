@@ -19,6 +19,8 @@ import { Backlog, type ImprovementStatus } from '../core/iterate/backlog.ts';
 import { Cleanup, claudeRunner, type CleanupPlan } from '../core/cleanup/cleanup.ts';
 import { bundledVersions, claudeVersionReader, httpFetcher, UpdateMonitor, type Fetcher, type ModelInfo } from '../core/updates/updates.ts';
 import { listBackups, Maintenance, restoreBackup } from '../core/maintain/maintain.ts';
+import { Preferences } from '../core/learn/preferences.ts';
+import { Vault } from '../core/learn/vault.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -662,6 +664,87 @@ export class AppService {
         const i = obj(input, 'Merge');
         const backlog = new Backlog(this.workspace());
         return backlog.detail(backlog.merge(str(i.id, 'Improvement id')!, str(i.into, 'Item to keep')!).id);
+      }),
+    // Preferences and the Vault (M14). Only these calls, made by the person, approve, change or remove anything.
+    listPreferences: (filter) =>
+      wrap(() => {
+        const f = filter === undefined ? {} : obj(filter, 'Filter');
+        return new Preferences(this.workspace()).list({ status: str(f.status, 'Status', true), projectId: str(f.projectId, 'Project id', true) ?? null });
+      }),
+    getPreference: (id) => wrap(() => new Preferences(this.workspace()).detail(str(id, 'Preference id')!)),
+    proposePreference: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Preference');
+        const prefs = new Preferences(this.workspace());
+        const fromFeedback = i.fromFeedback === true;
+        const p = prefs.propose({
+          text: i.text,
+          scope: i.scope,
+          projectId: i.projectId,
+          source: fromFeedback ? { type: 'feedback', summary: `Feedback typed by ${this.workspace().actorName()}`, ref: null, quote: typeof i.text === 'string' ? i.text.trim().slice(0, 4000) : null } : undefined,
+        });
+        return prefs.detail(p.id);
+      }),
+    editPreference: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Preference');
+        const prefs = new Preferences(this.workspace());
+        const p = prefs.edit(str(i.id, 'Preference id')!, { text: i.text, scope: i.scope, projectId: i.projectId, resolutions: i.resolutions });
+        return prefs.detail(p.id);
+      }),
+    approvePreference: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Approval');
+        const prefs = new Preferences(this.workspace());
+        return prefs.detail(prefs.approve(str(i.id, 'Preference id')!, i.resolutions).id);
+      }),
+    rejectPreference: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Rejection');
+        const prefs = new Preferences(this.workspace());
+        return prefs.detail(prefs.reject(str(i.id, 'Preference id')!, i.reason).id);
+      }),
+    removePreference: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Removal');
+        const prefs = new Preferences(this.workspace());
+        return prefs.detail(prefs.remove(str(i.id, 'Preference id')!, i.reason).id);
+      }),
+    wrapUp: (input) =>
+      wrap(() => {
+        const i = input === undefined ? {} : obj(input, 'Period');
+        return new Vault(this.workspace()).wrapUp({ from: i.from, hours: i.hours });
+      }),
+    saveWrapUp: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Summary');
+        return new Vault(this.workspace()).saveWrapUp({ from: i.from, to: i.to, title: i.title });
+      }),
+    listVaultNotes: (filter) =>
+      wrap(() => {
+        const f = filter === undefined ? {} : obj(filter, 'Filter');
+        return new Vault(this.workspace()).list({ status: str(f.status, 'Status', true), kind: str(f.kind, 'Kind', true) });
+      }),
+    addVaultNote: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Note');
+        return new Vault(this.workspace()).addNote({ title: i.title, body: i.body, projectId: i.projectId });
+      }),
+    editVaultNote: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Note');
+        return new Vault(this.workspace()).edit(str(i.id, 'Note id')!, { title: i.title, body: i.body });
+      }),
+    fileVaultNote: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Note');
+        return new Vault(this.workspace()).file(str(i.id, 'Note id')!, i.status);
+      }),
+    proposePreferenceFromNote: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Line');
+        const p = new Vault(this.workspace()).proposePreference(str(i.noteId, 'Note id')!, i.line, i.scope, i.projectId);
+        return new Preferences(this.workspace()).detail(p.id);
       }),
     // Planning (M5). Content is validated in planner.ts; ids are checked to exist.
     getPlanning: (projectId) => wrap(() => this.planner().overview(str(projectId, 'Project id')!)),
