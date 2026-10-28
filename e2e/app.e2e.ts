@@ -302,3 +302,63 @@ test('M3: the main agent runs on a started run and is clearly labelled simulated
     await app.close();
   }
 });
+
+test('M5: plan a project from brief to specification, with versions and a recorded change', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByLabel('Name').fill('Recipe box');
+    await page.getByLabel('Idea').fill('A private recipe box for home cooks');
+    await page.getByRole('button', { name: 'Create project' }).click();
+
+    const planning = page.getByRole('region', { name: 'Planning' });
+    await planning.getByText(/EGM was not checked/).waitFor();
+    const brief = planning.getByRole('region', { name: 'Concept brief' });
+    const spec = planning.getByRole('region', { name: 'Specification' });
+    assert.equal(await spec.getByRole('button', { name: 'Draft the specification' }).isDisabled(), true);
+
+    await brief.getByRole('button', { name: 'Draft the concept brief' }).click();
+    await brief.getByText('Simulated draft', { exact: true }).waitFor();
+    // A simulated draft keeps its placeholders, so it cannot be approved as is.
+    await brief.getByRole('button', { name: 'Approve version 1' }).click();
+    await brief.getByText(/Goals still has 1 placeholder/).waitFor();
+    await shot(page, '13-planning-brief-draft-dark-1280');
+
+    const fill = { Goals: 'Keep family recipes in one place', Users: 'Home cooks', 'Use cases': 'Add a recipe', 'In scope': 'Local storage only', 'Success criteria': 'A recipe survives a restart' };
+    for (const [label, text] of Object.entries(fill)) await brief.getByLabel(label, { exact: true }).fill(text);
+    await brief.getByRole('button', { name: 'Approve version 1' }).click();
+    await brief.getByText('Approved · version 1').waitFor();
+
+    await spec.getByRole('button', { name: 'Draft the specification' }).click();
+    await spec.getByRole('group', { name: 'REQ-001' }).waitFor();
+    await spec.getByLabel('Acceptance criteria').first().fill('A saved recipe is listed after a restart');
+    await spec.getByLabel('Acceptance criteria').nth(1).fill('The add form saves a title and steps');
+    await spec.getByRole('button', { name: 'Approve version 1' }).click();
+    await spec.getByText('Approved · version 1').waitFor();
+
+    // Revising the brief needs a change note, records the diff, and flags the spec as out of date.
+    await brief.getByRole('button', { name: 'Revise' }).click();
+    await brief.getByLabel('Goals', { exact: true }).fill('Keep and share family recipes');
+    await brief.getByRole('button', { name: 'Approve version 2' }).click();
+    await brief.getByText(/change note/).waitFor();
+    await brief.getByLabel(/What changed and why/).fill('Sharing is now in scope');
+    await brief.getByRole('button', { name: 'Approve version 2' }).click();
+    await brief.getByText('Approved · version 2').waitFor();
+    await planning.getByText('The specification is out of date').waitFor();
+    await brief.getByText('Changed in this version').waitFor();
+    await brief.getByText('History (2)').click();
+    await brief.getByRole('button', { name: 'Compare with version 1' }).click();
+    await brief.getByText('Keep and share family recipes', { exact: false }).first().waitFor();
+    await shot(page, '14-planning-approved-dark-1280');
+
+    const docsPath = await page.locator('dd.mono').first().innerText();
+    assert.match(readFileSync(join(docsPath, 'brief.md'), 'utf8'), /Keep and share family recipes/);
+    assert.match(readFileSync(join(docsPath, 'versions', 'brief-v1.md'), 'utf8'), /Keep family recipes in one place/);
+    assert.match(readFileSync(join(docsPath, 'spec.md'), 'utf8'), /REQ-001/);
+  } finally {
+    await app.close();
+  }
+});

@@ -6,7 +6,7 @@
 // cannot be skipped by a caller.
 
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { userInfo } from 'node:os';
@@ -14,9 +14,10 @@ import { appPaths, type AppPaths } from './paths.ts';
 import { redact, redactString } from './redact.ts';
 import { NotFoundError, StateCorruptError, StateTooNewError, ValidationError } from './errors.ts';
 import type { ToolScan } from './tools.ts';
+import { renderMarkdown, type PlanChange, type PlanDoc, type PlanKind, type PlanStatus } from './planning.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -157,6 +158,30 @@ const MIGRATIONS: Record<number, string> = {
     CREATE TRIGGER spend_no_delete BEFORE DELETE ON spend
       BEGIN SELECT RAISE(ABORT, 'the spend ledger is append-only'); END;
   `,
+  5: `
+    CREATE TABLE plan_docs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      kind TEXT NOT NULL CHECK (kind IN ('brief','spec')),
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('draft','approved','superseded','discarded')),
+      content TEXT NOT NULL,
+      source TEXT NOT NULL,
+      change_note TEXT,
+      changes TEXT,
+      based_on TEXT REFERENCES plan_docs(id),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      approved_at TEXT,
+      UNIQUE (project_id, kind, version)
+    );
+    -- An approved version is a record of a decision: its content can never change.
+    CREATE TRIGGER plan_docs_approved_frozen BEFORE UPDATE OF content, change_note ON plan_docs
+      WHEN OLD.status <> 'draft'
+      BEGIN SELECT RAISE(ABORT, 'only a draft can be edited'); END;
+    CREATE TRIGGER plan_docs_no_delete BEFORE DELETE ON plan_docs
+      BEGIN SELECT RAISE(ABORT, 'planning documents are never deleted'); END;
+  `,
 };
 
 export type AgentTaskKind = 'request' | 'subtask' | 'reconcile';
@@ -195,6 +220,24 @@ export interface AgentTask {
 }
 
 export type AgentTaskPatch = Partial<Pick<AgentTask, 'status' | 'strategy' | 'rationale' | 'output' | 'failure' | 'resolution' | 'model' | 'inputTokens' | 'outputTokens' | 'costUsd'>>;
+
+function toPlanDoc(row: Record<string, unknown>): PlanDoc {
+  return {
+    id: row.id as string,
+    projectId: row.project_id as string,
+    kind: row.kind as PlanKind,
+    version: row.version as number,
+    status: row.status as PlanStatus,
+    content: JSON.parse(row.content as string),
+    source: row.source as string,
+    changeNote: (row.change_note as string | null) ?? null,
+    changes: row.changes ? (JSON.parse(row.changes as string) as PlanChange[]) : null,
+    basedOn: (row.based_on as string | null) ?? null,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+    approvedAt: (row.approved_at as string | null) ?? null,
+  } as PlanDoc;
+}
 
 function toAgentTask(row: Record<string, unknown>): AgentTask {
   return {
@@ -503,6 +546,109 @@ export class Workspace {
   }
 
   /** Read-only health summary for `iap doctor`. */
+  // ---- Planning documents (M5) --------------------------------------------
+  // Content is validated and redacted by planning.ts before it gets here.
+
+  createPlanDoc(input: { projectId: string; kind: PlanKind; content: PlanDoc['content']; source: string; basedOn: string | null; changeNote: string | null }): PlanDoc {
+    const project = this.getProject(input.projectId);
+    if (this.openPlanDraft(project.id, input.kind)) {
+      throw new ValidationError(`This project already has a ${input.kind} draft. Edit or discard it first.`);
+    }
+    const id = `plan_${randomUUID()}`;
+    const at = this.timestamp();
+    const row = this.db.prepare('SELECT COALESCE(MAX(version), 0) AS v FROM plan_docs WHERE project_id = ? AND kind = ?').get(project.id, input.kind) as { v: number };
+    const version = row.v + 1;
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO plan_docs (id, project_id, kind, version, status, content, source, change_note, based_on, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, project.id, input.kind, version, JSON.stringify(input.content), input.source, input.changeNote, input.basedOn, at, at);
+      this.record('plan.drafted', project.id, null, { docId: id, kind: input.kind, version, source: input.source });
+    });
+    return this.writePlanFile(this.getPlanDoc(id));
+  }
+
+  updatePlanDraft(id: string, patch: { content?: PlanDoc['content']; changeNote?: string | null }): PlanDoc {
+    const doc = this.getPlanDoc(id);
+    if (doc.status !== 'draft') throw new ValidationError(`Version ${doc.version} is ${doc.status} and cannot be edited. Start a revision instead.`);
+    this.db
+      .prepare('UPDATE plan_docs SET content = ?, change_note = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(patch.content ?? doc.content), patch.changeNote === undefined ? doc.changeNote : patch.changeNote, this.timestamp(), id);
+    return this.writePlanFile(this.getPlanDoc(id));
+  }
+
+  /** Approves a draft, supersedes the previously approved version, and records what changed. */
+  approvePlanDoc(id: string, changes: PlanChange[] | null, basedOn: string | null): PlanDoc {
+    const doc = this.getPlanDoc(id);
+    if (doc.status !== 'draft') throw new ValidationError(`Version ${doc.version} is already ${doc.status}.`);
+    const previous = this.approvedPlanDoc(doc.projectId, doc.kind);
+    const at = this.timestamp();
+    this.transaction(() => {
+      if (previous) this.db.prepare("UPDATE plan_docs SET status = 'superseded', updated_at = ? WHERE id = ?").run(at, previous.id);
+      this.db
+        .prepare("UPDATE plan_docs SET status = 'approved', changes = ?, based_on = ?, approved_at = ?, updated_at = ? WHERE id = ?")
+        .run(changes ? JSON.stringify(changes) : null, basedOn, at, at, id);
+      this.record('plan.approved', doc.projectId, null, {
+        docId: id,
+        kind: doc.kind,
+        version: doc.version,
+        ...(previous ? { supersedes: previous.version, changes: changes?.length ?? 0, note: doc.changeNote } : {}),
+      });
+    });
+    if (previous) this.writePlanFile(this.getPlanDoc(previous.id));
+    return this.writePlanFile(this.getPlanDoc(id));
+  }
+
+  discardPlanDraft(id: string): PlanDoc {
+    const doc = this.getPlanDoc(id);
+    if (doc.status !== 'draft') throw new ValidationError(`Only a draft can be discarded; version ${doc.version} is ${doc.status}.`);
+    this.transaction(() => {
+      this.db.prepare("UPDATE plan_docs SET status = 'discarded', updated_at = ? WHERE id = ?").run(this.timestamp(), id);
+      this.record('plan.discarded', doc.projectId, null, { docId: id, kind: doc.kind, version: doc.version });
+    });
+    return this.writePlanFile(this.getPlanDoc(id));
+  }
+
+  getPlanDoc(id: string): PlanDoc {
+    const row = this.db.prepare('SELECT * FROM plan_docs WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Planning document', id);
+    return toPlanDoc(row);
+  }
+
+  /** All versions, newest first. */
+  listPlanDocs(projectId: string, kind?: PlanKind): PlanDoc[] {
+    this.getProject(projectId);
+    const rows = kind
+      ? this.db.prepare('SELECT * FROM plan_docs WHERE project_id = ? AND kind = ? ORDER BY version DESC').all(projectId, kind)
+      : this.db.prepare('SELECT * FROM plan_docs WHERE project_id = ? ORDER BY kind, version DESC').all(projectId);
+    return (rows as Record<string, unknown>[]).map(toPlanDoc);
+  }
+
+  openPlanDraft(projectId: string, kind: PlanKind): PlanDoc | null {
+    const row = this.db.prepare("SELECT * FROM plan_docs WHERE project_id = ? AND kind = ? AND status = 'draft'").get(projectId, kind) as Record<string, unknown> | undefined;
+    return row ? toPlanDoc(row) : null;
+  }
+
+  approvedPlanDoc(projectId: string, kind: PlanKind): PlanDoc | null {
+    const row = this.db.prepare("SELECT * FROM plan_docs WHERE project_id = ? AND kind = ? AND status = 'approved'").get(projectId, kind) as Record<string, unknown> | undefined;
+    return row ? toPlanDoc(row) : null;
+  }
+
+  /**
+   * Keeps docs/designs/ readable outside the app: every version has its own
+   * file under versions/, and brief.md / spec.md hold the approved version.
+   */
+  private writePlanFile(doc: PlanDoc): PlanDoc {
+    const project = this.getProject(doc.projectId);
+    const markdown = renderMarkdown(doc, project.name);
+    mkdirSync(join(project.docsPath, 'versions'), { recursive: true });
+    writeFileSync(join(project.docsPath, 'versions', `${doc.kind}-v${doc.version}.md`), markdown);
+    if (doc.status === 'approved') writeFileSync(join(project.docsPath, `${doc.kind}.md`), markdown);
+    return doc;
+  }
+
   // ---- Agent tasks and spend (M3) ----------------------------------------
 
   createAgentTask(input: { runId: string | null; parentId: string | null; kind: AgentTaskKind; title: string; spec: AgentTaskSpec }): AgentTask {
@@ -587,6 +733,14 @@ export class Workspace {
     this.db
       .prepare('INSERT INTO spend (at, task_id, model, input_tokens, output_tokens, cost_usd) VALUES (?, ?, ?, ?, ?, ?)')
       .run(this.timestamp(), input.taskId, input.model, input.inputTokens, input.outputTokens, input.costUsd);
+  }
+
+  /** Totals recorded for one agent task. */
+  listSpend(filter: { taskId: string }): { inputTokens: number; outputTokens: number; costUsd: number } {
+    const row = this.db
+      .prepare('SELECT COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o, COALESCE(SUM(cost_usd), 0) AS c FROM spend WHERE task_id = ?')
+      .get(filter.taskId) as { i: number; o: number; c: number };
+    return { inputTokens: row.i, outputTokens: row.o, costUsd: row.c };
   }
 
   /** Spend in the current calendar month (UTC). */

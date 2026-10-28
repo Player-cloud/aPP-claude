@@ -5,14 +5,20 @@
 // The simulated adapter is used until a monthly budget and an API key are set
 // (DEC-017); the Claude adapter (claude.ts, DEC-018) implements the same interface.
 
+import { simulatedBrief, simulatedSpec } from '../planning.ts';
+
 export interface ToolRequest {
   tool: string;
   input: string;
 }
 
 export interface ModelRequest {
-  /** "plan" asks for a task plan as JSON; "work" asks for the task's output. */
-  purpose: 'plan' | 'work';
+  /**
+   * "plan" asks for a task plan as JSON; "work" for a task's output; "brief"
+   * and "spec" for planning documents as JSON (M5). The instructions for
+   * "brief" and "spec" are JSON written by planner.ts.
+   */
+  purpose: 'plan' | 'work' | 'brief' | 'spec';
   taskTitle: string;
   instructions: string;
   maxOutputTokens: number;
@@ -98,6 +104,9 @@ export class SimulatedModel implements ModelAdapter {
 export const SIMULATED_NOTE = '[Simulated model: no AI was called. This placeholder shows the workflow, not real work.]';
 
 function defaultScript(request: Omit<ModelRequest, 'signal'>): SimulatedStep {
+  // Planning drafts are templates built from the person's own words, with TODO placeholders.
+  if (request.purpose === 'brief') return { text: JSON.stringify(simulatedBrief(JSON.parse(request.instructions))) };
+  if (request.purpose === 'spec') return { text: JSON.stringify(simulatedSpec(JSON.parse(request.instructions))) };
   if (request.purpose === 'plan') {
     return { text: JSON.stringify({ subtasks: [{ title: request.taskTitle, goal: request.instructions, writes: [], dependsOn: [], risk: 'low', estTokens: 2000 }] }) };
   }

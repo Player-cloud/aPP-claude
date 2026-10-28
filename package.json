@@ -1,6 +1,6 @@
 {
   "name": "iterative-platform",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Installable AI development platform: Project Layer and Iterative Layer (core + CLI).",
   "type": "module",

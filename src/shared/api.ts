@@ -3,10 +3,14 @@
 
 import type { AgentTask, AuditEvent, Fact, Project, Settings, WorkflowRun } from '../core/workspace.ts';
 import type { ToolScan } from '../core/tools.ts';
+import type { PlanningOverview } from '../core/planner.ts';
+import type { PlanChange, PlanDoc } from '../core/planning.ts';
 import type { RunState, Workflow } from '../core/workflow.ts';
 
 export type { AgentTask, AuditEvent, Fact, Project, RunState, Settings, ToolScan, Workflow, WorkflowRun };
 export type { Finding, Severity } from '../core/conflicts.ts';
+export type { PlanningOverview, EgmStatus } from '../core/planner.ts';
+export type { Brief, BriefField, PlanChange, PlanDoc, Priority, Requirement, Spec } from '../core/planning.ts';
 export type { ToolEntry, ToolKind } from '../core/inventory.ts';
 
 export interface ApiError {
@@ -71,6 +75,15 @@ export interface IapApi {
   /** Stores the key encrypted by the OS. No method ever returns it. */
   setApiKey(input: { key: string }): Promise<Result<AgentStatus>>;
   clearApiKey(): Promise<Result<AgentStatus>>;
+  /** Planning (M5): concept brief and specification, versioned. */
+  getPlanning(projectId: string): Promise<Result<PlanningOverview>>;
+  draftBrief(projectId: string): Promise<Result<PlanDoc>>;
+  draftSpec(projectId: string): Promise<Result<PlanDoc>>;
+  savePlanDraft(input: { docId: string; content: unknown; changeNote?: string | null }): Promise<Result<PlanDoc>>;
+  approvePlanDoc(docId: string): Promise<Result<PlanDoc>>;
+  revisePlanDoc(docId: string): Promise<Result<PlanDoc>>;
+  discardPlanDraft(docId: string): Promise<Result<PlanDoc>>;
+  comparePlanDocs(input: { before: string; after: string }): Promise<Result<PlanChange[]>>;
 }
 
 export type IapMethod = keyof IapApi;
@@ -95,6 +108,14 @@ export const IAP_METHODS = [
   'agentStatus',
   'setApiKey',
   'clearApiKey',
+  'getPlanning',
+  'draftBrief',
+  'draftSpec',
+  'savePlanDraft',
+  'approvePlanDoc',
+  'revisePlanDoc',
+  'discardPlanDraft',
+  'comparePlanDocs',
 ] as const satisfies readonly IapMethod[];
 
 export const channel = (method: IapMethod) => `iap:${method}`;

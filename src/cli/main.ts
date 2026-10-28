@@ -3,6 +3,7 @@
 // call the same core API; the CLI is the first usable interface and the
 // end-to-end test harness for milestone M1.
 
+import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ClaudeModel } from '../core/agents/claude.ts';
 import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
+import { Planner } from '../core/planner.ts';
 import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
 
@@ -38,6 +40,16 @@ Claude Code tools (read-only: nothing is changed or removed)
 Main agent (simulated unless a monthly budget is set and ANTHROPIC_API_KEY holds your key)
   agent run [runId] --goal <text> [--title <text>]   Plan, delegate and reconcile a request (the run must be "running")
   agent list <runId>                                 Show the agent tasks for a run
+
+Planning (concept brief → specification, versioned under the project's docs/designs/)
+  plan show <projectId>                       Status of the brief and spec, and whether EGM is available
+  plan brief <projectId>                      Draft the concept brief from the project's idea and facts
+  plan spec <projectId>                       Draft the specification from the approved brief
+  plan edit <docId> --file <content.json> [--note <why>]   Replace a draft's content
+  plan approve <docId>                        Approve a draft (an approved version never changes)
+  plan revise <docId>                         Start the next version of an approved document
+  plan discard <docId>                        Discard a draft (kept in the history)
+  plan diff <earlierDocId> <laterDocId>       What changed between two versions
 
 Audit and health
   events [--project <id>] [--run <id>] [--limit <n>]
@@ -72,6 +84,8 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       confirm: { type: 'boolean', default: false },
       include: { type: 'string', multiple: true },
       goal: { type: 'string' },
+      file: { type: 'string' },
+      note: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -221,6 +235,59 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
         print(tasks, () => {
           if (!tasks.length) out('No agent tasks for this run.');
           for (const t of tasks) out(describeTask(t));
+        });
+        return 0;
+      }
+      case 'plan show': {
+        const o = new Planner(ws, new SimulatedModel()).overview(need(rest[0], 'projectId'));
+        print(o, () => {
+          for (const kind of ['brief', 'spec'] as const) {
+            const part = o[kind];
+            out(`${kind === 'brief' ? 'Concept brief' : 'Specification'}:`);
+            if (!part.versions.length) out('  not started');
+            for (const d of part.versions) out(`  ${d.id}  v${d.version}  ${d.status.padEnd(10)} drafted by ${d.source}${d.changeNote ? `  (${d.changeNote})` : ''}`);
+          }
+          if (o.specOutdated) out('The approved spec was drafted from an older brief: revise it.');
+          out(`EGM: ${o.egm.message}`);
+        });
+        return 0;
+      }
+      case 'plan brief':
+      case 'plan spec': {
+        const planner = new Planner(ws, agentModel(ws));
+        const doc = sub === 'brief' ? await planner.draftBrief(need(rest[0], 'projectId')) : await planner.draftSpec(need(rest[0], 'projectId'));
+        print(doc, () => out(`${doc.id}  v${doc.version} draft, drafted by ${doc.source}. Edit it with: iap plan edit ${doc.id} --file <content.json>`));
+        return 0;
+      }
+      case 'plan edit': {
+        if (!values.file) throw new ValidationError('--file is required.');
+        let content: unknown;
+        try {
+          content = JSON.parse(readFileSync(values.file, 'utf8'));
+        } catch (e) {
+          throw new ValidationError(`Could not read ${values.file} as JSON: ${(e as Error).message}`);
+        }
+        const doc = new Planner(ws, new SimulatedModel()).saveDraft(need(rest[0], 'docId'), { content, changeNote: values.note });
+        print(doc, () => out(`${doc.id}  v${doc.version} saved`));
+        return 0;
+      }
+      case 'plan approve':
+      case 'plan revise':
+      case 'plan discard': {
+        const planner = new Planner(ws, new SimulatedModel());
+        const id = need(rest[0], 'docId');
+        const doc = sub === 'approve' ? planner.approve(id) : sub === 'revise' ? planner.revise(id) : planner.discard(id);
+        print(doc, () => {
+          out(`${doc.id}  ${doc.kind} v${doc.version} ${doc.status}`);
+          for (const c of doc.changes ?? []) out(`  ${c.kind} ${c.target}: ${c.detail}`);
+        });
+        return 0;
+      }
+      case 'plan diff': {
+        const changes = new Planner(ws, new SimulatedModel()).compare(need(rest[0], 'earlierDocId'), need(rest[1], 'laterDocId'));
+        print(changes, () => {
+          if (!changes.length) out('No differences.');
+          for (const c of changes) out(`${c.kind.padEnd(8)} ${c.target}: ${c.detail}`);
         });
         return 0;
       }
