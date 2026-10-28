@@ -259,14 +259,17 @@ test('M9: references are archived, never deleted, and never change a spec', asyn
 
 test('M9 service: files come only from the picker, and previews only for known ids', async (t) => {
   const { home, cleanup } = tempHome();
-  t.after(cleanup);
   const incoming = join(home, 'in');
   mkdirSync(incoming);
   writeFileSync(join(incoming, 'a.png'), solidPng(6, 6, [7, 7, 7]));
   writeFileSync(join(incoming, 'b.txt'), 'hello');
   let picked: string[] = [];
   const service = new AppService(home, '0.0.0-test', { pickFiles: async () => picked });
-  t.after(() => service.close());
+  // Close before removing the folder: Windows cannot delete an open database.
+  t.after(() => {
+    service.close();
+    cleanup();
+  });
   const h = service.handlers;
 
   const none = await h.importReferences({});
