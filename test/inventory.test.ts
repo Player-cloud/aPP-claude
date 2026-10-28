@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempHome } from './helpers.ts';
 import { buildClaudeFixture, CANARIES } from './claude-fixture.ts';
@@ -167,4 +167,30 @@ test('M4: default locations per OS and CLAUDE_CONFIG_DIR', () => {
 test('M4: frontmatter parsing ignores everything after the header', () => {
   assert.deepEqual(parseFrontmatter('---\nname: "x"\ndescription: Does y\n---\nname: not-this'), { name: 'x', description: 'Does y' });
   assert.deepEqual(parseFrontmatter('no header'), {});
+});
+
+test('Windows run: plugins from an unknown marketplace and hooks registered by code are reported honestly', (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const configDir = join(home, '.claude');
+  const put = (path: string, content: object) => {
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, JSON.stringify(content));
+  };
+  const plugin = join(configDir, 'plugins', 'cache', 'kit', 'ws', '0.1.0');
+  put(join(configDir, 'settings.json'), { enabledPlugins: { 'helper@builtin': true, 'ws@kit': true, 'gone@kit': true } });
+  put(join(configDir, 'plugins', 'known_marketplaces.json'), { kit: { source: { source: 'directory', path: 'C:/kit' } } });
+  put(join(configDir, 'plugins', 'installed_plugins.json'), { version: 2, plugins: { 'ws@kit': [{ scope: 'user', installPath: plugin, version: '0.1.0' }] } });
+  put(join(plugin, '.claude-plugin', 'plugin.json'), { name: 'ws', version: '0.1.0' });
+  put(join(plugin, 'hooks', 'hooks.json'), { modules: ['./register.ts'] });
+
+  const scan = runToolScan({ configDir, userConfigFile: join(home, '.claude.json'), managedDirs: [], projectDirs: [] });
+  const missing = scan.findings.filter((f) => f.category === 'plugin_not_installed').map((f) => [f.severity, f.title]);
+  assert.deepEqual(missing, [
+    ['confirmed', 'Plugin gone@kit is enabled but not installed'],
+    ['potential', 'Plugin helper@builtin is enabled, but the scan cannot find where it comes from'],
+  ]);
+  assert.equal(scan.entries.filter((e) => e.kind === 'hook').length, 0);
+  assert.ok(scan.issues.some((i) => i.path.endsWith('hooks.json') && /registered by code \(\.\/register\.ts\)/.test(i.problem)));
+  assert.ok(scan.notChecked.some((n) => n.includes('Claude desktop app')));
 });

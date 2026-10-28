@@ -42,6 +42,8 @@ export const NOT_CHECKED = [
   'Duplicate MCP tool names: servers are not started during a read-only scan, so the tools they expose are unknown.',
   'Broken workflow dependencies: no platform workflow depends on these tools yet (from M5).',
   'Release-blocking conflicts: these need a workflow that depends on a tool, so none can be raised yet.',
+  'Skills and plugins the Claude desktop app supplies from its own data folder: only Claude Code\'s configuration folder and project folders are read.',
+  'Hooks that a plugin registers from code (a hooks.json "modules" list): the scan does not run code, so they are not listed.',
 ];
 
 const SEVERITY_ORDER: Record<Severity, number> = { release_blocking: 0, confirmed: 1, potential: 2, informational: 3 };
@@ -193,8 +195,23 @@ export function detectConflicts(inventory: Inventory): Finding[] {
   // Plugins.
   const plugins = entries.filter((e) => e.kind === 'plugin');
   const installedIds = new Set(plugins.map((e) => e.name));
+  const marketplaces = new Set(entries.filter((e) => e.kind === 'marketplace').map((e) => e.name));
   for (const ref of inventory.references.enabledPlugins) {
     if (!ref.enabled || installedIds.has(ref.id)) continue;
+    const market = ref.id.includes('@') ? ref.id.slice(ref.id.lastIndexOf('@') + 1) : null;
+    if (market && !marketplaces.has(market)) {
+      // Not in any known marketplace either: it may come with Claude Code itself (for example "@builtin"), which this scan cannot see.
+      add({
+        severity: 'potential',
+        category: 'plugin_not_installed',
+        title: `Plugin ${ref.id} is enabled, but the scan cannot find where it comes from`,
+        evidence: [`"${ref.id}": true in ${ref.source}`, `No record for ${ref.id} in installed_plugins.json`, `"${market}" is not in known_marketplaces.json`],
+        inference: `Claude Code may provide "${market}" plugins itself, outside the files this scan reads. If it does not, the plugin cannot load.`,
+        recommendation: `If Claude Code reports ${ref.id} as missing, reinstall it or remove the entry from ${ref.source}. Otherwise no change is needed.`,
+        entryIds: [],
+      });
+      continue;
+    }
     add({
       severity: 'confirmed',
       category: 'plugin_not_installed',
