@@ -284,13 +284,20 @@ test('M3: the main agent runs on a started run and is clearly labelled simulated
     await agent.getByRole('button', { name: 'Ask the agent' }).click();
     await agent.getByText('Succeeded', { exact: true }).first().waitFor();
     await agent.getByText('Single agent', { exact: true }).waitFor();
-    await agent.getByText('Import recipes from a CSV file').first().click();
+    await agent.locator('.agent-request > summary').first().click();
     await agent.getByText(/Simulated model: no AI was called/).waitFor();
     await shot(page, '11-agent-simulated-dark-1280');
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    assert.equal(await page.getByRole('radio', { name: 'No real calls' }).isChecked(), true);
-    await page.getByText('This version only includes a simulated model').waitFor();
+    const ai = page.getByRole('region', { name: /AI usage/ });
+    assert.equal(await ai.getByRole('radio', { name: 'No real calls' }).isChecked(), true);
+    await ai.getByText('Simulated', { exact: true }).waitFor();
+    // A budget without a key does not switch real calls on; the key field never shows a stored key.
+    await ai.getByRole('radio', { name: '$20 a month' }).check();
+    await ai.getByText('Needs API key', { exact: true }).waitFor();
+    await ai.getByText('of $20 used this month').waitFor();
+    assert.equal(await ai.getByLabel('Anthropic API key').getAttribute('type'), 'password');
+    await shot(page, '12-settings-ai-usage-dark-1280');
   } finally {
     await app.close();
   }

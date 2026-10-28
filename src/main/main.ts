@@ -2,12 +2,13 @@
 // filesystem and database access. The renderer talks to it through the narrow,
 // validated IPC surface in service.ts (FR-SEC-001, FR-SEC-005).
 
-import { app, BrowserWindow, ipcMain, Menu, session, shell, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveAppHome } from '../core/paths.ts';
 import { channel, IAP_METHODS } from '../shared/api.ts';
+import { EncryptedFileKeyStore } from './keystore.ts';
 import { AppService } from './service.ts';
 
 const RENDERER_HTML = join(__dirname, 'renderer', 'index.html');
@@ -88,7 +89,15 @@ if (smokeTest) {
     if (app.isPackaged) Menu.setApplicationMenu(null);
     // No camera, microphone, notifications etc. until a feature needs them.
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-    service = new AppService(home, app.getVersion());
+    service = new AppService(home, app.getVersion(), {
+      keyStore: new EncryptedFileKeyStore(join(home, 'secrets', 'anthropic-api-key.bin'), {
+        // On Linux without a keyring Electron falls back to a fixed password, which is not real protection.
+        isEncryptionAvailable: () =>
+          safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text'),
+        encryptString: (plain) => safeStorage.encryptString(plain),
+        decryptString: (encrypted) => safeStorage.decryptString(encrypted),
+      }),
+    });
     for (const method of IAP_METHODS) {
       ipcMain.handle(channel(method), (event, ...args: unknown[]) => {
         if (!fromOurUi(event)) return { ok: false, error: { code: 'FORBIDDEN', message: 'Unknown caller.' } };

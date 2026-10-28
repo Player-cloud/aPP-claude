@@ -11,7 +11,9 @@ import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '
 import { moveCorruptStateAside, Workspace, type Fact, type WorkflowRun } from '../core/workspace.ts';
 import { defaultScanRoots } from '../core/inventory.ts';
 import { runToolScan, type ToolScan } from '../core/tools.ts';
-import { SimulatedModel } from '../core/agents/model.ts';
+import Anthropic from '@anthropic-ai/sdk';
+import { ClaudeModel } from '../core/agents/claude.ts';
+import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
 import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
@@ -33,7 +35,7 @@ Claude Code tools (read-only: nothing is changed or removed)
   tools scan [--include <projectDir>]...   Inventory plugins, skills, commands, agents, hooks and MCP servers, and report conflicts
   tools show                               Show the latest scan
 
-Main agent (simulated model only: no AI is called and nothing is billed)
+Main agent (simulated unless a monthly budget is set and ANTHROPIC_API_KEY holds your key)
   agent run [runId] --goal <text> [--title <text>]   Plan, delegate and reconcile a request (the run must be "running")
   agent list <runId>                                 Show the agent tasks for a run
 
@@ -209,7 +211,7 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       }
       case 'agent run': {
         const goal = values.goal ?? '';
-        const root = await new Orchestrator(ws, new SimulatedModel()).run({ runId: rest[0] ?? null, title: values.title ?? goal.slice(0, 80), goal });
+        const root = await new Orchestrator(ws, agentModel(ws)).run({ runId: rest[0] ?? null, title: values.title ?? goal.slice(0, 80), goal });
         const tasks = [root, ...ws.listAgentTasks({ parentId: root.id })];
         print(tasks, () => tasks.forEach((t) => out(describeTask(t))));
         return root.status === 'succeeded' ? 0 : 4;
@@ -254,6 +256,14 @@ function describeRun(r: WorkflowRun): string {
   return r.state === 'blocked'
     ? `${base}\n      BLOCKED (from ${r.blockedFrom}): ${r.blockerReason}\n      To resolve: ${r.blockerResolution}`
     : base;
+}
+
+/** Same rule as the app: real calls need a monthly budget and a key. The CLI reads the key from the environment. */
+function agentModel(ws: Workspace): ModelAdapter {
+  if (ws.monthlyBudgetUsd() === null) return new SimulatedModel();
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new ValidationError('A monthly budget is set, so real calls are on, but ANTHROPIC_API_KEY is not set.');
+  return new ClaudeModel(new Anthropic({ apiKey, maxRetries: 1 }));
 }
 
 function describeTask(t: AgentTask): string {

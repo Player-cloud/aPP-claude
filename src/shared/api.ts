@@ -37,6 +37,16 @@ export interface Health {
   events: number;
 }
 
+export interface AgentStatus {
+  /** `simulated` without a budget; `needs_key` with a budget but no key; `claude` when real calls are on. */
+  mode: 'simulated' | 'claude' | 'needs_key';
+  model: string;
+  budgetUsd: number | null;
+  spentUsd: number;
+  keyStored: boolean;
+  keyStorageAvailable: boolean;
+}
+
 /** Every method the preload bridge exposes as `window.iap`. */
 export interface IapApi {
   status(): Promise<Result<AppStatus>>;
@@ -57,6 +67,10 @@ export interface IapApi {
   /** Main agent on a running run (M3). Uses the simulated model only: no AI is called and nothing is billed. */
   runAgent(input: { runId: string; goal: string }): Promise<Result<AgentTask>>;
   listAgentTasks(runId: string): Promise<Result<AgentTask[]>>;
+  agentStatus(): Promise<Result<AgentStatus>>;
+  /** Stores the key encrypted by the OS. No method ever returns it. */
+  setApiKey(input: { key: string }): Promise<Result<AgentStatus>>;
+  clearApiKey(): Promise<Result<AgentStatus>>;
 }
 
 export type IapMethod = keyof IapApi;
@@ -78,6 +92,9 @@ export const IAP_METHODS = [
   'getToolScan',
   'runAgent',
   'listAgentTasks',
+  'agentStatus',
+  'setApiKey',
+  'clearApiKey',
 ] as const satisfies readonly IapMethod[];
 
 export const channel = (method: IapMethod) => `iap:${method}`;

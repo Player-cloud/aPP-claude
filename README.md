@@ -13,10 +13,10 @@ Implemented and tested:
 
 - A Windows desktop app (Electron) with project creation, workflow runs with explicit states and blockers, an activity log, dark/light/system themes, a frosted-glass look, and a recovery screen for a damaged database.
 - A **read-only inventory of your Claude Code tools** (plugins, skills, commands, subagents, hooks, MCP servers) with conflict detection, on the Tools screen and in `iap tools scan`.
-- A **main agent** on running workflow runs that plans, picks a single agent, subagents or a team, and checks every result before a request counts as done. It uses a **simulated model only**: no AI is called and nothing is billed until a monthly budget is chosen and a real model is connected.
+- A **main agent** on running workflow runs that plans, picks a single agent, subagents or a team, and checks every result before a request counts as done. It uses a free **simulated model** until you choose a monthly budget and add an Anthropic API key in Settings → AI usage; then it calls Claude and stops before any call that would go over the budget.
 - Under both: the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI.
 
-Not yet built: real model calls, tool execution by agents, integrations, safe cleanup of tools, and the rest of the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
+Not yet built: tool execution by agents, integrations, safe cleanup of tools, and the rest of the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
 
 ```bash
 npm install
@@ -35,7 +35,7 @@ npm run iap -- run move <runId> planned
 npm run iap -- run move <runId> blocked --reason "EGM not installed" --resolution "Install EGM or use the native planner"
 npm run iap -- events --project <projectId>
 npm run iap -- tools scan [--include <projectDir>]   # read-only; changes nothing
-npm run iap -- agent run <runId> --goal "..."      # simulated model only
+npm run iap -- agent run <runId> --goal "..."      # simulated unless a budget is set and ANTHROPIC_API_KEY is set
 npm run iap -- doctor
 ```
 

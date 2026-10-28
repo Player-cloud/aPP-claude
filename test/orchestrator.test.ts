@@ -217,7 +217,7 @@ test('M3: secrets in a goal are redacted before storage', async (t) => {
   const ws = setup(t);
   const root = await new Orchestrator(ws, new SimulatedModel()).run({ runId: null, title: 'X', goal: 'Use key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123' });
   assert.doesNotMatch(JSON.stringify(ws.getAgentTask(root.id)), /abcdefghijklmnop/);
-  assert.equal(ws.getAgentTask(root.id).spec.maxOutputTokens, 4_000);
+  assert.equal(ws.getAgentTask(root.id).spec.maxOutputTokens, 8_000);
 });
 
 test('M3: plans are validated field by field', () => {

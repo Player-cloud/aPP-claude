@@ -8,6 +8,7 @@
 // its output contract.
 
 import { ValidationError } from '../errors.ts';
+import { redactString } from '../redact.ts';
 import type { AgentTask, AgentTaskSpec, AgentTaskStatus, Workspace } from '../workspace.ts';
 import type { ModelAdapter, ModelRequest, ModelResponse } from './model.ts';
 import { chooseStrategy, orderSubtasks, type PlannedSubtask, type Risk } from './strategy.ts';
@@ -21,7 +22,16 @@ export interface AgentRequest {
   timeoutMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
+// Thinking counts as output, so the allowance must leave room for it.
+const MAX_OUTPUT_TOKENS = 8_000;
+
+/**
+ * Estimated cost of billable calls in flight, per workspace. Parallel calls
+ * (a team, or two requests at once) each reserve their estimate, so together
+ * they can never pass the budget check for more than the budget allows.
+ */
+const inFlight = new WeakMap<Workspace, number>();
 const MAX_SUBTASKS = 10;
 const TEAM_CONCURRENCY = 3;
 
@@ -51,7 +61,7 @@ export class Orchestrator {
       goal,
       allowedTools: request.allowedTools ?? [],
       timeoutMs: request.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      maxOutputTokens: 4_000,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
       output: { kind: 'json', requiredKeys: ['subtasks'] },
     };
     const root = this.ws.createAgentTask({ runId: request.runId, parentId: null, kind: 'request', title: request.title, spec: base });
@@ -174,20 +184,24 @@ export class Orchestrator {
   /** One model call under budget, timeout and permission limits. */
   private async call(task: AgentTask, purpose: ModelRequest['purpose'], instructions: string): Promise<CallOutcome> {
     const request = { purpose, taskTitle: task.title, instructions, maxOutputTokens: task.spec.maxOutputTokens };
+    let reserved = 0;
     if (this.model.billable) {
       const { cap, remaining } = this.budgetState();
       const estimate = this.model.estimateCostUsd(request);
       if (cap === null) {
         return { ok: false, status: 'blocked', failure: 'Real model calls are off: no monthly budget is set.', resolution: 'Choose a monthly budget in Settings to allow real calls.' };
       }
-      if (estimate > remaining!) {
+      const available = remaining! - (inFlight.get(this.ws) ?? 0);
+      if (estimate > available) {
         return {
           ok: false,
           status: 'blocked',
-          failure: `This call (about $${estimate.toFixed(2)}) would exceed the monthly budget ($${remaining!.toFixed(2)} of $${cap} left).`,
+          failure: `This call (up to $${estimate.toFixed(2)}) would exceed the monthly budget ($${Math.max(0, available).toFixed(2)} of $${cap} left).`,
           resolution: 'Raise the monthly budget in Settings, or wait until next month.',
         };
       }
+      reserved = estimate;
+      inFlight.set(this.ws, (inFlight.get(this.ws) ?? 0) + reserved);
     }
 
     const controller = new AbortController();
@@ -201,11 +215,19 @@ export class Orchestrator {
       response = await this.model.call({ ...request, signal: controller.signal });
     } catch (e) {
       if (timedOut) {
+        // An abandoned call may still be billed, so its estimate is counted as spent.
+        if (reserved) this.ws.recordSpend({ taskId: task.id, model: this.model.id, inputTokens: 0, outputTokens: 0, costUsd: reserved });
         return { ok: false, status: 'timed_out', failure: `No answer within ${Math.round(task.spec.timeoutMs / 1000)} s.`, resolution: 'Retry, or split the task into smaller parts.' };
       }
-      return { ok: false, status: 'failed', failure: `The model call failed: ${(e as Error).message}`, resolution: 'Retry the request. If it keeps failing, check the model connection.' };
+      return {
+        ok: false,
+        status: 'failed',
+        failure: `The model call failed: ${redactString((e as Error).message)}`,
+        resolution: 'Retry the request. If it keeps failing, check the API key and connection in Settings.',
+      };
     } finally {
       clearTimeout(timer);
+      if (reserved) inFlight.set(this.ws, Math.max(0, (inFlight.get(this.ws) ?? 0) - reserved));
     }
 
     this.ws.recordSpend({ taskId: task.id, model: this.model.id, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens, costUsd: response.costUsd });
@@ -216,6 +238,9 @@ export class Orchestrator {
       costUsd: current.costUsd + response.costUsd,
     });
 
+    if (response.problem) {
+      return { ok: false, status: 'failed', failure: response.problem, resolution: 'Retry, or rephrase the goal more narrowly.' };
+    }
     const denied = response.toolRequests.filter((r) => !task.spec.allowedTools.includes(r.tool));
     if (denied.length) {
       return {

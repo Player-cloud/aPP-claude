@@ -39,6 +39,7 @@ function ToolFilters({ scan, filter, onFilter }: { scan: ToolScan | null; filter
 
 const SETTINGS_GROUPS = [
   { icon: 'palette', label: 'Appearance', target: 'appearance-title' },
+  { icon: 'sparkle', label: 'AI usage', target: 'ai-title' },
   { icon: 'database', label: 'Data', target: 'data-title' },
 ] as const;
 

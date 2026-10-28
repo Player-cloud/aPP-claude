@@ -1294,8 +1294,13 @@ fieldset.field {
   flex: 1;
   min-height: 0;
 }
+.agent-request > summary {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
 .agent-request .finding-title {
-  min-width: 0;
+  flex: 1 1 8rem;
+  min-width: 6rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1322,4 +1327,29 @@ fieldset.field {
   font-size: var(--text-xs);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Settings → AI usage */
+#ai-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.spend {
+  margin: 0 0 var(--space-2);
+}
+.key-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.key-row .input {
+  flex: 1;
+  min-width: 0;
+}
+.key-row span {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
