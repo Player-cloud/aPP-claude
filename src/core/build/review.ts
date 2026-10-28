@@ -3,11 +3,11 @@
 // what actually happened instead of what the agent claims. Each finding is a
 // risk for the person to judge; none of them is hidden.
 
-import type { CheckResult } from './checks.ts';
+import { ranNoTests, type CheckResult } from './checks.ts';
 import type { ChangedFile } from './git.ts';
 
 export interface Risk {
-  kind: 'regression' | 'still_failing' | 'not_run' | 'not_reproduced' | 'unrelated_file' | 'weakened_test' | 'deleted_test' | 'no_test' | 'no_change' | 'truncated';
+  kind: 'regression' | 'still_failing' | 'not_run' | 'not_reproduced' | 'unrelated_file' | 'weakened_test' | 'deleted_test' | 'no_test' | 'no_change' | 'truncated' | 'no_tests_ran';
   detail: string;
 }
 
@@ -57,6 +57,7 @@ export function reviewChange(input: {
     if (r.status === 'not_run') risks.push({ kind: 'not_run', detail: `Check "${r.checkId}" did not run.` });
     else if (r.status !== 'passed' && before?.status === 'passed') risks.push({ kind: 'regression', detail: `Check "${r.checkId}" passed before the change and ${r.status === 'failed' ? 'fails' : r.status.replace('_', ' ')} now.` });
     else if (r.status !== 'passed') risks.push({ kind: 'still_failing', detail: `Check "${r.checkId}" ${r.status === 'failed' ? 'fails' : r.status.replace('_', ' ')}.` });
+    else if (ranNoTests(r.output)) risks.push({ kind: 'no_tests_ran', detail: `Check "${r.checkId}" passed but found no tests, so it proves nothing about the change.` });
   }
   if (input.kind === 'bugfix' && input.baseline.length && input.baseline.every((b) => b.status === 'passed')) {
     risks.push({ kind: 'not_reproduced', detail: 'Every check passed before the fix, so the bug was not reproduced by a check.' });

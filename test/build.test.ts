@@ -13,7 +13,7 @@ import { ValidationError } from '../src/core/errors.ts';
 import { SimulatedModel, type LoopTurn, type SimulatedStep } from '../src/core/agents/model.ts';
 import { Builder } from '../src/core/build/builder.ts';
 import { runBuildAgent } from '../src/core/build/agent.ts';
-import { checkEnv, normalizeChecks, runCheck } from '../src/core/build/checks.ts';
+import { checkEnv, normalizeChecks, ranNoTests, runCheck } from '../src/core/build/checks.ts';
 import { confine, ToolInputError, writeFile } from '../src/core/build/files.ts';
 import { parseChanges } from '../src/core/build/git.ts';
 import { reviewChange } from '../src/core/build/review.ts';
@@ -123,6 +123,12 @@ test('M6: the review flags regressions, weakened or deleted tests, unrelated fil
   assert.deepEqual(risks.map((r) => r.kind).sort(), ['deleted_test', 'regression', 'still_failing', 'unrelated_file', 'weakened_test']);
   const fix = reviewChange({ kind: 'bugfix', files: [{ path: 'src/a.py', status: 'modified', added: 1, removed: 1 }], patch: '', truncated: false, components: [], baseline: [pass('unit')], final: [pass('unit')] });
   assert.deepEqual(fix.map((r) => r.kind), ['not_reproduced', 'no_test']);
+  // Found on a real Windows run: `node --test` in an empty repository passes with no tests at all.
+  const empty = { ...pass('tests'), output: 'ℹ tests 0\nℹ suites 0\nℹ pass 0\nℹ fail 0\n' };
+  const none = reviewChange({ kind: 'feature', files: [{ path: 'src/a.mjs', status: 'added', added: 3, removed: 0 }, { path: 'test/a.test.mjs', status: 'added', added: 3, removed: 0 }], patch: '', truncated: false, components: [], baseline: [empty], final: [empty] });
+  assert.deepEqual(none.map((r) => r.kind), ['no_tests_ran']);
+  for (const out of ['# tests 0', 'No tests found, exiting with code 0', 'No test files found, exiting with code 0', '  0 passing (2ms)']) assert.ok(ranNoTests(out), out);
+  for (const out of ['ℹ tests 6\nℹ pass 6', '# tests 10', '12 passing (5ms)', '']) assert.ok(!ranNoTests(out), out);
   assert.deepEqual(parseChanges('M\0src/a.ts\0R100\0old.ts\0new.ts\0A\0b.ts\0', '1\t2\tsrc/a.ts\0' + '0\t0\t\0old.ts\0new.ts\0' + '5\t0\tb.ts\0'), [
     { path: 'src/a.ts', status: 'modified', added: 1, removed: 2 },
     { path: 'new.ts', status: 'renamed', added: 0, removed: 0 },
@@ -247,6 +253,10 @@ test('M6-AC2 (feature): needs an approved spec, known requirement IDs and at lea
   assert.throws(() => builder.create(project.id, { ...base, requirementIds: ['REQ-001'], components: ['../x'] }), /inside the repository/);
   const build = builder.create(project.id, { ...base, requirementIds: ['REQ-001'], components: ['./src/'] });
   assert.deepEqual(build.components, ['src/']);
+  // Several folders on one line, as people write them, are separate components.
+  const both = builder.create(project.id, { ...base, requirementIds: ['REQ-001'], components: ['src/ and test/', 'lib, docs/'] });
+  assert.deepEqual(both.components, ['src/', 'test/', 'lib', 'docs/']);
+  builder.abandon(both.id, null);
   await assert.rejects(builder.start(build.id), /Choose the git repository/);
   await builder.setRepo(project.id, repo);
   await builder.start(build.id);
