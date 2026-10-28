@@ -238,11 +238,15 @@ test('M12: approval installs nothing; installation is seen by a later check; ver
   assert.equal(monitor.reopen(plugin.id).stage, 'recommended');
 
   // Records are kept: no deletes, and a verified item cannot change.
+  // Closed before the folder is removed: Windows cannot delete an open database (EBUSY).
   const db = new DatabaseSync(appPaths(ws.paths.home).db);
-  t.after(() => db.close());
-  assert.throws(() => db.exec(`DELETE FROM updates WHERE id = '${plugin.id}'`), /never deleted/);
-  assert.throws(() => db.exec(`UPDATE updates SET stage = 'recommended' WHERE id = '${cc.id}'`), /cannot change/);
-  assert.throws(() => db.exec(`UPDATE update_checks SET created = '[]'`), /cannot change/);
+  try {
+    assert.throws(() => db.exec(`DELETE FROM updates WHERE id = '${plugin.id}'`), /never deleted/);
+    assert.throws(() => db.exec(`UPDATE updates SET stage = 'recommended' WHERE id = '${cc.id}'`), /cannot change/);
+    assert.throws(() => db.exec(`UPDATE update_checks SET created = '[]'`), /cannot change/);
+  } finally {
+    db.close();
+  }
 });
 
 test('M12: verification fails honestly when the version is not in place', async (t) => {
