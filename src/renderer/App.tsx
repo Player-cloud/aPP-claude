@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AppStatus, Project, Settings, ToolScan } from '../shared/api.ts';
+import type { AgentStatus, AppStatus, Project, RunWithNext, Settings, ToolScan } from '../shared/api.ts';
 import { call, iap } from './api.ts';
+import { CommandPalette } from './CommandPalette.tsx';
 import { Icon } from './icons.tsx';
 import { SidePanel } from './SidePanel.tsx';
+import { needsPerson } from './ui.tsx';
 import { ActivityView } from './views/ActivityView.tsx';
+import { HomeView } from './views/HomeView.tsx';
 import { IterativeView } from './views/IterativeView.tsx';
 import { ProjectDetail } from './views/ProjectDetail.tsx';
 import { ProjectsView } from './views/ProjectsView.tsx';
@@ -11,13 +14,14 @@ import { RecoveryView } from './views/RecoveryView.tsx';
 import { SettingsView } from './views/SettingsView.tsx';
 import { ToolsView, type ToolFilter } from './views/ToolsView.tsx';
 
-export type Section = 'projects' | 'activity' | 'tools' | 'iterative' | 'settings';
+export type Section = 'home' | 'projects' | 'activity' | 'tools' | 'iterative' | 'settings';
 
-type NavIcon = 'projects' | 'activity' | 'tools' | 'iterate' | 'settings';
+type NavIcon = 'home' | 'projects' | 'activity' | 'tools' | 'iterate' | 'settings';
 
 // Groups are separated by a divider in the rail: Project Layer, then Iterative Layer.
 const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
   [
+    { id: 'home', label: 'Home', icon: 'home' },
     { id: 'projects', label: 'Projects', icon: 'projects' },
     { id: 'activity', label: 'Activity', icon: 'activity' },
   ],
@@ -27,7 +31,8 @@ const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
   ],
 ];
 
-const SECTION_LABEL: Record<Section, string> = {
+export const SECTION_LABEL: Record<Section, string> = {
+  home: 'Home',
   projects: 'Projects',
   activity: 'Activity',
   tools: 'Tools',
@@ -56,7 +61,7 @@ function RailButton({ label, icon, tag, current, onClick }: { label: string; ico
 export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
-  const [section, setSection] = useState<Section>('projects');
+  const [section, setSection] = useState<Section>('home');
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -68,6 +73,10 @@ export function App() {
   const [toolScan, setToolScan] = useState<ToolScan | null | undefined>(undefined);
   const [toolError, setToolError] = useState<string | null>(null);
   const [toolFilter, setToolFilter] = useState<ToolFilter>('all');
+  // Runs of every project, for the top bar's run status and the Command Centre.
+  const [runs, setRuns] = useState<Record<string, RunWithNext[]> | null>(null);
+  const [agent, setAgent] = useState<AgentStatus | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -95,8 +104,36 @@ export function App() {
     void refreshStatus();
   }, [refreshStatus]);
 
+  const loadRuns = useCallback(async (list: Project[]) => {
+    try {
+      const all = await Promise.all(list.map(async (p) => [p.id, await call(iap().listRuns(p.id))] as const));
+      setRuns(Object.fromEntries(all));
+    } catch {
+      setRuns(null);
+    }
+  }, []);
+
+  // Refreshed on every navigation, so the run status never lags behind a change made on another screen.
   useEffect(() => {
-    if (section !== 'tools' || toolScan !== undefined) return;
+    if (projects) void loadRuns(projects);
+    call(iap().agentStatus())
+      .then(setAgent)
+      .catch(() => setAgent(null));
+  }, [projects, section, projectId, loadRuns]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    if ((section !== 'tools' && section !== 'home') || toolScan !== undefined) return;
     call(iap().getToolScan())
       .then(setToolScan)
       .catch((e: Error) => setToolError(e.message));
@@ -151,6 +188,10 @@ export function App() {
     go('projects');
     setCreating({ idea });
   };
+  const allRuns = runs ? Object.values(runs).flat() : [];
+  const waiting = allRuns.filter((r) => needsPerson(r.state)).length;
+  const working = allRuns.filter((r) => r.state === 'running' || r.state === 'verification').length;
+  const sideSection: Section = section === 'home' ? 'projects' : section;
 
   return (
     <div className="shell">
@@ -173,9 +214,9 @@ export function App() {
       </nav>
 
       <SidePanel
-        section={section}
+        section={sideSection}
         projects={projects}
-        selected={section === 'activity' ? activityProject : projectId}
+        selected={section === 'activity' ? activityProject : section === 'home' ? '' : projectId}
         onSelect={(p) => {
           if (section === 'activity') setActivityProject(p?.id ?? null);
           else if (p) openProject(p.id, p.name);
@@ -188,7 +229,7 @@ export function App() {
       />
 
       <div className="main">
-        <header className="topbar">
+        <header className="topbar glass">
           <ol className="breadcrumbs" aria-label="Breadcrumb">
             <li>
               {projectId ? (
@@ -201,11 +242,40 @@ export function App() {
             </li>
             {projectId && <li aria-current="page">{projectName ?? 'Project'}</li>}
           </ol>
+          <button type="button" className="topbar-search" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Control+K">
+            <Icon name="search" size={16} />
+            <span className="topbar-search-text">Search projects or go to…</span>
+            <kbd>Ctrl K</kbd>
+          </button>
           <div className="topbar-actions">
-            <span className="pill">Iterative Platform v{status.version}</span>
+            {runs && (waiting > 0 || working > 0) && (
+              <button type="button" className="status-pill" data-tone={waiting > 0 ? 'warn' : 'live'} onClick={() => go('home')}>
+                <span className="status-dot" aria-hidden="true" />
+                {waiting > 0 ? `${waiting} ${waiting === 1 ? 'run needs' : 'runs need'} you` : `${working} ${working === 1 ? 'run' : 'runs'} working`}
+              </button>
+            )}
+            {agent && (
+              <span className="status-pill" data-tone={agent.mode === 'claude' ? 'ok' : 'neutral'} title={agent.mode === 'claude' ? agent.model : undefined}>
+                <span className="status-dot" aria-hidden="true" />
+                {agent.mode === 'claude' ? 'Model: Claude' : agent.mode === 'needs_key' ? 'Model: needs API key' : 'Model: simulated'}
+              </span>
+            )}
+            <span className="pill topbar-version">v{status.version}</span>
           </div>
         </header>
         <main className="content" id="main" tabIndex={-1}>
+          {section === 'home' && (
+            <HomeView
+              projects={projects}
+              projectsError={projectsError}
+              runs={runs}
+              toolScan={toolScan}
+              agent={agent}
+              onCreate={() => startCreating()}
+              onOpen={openProject}
+              onGo={go}
+            />
+          )}
           {section === 'projects' && !projectId && (
             <ProjectsView
               projects={projects}
@@ -229,6 +299,14 @@ export function App() {
           {section === 'settings' && settings && <SettingsView status={status} settings={settings} onSettings={setSettings} />}
         </main>
       </div>
+      <CommandPalette
+        open={paletteOpen}
+        projects={projects ?? []}
+        onClose={() => setPaletteOpen(false)}
+        onGo={go}
+        onOpen={openProject}
+        onCreate={() => startCreating()}
+      />
     </div>
   );
 }

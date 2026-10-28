@@ -105,7 +105,7 @@ export function SidePanel({
   toolFilter: ToolFilter;
   onToolFilter: (f: ToolFilter) => void;
 }) {
-  const title = { projects: 'Projects', activity: 'Activity', tools: 'Tools', iterative: 'Improvements', settings: 'Settings' }[section];
+  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', tools: 'Tools', iterative: 'Improvements', settings: 'Settings' }[section];
   return (
     <aside className="side" aria-label={`${title} panel`}>
       <div className="side-head">

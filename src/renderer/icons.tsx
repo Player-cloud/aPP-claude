@@ -11,6 +11,10 @@ const paths: Record<string, ReactElement> = {
       <path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" />
     </>
   ),
+  home: <path d="M4 10.5L12 4l8 6.5M6 9.5V19a1 1 0 0 0 1 1h3.5v-5h3v5H17a1 1 0 0 0 1-1V9.5" />,
+  board: <path d="M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z" />,
+  check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  close: <path d="M6 6l12 12M18 6L6 18" />,
   plus: <path d="M12 5v14M5 12h14" />,
   logo: <path d="M5 5l6 7-6 7M13 5l6 7-6 7" />,
   back: <path d="M15 5l-7 7 7 7" />,
