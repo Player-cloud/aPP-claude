@@ -5,13 +5,14 @@ import type { Project } from '../shared/api.ts';
 import { SECTION_LABEL, type Section } from './App.tsx';
 import { Icon } from './icons.tsx';
 
-type Item = { id: string; label: string; hint: string; icon: 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'radar' | 'iterate' | 'shield' | 'settings' | 'plus'; run: () => void };
+type Item = { id: string; label: string; hint: string; icon: 'home' | 'projects' | 'activity' | 'studio' | 'bookmark' | 'tools' | 'radar' | 'iterate' | 'shield' | 'settings' | 'plus'; run: () => void };
 
 const DESTINATIONS: { id: Section; icon: Item['icon'] }[] = [
   { id: 'home', icon: 'home' },
   { id: 'projects', icon: 'projects' },
   { id: 'activity', icon: 'activity' },
   { id: 'studio', icon: 'studio' },
+  { id: 'preferences', icon: 'bookmark' },
   { id: 'tools', icon: 'tools' },
   { id: 'updates', icon: 'radar' },
   { id: 'iterative', icon: 'iterate' },

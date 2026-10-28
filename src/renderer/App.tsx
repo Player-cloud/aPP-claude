@@ -11,15 +11,16 @@ import { IterativeView, type ImprovementFilter } from './views/IterativeView.tsx
 import { LearningStudioView, type StudioFilter } from './views/LearningStudioView.tsx';
 import { ProjectDetail } from './views/ProjectDetail.tsx';
 import { PlatformView } from './views/PlatformView.tsx';
+import { PreferencesView, type PreferencesTab } from './views/PreferencesView.tsx';
 import { ProjectsView } from './views/ProjectsView.tsx';
 import { RecoveryView } from './views/RecoveryView.tsx';
 import { SettingsView } from './views/SettingsView.tsx';
 import { ToolsView, type ToolFilter } from './views/ToolsView.tsx';
 import { UpdatesView, type UpdateFilter } from './views/UpdatesView.tsx';
 
-export type Section = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'updates' | 'iterative' | 'platform' | 'settings';
+export type Section = 'home' | 'projects' | 'activity' | 'studio' | 'preferences' | 'tools' | 'updates' | 'iterative' | 'platform' | 'settings';
 
-type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'radar' | 'iterate' | 'shield' | 'settings';
+type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'bookmark' | 'tools' | 'radar' | 'iterate' | 'shield' | 'settings';
 
 // Groups are separated by a divider in the rail: Project Layer, then Iterative Layer.
 const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
@@ -28,6 +29,7 @@ const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
     { id: 'projects', label: 'Projects', icon: 'projects' },
     { id: 'activity', label: 'Activity', icon: 'activity' },
     { id: 'studio', label: 'Learning Studio', icon: 'studio' },
+    { id: 'preferences', label: 'Preferences', icon: 'bookmark' },
   ],
   [
     { id: 'tools', label: 'Tools', icon: 'tools' },
@@ -42,6 +44,7 @@ export const SECTION_LABEL: Record<Section, string> = {
   projects: 'Projects',
   activity: 'Activity',
   studio: 'Learning Studio',
+  preferences: 'Preferences',
   tools: 'Tools',
   updates: 'Updates',
   iterative: 'Improvements',
@@ -85,6 +88,7 @@ export function App() {
   const [studioFilter, setStudioFilter] = useState<StudioFilter>('all');
   const [improvementFilter, setImprovementFilter] = useState<ImprovementFilter>('all');
   const [updateFilter, setUpdateFilter] = useState<UpdateFilter>('all');
+  const [prefTab, setPrefTab] = useState<PreferencesTab>('preferences');
   // Runs of every project, for the top bar's run status and the Command Centre.
   const [runs, setRuns] = useState<Record<string, RunWithNext[]> | null>(null);
   const [agent, setAgent] = useState<AgentStatus | null>(null);
@@ -245,6 +249,8 @@ export function App() {
         onImprovementFilter={setImprovementFilter}
         updateFilter={updateFilter}
         onUpdateFilter={setUpdateFilter}
+        prefTab={prefTab}
+        onPrefTab={setPrefTab}
       />
 
       <div className="main">
@@ -316,7 +322,17 @@ export function App() {
           {section === 'studio' && <LearningStudioView projects={projects ?? []} filter={studioFilter} onFilter={setStudioFilter} />}
           {section === 'tools' && <ToolsView scan={toolScan} error={toolError} filter={toolFilter} onScan={scanTools} onRefresh={async () => setToolScan(await call(iap().getToolScan()))} />}
           {section === 'updates' && <UpdatesView filter={updateFilter} onFilter={setUpdateFilter} />}
-          {section === 'iterative' && <IterativeView filter={improvementFilter} onFilter={setImprovementFilter} />}
+          {section === 'iterative' && (
+            <IterativeView
+              filter={improvementFilter}
+              onFilter={setImprovementFilter}
+              onOpenPreferences={() => {
+                go('preferences');
+                setPrefTab('preferences');
+              }}
+            />
+          )}
+          {section === 'preferences' && <PreferencesView projects={projects ?? []} tab={prefTab} onTab={setPrefTab} />}
           {section === 'platform' && (
             <PlatformView
               onOpenProject={(id, name) => {

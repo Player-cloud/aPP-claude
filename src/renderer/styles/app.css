@@ -2567,3 +2567,27 @@ button.status-pill {
   display: block;
   font-size: var(--text-xs);
 }
+
+/* Preferences and the Vault (M14) */
+.page-tabs {
+  margin: 0 0 var(--space-4);
+}
+.pref-text {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+.pref-matches {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+.pref-match {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.pref-match p {
+  margin: 0 0 var(--space-2);
+  overflow-wrap: anywhere;
+}

@@ -27,9 +27,11 @@ import type { Evidence, Improvement, SelfAssessmentRecord } from './iterate/back
 import type { SelfAssessmentReport } from './iterate/assess.ts';
 import type { CleanupPlan } from './cleanup/cleanup.ts';
 import type { SourceResult, UpdateCheck, UpdateItem } from './updates/updates.ts';
+import type { Preference } from './learn/preferences.ts';
+import type { SessionSummary, VaultNote } from './learn/vault.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -590,6 +592,55 @@ const MIGRATIONS: Record<number, string> = {
       BEGIN SELECT RAISE(ABORT, 'a measurement cannot change'); END;
     CREATE TRIGGER improvement_measurements_no_delete BEFORE DELETE ON improvement_measurements
       BEGIN SELECT RAISE(ABORT, 'measurements are never deleted'); END;
+  `,
+  15: `
+    -- M14 learning: preferences the person approved, and the Vault of notes and saved
+    -- session summaries. Neither is ever deleted; a removed preference and an archived
+    -- note stay in the history. Where a preference came from cannot change.
+    CREATE TABLE preferences (
+      id TEXT PRIMARY KEY,
+      number INTEGER NOT NULL UNIQUE,
+      scope TEXT NOT NULL CHECK (scope IN ('global','project')),
+      project_id TEXT REFERENCES projects(id),
+      text TEXT NOT NULL,
+      proposed_text TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('proposed','active','rejected','removed')),
+      source TEXT NOT NULL,
+      resolutions TEXT NOT NULL DEFAULT '[]',
+      approver TEXT,
+      approved_at TEXT,
+      reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK ((scope = 'project') = (project_id IS NOT NULL))
+    );
+    CREATE INDEX preferences_status ON preferences(status);
+    CREATE TRIGGER preferences_no_delete BEFORE DELETE ON preferences
+      BEGIN SELECT RAISE(ABORT, 'preferences are never deleted'); END;
+    CREATE TRIGGER preferences_final BEFORE UPDATE ON preferences
+      WHEN OLD.status IN ('rejected','removed') OR NEW.source IS NOT OLD.source OR NEW.proposed_text IS NOT OLD.proposed_text
+        OR (OLD.status = 'active' AND NEW.status NOT IN ('active','removed'))
+      BEGIN SELECT RAISE(ABORT, 'a finished preference cannot change'); END;
+    CREATE TABLE vault_notes (
+      id TEXT PRIMARY KEY,
+      number INTEGER NOT NULL UNIQUE,
+      kind TEXT NOT NULL CHECK (kind IN ('session','note','lesson')),
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      summary TEXT,
+      project_id TEXT REFERENCES projects(id),
+      status TEXT NOT NULL CHECK (status IN ('inbox','kept','archived')),
+      source TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX vault_notes_created ON vault_notes(created_at);
+    CREATE TRIGGER vault_notes_no_delete BEFORE DELETE ON vault_notes
+      BEGIN SELECT RAISE(ABORT, 'vault notes are never deleted'); END;
+    CREATE TRIGGER vault_notes_summary_fixed BEFORE UPDATE ON vault_notes
+      WHEN NEW.summary IS NOT OLD.summary OR NEW.kind IS NOT OLD.kind OR NEW.source IS NOT OLD.source
+        OR (OLD.kind <> 'note' AND (NEW.body IS NOT OLD.body OR NEW.title IS NOT OLD.title))
+      BEGIN SELECT RAISE(ABORT, 'a saved summary cannot change'); END;
   `,
 };
 
@@ -1789,6 +1840,117 @@ export class Workspace {
     return (this.db.prepare('SELECT * FROM self_assessments ORDER BY at DESC, rowid DESC LIMIT ?').all(limit) as Record<string, unknown>[]).map(toSelfAssessment);
   }
 
+  // ---- Preferences and the Vault (M14) ----------------------------------------
+
+  createPreference(p: Pick<Preference, 'scope' | 'projectId' | 'text' | 'proposedText' | 'source'>): Preference {
+    const id = `pref_${randomUUID()}`;
+    const at = this.timestamp();
+    this.transaction(() => {
+      const number = Number((this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM preferences').get() as { n: number }).n);
+      this.db
+        .prepare(
+          `INSERT INTO preferences (id, number, scope, project_id, text, proposed_text, status, source, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?)`,
+        )
+        .run(id, number, p.scope, p.projectId, redactString(p.text), redactString(p.proposedText), JSON.stringify(redact(p.source)), at, at);
+      this.record('preference.proposed', p.projectId, null, { preferenceId: id, number, scope: p.scope, source: p.source.type });
+    });
+    return this.getPreference(id);
+  }
+
+  getPreference(id: string): Preference {
+    const row = this.db.prepare('SELECT * FROM preferences WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Preference', id);
+    return toPreference(row);
+  }
+
+  /** Newest first. A project filter returns that project's preferences and the global ones. */
+  listPreferences(filter: { status?: string; projectId?: string | null }): Preference[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.status) {
+      where.push('status = ?');
+      params.push(filter.status);
+    }
+    if (filter.projectId) {
+      where.push("(scope = 'global' OR project_id = ?)");
+      params.push(filter.projectId);
+    }
+    const sql = `SELECT * FROM preferences ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY number DESC`;
+    return (this.db.prepare(sql).all(...params) as Record<string, unknown>[]).map(toPreference);
+  }
+
+  updatePreference(id: string, patch: Partial<Pick<Preference, 'text' | 'scope' | 'projectId' | 'status' | 'resolutions' | 'approver' | 'approvedAt' | 'reason'>>, event: { type: string; payload: Record<string, unknown> }): Preference {
+    const n = { ...this.getPreference(id), ...patch };
+    this.transaction(() => {
+      this.db
+        .prepare('UPDATE preferences SET text = ?, scope = ?, project_id = ?, status = ?, resolutions = ?, approver = ?, approved_at = ?, reason = ?, updated_at = ? WHERE id = ?')
+        .run(redactString(n.text), n.scope, n.projectId, n.status, JSON.stringify(n.resolutions), n.approver, n.approvedAt, n.reason === null ? null : redactString(n.reason), this.timestamp(), id);
+      this.record(event.type, n.projectId, null, { preferenceId: id, ...event.payload });
+    });
+    return this.getPreference(id);
+  }
+
+  createVaultNote(v: Pick<VaultNote, 'kind' | 'title' | 'body' | 'summary' | 'projectId' | 'source'>): VaultNote {
+    const id = `note_${randomUUID()}`;
+    const at = this.timestamp();
+    this.transaction(() => {
+      const number = Number((this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM vault_notes').get() as { n: number }).n);
+      this.db
+        .prepare(
+          `INSERT INTO vault_notes (id, number, kind, title, body, summary, project_id, status, source, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'inbox', ?, ?, ?)`,
+        )
+        .run(id, number, v.kind, redactString(v.title), redactString(v.body), v.summary ? JSON.stringify(redact(v.summary)) : null, v.projectId, JSON.stringify(v.source), at, at);
+      this.record('vault.saved', v.projectId, null, { noteId: id, number, kind: v.kind });
+    });
+    return this.getVaultNote(id);
+  }
+
+  getVaultNote(id: string): VaultNote {
+    const row = this.db.prepare('SELECT * FROM vault_notes WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Vault note', id);
+    return toVaultNote(row);
+  }
+
+  /** Newest first. */
+  listVaultNotes(filter: { status?: string; kind?: string }): VaultNote[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.status) {
+      where.push('status = ?');
+      params.push(filter.status);
+    }
+    if (filter.kind) {
+      where.push('kind = ?');
+      params.push(filter.kind);
+    }
+    const sql = `SELECT * FROM vault_notes ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY number DESC`;
+    return (this.db.prepare(sql).all(...params) as Record<string, unknown>[]).map(toVaultNote);
+  }
+
+  updateVaultNote(id: string, patch: Partial<Pick<VaultNote, 'title' | 'body' | 'status'>>, event: { type: string; payload: Record<string, unknown> }): VaultNote {
+    const n = { ...this.getVaultNote(id), ...patch };
+    this.transaction(() => {
+      this.db.prepare('UPDATE vault_notes SET title = ?, body = ?, status = ?, updated_at = ? WHERE id = ?').run(patch.title === undefined ? n.title : redactString(n.title), patch.body === undefined ? n.body : redactString(n.body), n.status, this.timestamp(), id);
+      this.record(event.type, n.projectId, null, { noteId: id, ...event.payload });
+    });
+    return this.getVaultNote(id);
+  }
+
+  /** Events recorded from `from` up to and including `to`, oldest first (M14 wrap-up). */
+  listEventsBetween(from: string, to: string, limit = 5_000): AuditEvent[] {
+    return (this.db.prepare('SELECT * FROM events WHERE at >= ? AND at <= ? ORDER BY seq LIMIT ?').all(from, to, limit) as Record<string, unknown>[]).map((row) => ({
+      seq: Number(row.seq),
+      at: String(row.at),
+      actor: String(row.actor),
+      type: String(row.type),
+      projectId: (row.project_id as string | null) ?? null,
+      runId: (row.run_id as string | null) ?? null,
+      payload: JSON.parse(String(row.payload)) as Record<string, unknown>,
+    }));
+  }
+
   // ---- Assessments (M8) ------------------------------------------------------
 
   /** Records the scope before anything is read (FR-PROJ-003). */
@@ -2269,6 +2431,42 @@ function toImprovement(row: Record<string, unknown>): Improvement {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     releasedAt: opt('released_at'),
+  };
+}
+
+function toPreference(row: Record<string, unknown>): Preference {
+  const opt = (k: string) => (row[k] as string | null) ?? null;
+  return {
+    id: String(row.id),
+    number: Number(row.number),
+    scope: row.scope as Preference['scope'],
+    projectId: opt('project_id'),
+    text: String(row.text),
+    proposedText: String(row.proposed_text),
+    status: row.status as Preference['status'],
+    source: JSON.parse(String(row.source)) as Preference['source'],
+    resolutions: JSON.parse(String(row.resolutions)) as Preference['resolutions'],
+    approver: opt('approver'),
+    approvedAt: opt('approved_at'),
+    reason: opt('reason'),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toVaultNote(row: Record<string, unknown>): VaultNote {
+  return {
+    id: String(row.id),
+    number: Number(row.number),
+    kind: row.kind as VaultNote['kind'],
+    title: String(row.title),
+    body: String(row.body),
+    summary: row.summary ? (JSON.parse(String(row.summary)) as SessionSummary) : null,
+    projectId: (row.project_id as string | null) ?? null,
+    status: row.status as VaultNote['status'],
+    source: JSON.parse(String(row.source)) as VaultNote['source'],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 

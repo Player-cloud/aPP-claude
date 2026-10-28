@@ -9,6 +9,7 @@ import { KIND_LABEL as REF_KIND_LABEL, type StudioFilter } from './views/Learnin
 import { KIND_LABEL, type ToolFilter } from './views/ToolsView.tsx';
 import { STATUS_LABEL, type ImprovementFilter } from './views/IterativeView.tsx';
 import { STAGE_LABEL, type UpdateFilter } from './views/UpdatesView.tsx';
+import type { PreferencesTab } from './views/PreferencesView.tsx';
 
 const KIND_ORDER: ToolKind[] = ['plugin', 'skill', 'command', 'agent', 'hook', 'mcp_server', 'marketplace'];
 
@@ -109,6 +110,12 @@ const SETTINGS_GROUPS = [
   { icon: 'database', label: 'Data', target: 'data-title' },
 ] as const;
 
+const PREFERENCE_TABS = [
+  { icon: 'bookmark', label: 'Preferences', tab: 'preferences' },
+  { icon: 'list', label: 'Wrap-up', tab: 'wrapup' },
+  { icon: 'archive', label: 'Vault', tab: 'vault' },
+] as const;
+
 const PLATFORM_GROUPS = [
   { icon: 'board', label: 'Platform work', target: 'plat-work' },
   { icon: 'archive', label: 'Backups and recovery', target: 'plat-recovery' },
@@ -173,6 +180,8 @@ export function SidePanel({
   onImprovementFilter,
   updateFilter,
   onUpdateFilter,
+  prefTab,
+  onPrefTab,
 }: {
   section: Section;
   projects: Project[] | null;
@@ -188,8 +197,10 @@ export function SidePanel({
   onImprovementFilter: (f: ImprovementFilter) => void;
   updateFilter: UpdateFilter;
   onUpdateFilter: (f: UpdateFilter) => void;
+  prefTab: PreferencesTab;
+  onPrefTab: (t: PreferencesTab) => void;
 }) {
-  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', studio: 'Learning Studio', tools: 'Tools', updates: 'Updates', iterative: 'Improvements', platform: 'Platform', settings: 'Settings' }[section];
+  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', studio: 'Learning Studio', preferences: 'Preferences', tools: 'Tools', updates: 'Updates', iterative: 'Improvements', platform: 'Platform', settings: 'Settings' }[section];
   return (
     <aside className="side" aria-label={`${title} panel`}>
       <div className="side-head">
@@ -205,6 +216,17 @@ export function SidePanel({
       {section === 'tools' && <ToolFilters scan={toolScan} filter={toolFilter} onFilter={onToolFilter} />}
       {section === 'updates' && <UpdateFilters filter={updateFilter} onFilter={onUpdateFilter} />}
       {section === 'iterative' && <ImprovementFilters filter={improvementFilter} onFilter={onImprovementFilter} />}
+      {section === 'preferences' && (
+        <nav aria-label="Preference pages" className="tree">
+          {PREFERENCE_TABS.map((g) => (
+            <button key={g.tab} type="button" className="tree-root" aria-current={prefTab === g.tab ? 'page' : undefined} onClick={() => onPrefTab(g.tab)}>
+              <Icon name={g.icon} size={18} />
+              <span className="tree-label">{g.label}</span>
+            </button>
+          ))}
+          <p className="side-note">Nothing is used until you approve it, and nothing is deleted.</p>
+        </nav>
+      )}
       {section === 'platform' && (
         <nav aria-label="Platform groups" className="tree">
           {PLATFORM_GROUPS.map((g) => (

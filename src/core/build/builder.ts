@@ -32,6 +32,7 @@ import { addWorktree, commitWorktree, diffWorktree, git, inspectRepo, trackedFil
 import { reviewChange } from './review.ts';
 import { auditUi, describeAudit } from '../design/audit.ts';
 import { reviewUi } from '../design/review.ts';
+import { Preferences } from '../learn/preferences.ts';
 
 export interface BuildInput {
   kind: BuildKind;
@@ -340,8 +341,16 @@ export class Builder {
         : build.kind === 'ui_polish'
           ? this.polishInstructions(build)
           : ['', 'Inspect the existing code and tests first. Add or update tests for the change.']),
+      ...this.preferenceLines(build.projectId),
     ];
     return lines.join('\n');
+  }
+
+  /** Approved preferences for this project and global ones (M14). They guide the work and never change the rules, checks or approvals. */
+  private preferenceLines(projectId: string): string[] {
+    const prefs = new Preferences(this.ws).forWork(projectId);
+    if (!prefs.length) return [];
+    return ['', "The person's approved preferences (how they like the work done; they never override the rules, the approved checks or an approval):", ...prefs.map((p) => `- PREF-${p.number}: ${p.text}`)];
   }
 
   private polishInstructions(build: Build): string[] {
