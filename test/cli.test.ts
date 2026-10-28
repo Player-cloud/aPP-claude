@@ -170,3 +170,26 @@ test('M5: iap plan drafts, edits, approves and compares in separate processes', 
   assert.match(shown, /EGM: EGM was not checked/);
   assert.equal(iap(home, 'plan', 'edit', next.id).code, 1, '--file is required');
 });
+
+test('M6: iap build runs a bug fix from start to done, with approval and evidence', (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const project = JSON.parse(iap(home, 'project', 'create', '--name', 'Fixes', '--json').out);
+  assert.match(iap(home, 'build', 'repo', project.id, '--init').out, /happens in/);
+  const created = iap(home, 'build', 'new', project.id, '--kind', 'bugfix', '--title', 'Crash', '--goal', 'It crashes', '--repro', 'Open it', '--check', 'unit=node -e "process.exit(0)"', '--json');
+  assert.equal(created.code, 0, created.err);
+  const build = JSON.parse(created.out);
+  const unconfirmed = iap(home, 'build', 'start', build.id);
+  assert.equal(unconfirmed.code, 1);
+  assert.match(unconfirmed.err, /unit: node -e "process.exit\(0\)"\nRe-run with --confirm/);
+  const started = iap(home, 'build', 'start', build.id, '--confirm');
+  assert.equal(started.code, 0, started.err);
+  assert.match(started.out, /baseline unit\s+passed\s+exit 0/);
+  assert.match(iap(home, 'build', 'agent', build.id).out, /agent \(simulated\): done, 1 tool calls, files written: none/);
+  const verified = iap(home, 'build', 'verify', build.id).out;
+  assert.match(verified, /risk no_change/);
+  assert.equal(iap(home, 'build', 'done', build.id).code, 1);
+  assert.match(iap(home, 'build', 'done', build.id, '--note', 'Not reproducible on this machine.').out, /bugfix completed/);
+  assert.match(iap(home, 'build', 'list', project.id).out, /bugfix\s+completed\s+Crash/);
+  assert.equal(iap(home, 'build', 'new', project.id, '--kind', 'bugfix', '--title', 't', '--goal', 'g', '--repro', 'r', '--check', 'nocommand').code, 1);
+});

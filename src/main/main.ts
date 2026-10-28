@@ -2,7 +2,7 @@
 // filesystem and database access. The renderer talks to it through the narrow,
 // validated IPC surface in service.ts (FR-SEC-001, FR-SEC-005).
 
-import { app, BrowserWindow, ipcMain, Menu, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -97,6 +97,22 @@ if (smokeTest) {
         encryptString: (plain) => safeStorage.encryptString(plain),
         decryptString: (encrypted) => safeStorage.decryptString(encrypted),
       }),
+      // M6: check commands run with the person's rights, so they approve them in a native dialog the page cannot click.
+      confirmChecks: async ({ title, commands, folder }) => {
+        const options = {
+          type: 'warning' as const,
+          title: 'Run check commands?',
+          message: `"${title}" will run these commands on your computer, with your permissions:`,
+          detail: `${commands.map((c) => `  ${c}`).join('\n')}\n\nThey run in a separate copy (git worktree) of ${folder}: now, when the agent asks, and whenever the work is verified. Only approve commands you trust.`,
+          buttons: ['Run these checks', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const parent = BrowserWindow.getFocusedWindow();
+        const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+        return response === 0;
+      },
     });
     for (const method of IAP_METHODS) {
       ipcMain.handle(channel(method), (event, ...args: unknown[]) => {
