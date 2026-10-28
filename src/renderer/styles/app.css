@@ -1353,3 +1353,120 @@ fieldset.field {
   color: var(--text-muted);
   font-size: var(--text-sm);
 }
+
+/* Planning (M5) */
+.egm-note {
+  margin: 0 0 var(--space-3);
+}
+.plan-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-inset);
+}
+.plan-card h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+.plan-card .agent-head {
+  flex-wrap: wrap;
+}
+.plan-card h4 {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.plan-card > .subtle,
+.plan-editor > .subtle {
+  margin: 0;
+}
+.plan-view {
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.plan-view dt {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.plan-view dd {
+  margin: 0;
+}
+.plan-view ul,
+.plan-reqs ul {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+.plan-reqs {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-3);
+}
+.plan-reqs p {
+  margin: 0 0 var(--space-1);
+}
+.plan-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.plan-editor .field {
+  margin: 0;
+}
+.plan-req {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+}
+.plan-req legend {
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.plan-req-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8rem;
+  gap: var(--space-2);
+}
+.plan-req > .btn {
+  align-self: flex-start;
+}
+.plan-history > summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.plan-history ul {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-2);
+}
+.plan-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.plan-history p,
+.plan-changes {
+  margin: var(--space-1) 0 0;
+}
+.pre-line {
+  white-space: pre-line;
+}

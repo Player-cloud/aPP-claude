@@ -53,3 +53,10 @@ export class StateTooNewError extends IapError {
     );
   }
 }
+
+/** A model call did not produce a usable answer (budget stop, timeout, API error, cut-off or declined answer). */
+export class ModelCallError extends IapError {
+  constructor(status: 'blocked' | 'timed_out' | 'failed', message: string) {
+    super(status === 'blocked' ? 'BUDGET_BLOCKED' : status === 'timed_out' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED', message);
+  }
+}

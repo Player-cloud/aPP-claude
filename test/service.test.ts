@@ -101,3 +101,52 @@ test('M3: the agent handlers validate input and only run on a started run', asyn
   const listed = h.listAgentTasks(run.value.id);
   assert.ok(listed.ok && listed.value.length === 3);
 });
+
+test('M5: the planning handlers validate input and walk brief → spec → revision', async (t) => {
+  const { home, cleanup } = tempHome();
+  const s = new AppService(home, '0.0.0-test');
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
+  const h = s.handlers;
+  for (const bad of [undefined, 1, { docId: 'x' }, { docId: 1, content: {} }, { docId: 'x', content: {}, changeNote: 5 }]) {
+    assert.equal(h.savePlanDraft(bad).ok, false, JSON.stringify(bad));
+  }
+  assert.equal(h.comparePlanDocs({ before: 'a' }).ok, false);
+  assert.equal((await h.draftBrief(undefined)).ok, false);
+
+  const p = h.createProject({ name: 'Planner', idea: 'A recipe box', facts: [{ kind: 'confirmed', text: 'Runs offline' }] });
+  assert.ok(p.ok);
+  const early = await h.draftSpec(p.value.id);
+  assert.ok(!early.ok && /Approve the concept brief/.test(early.error.message));
+
+  const draft = await h.draftBrief(p.value.id);
+  assert.ok(draft.ok && draft.value.source === 'simulated');
+  assert.deepEqual(draft.value.kind === 'brief' && draft.value.content.confirmed, ['Runs offline'], 'confirmed facts come from the project');
+  const blocked = h.approvePlanDoc(draft.value.id);
+  assert.ok(!blocked.ok && /placeholder/.test(blocked.error.message), 'a simulated draft cannot be approved as is');
+
+  const brief = { goals: ['Keep recipes'], users: ['Home cooks'], useCases: ['Add a recipe'], scope: ['Local storage'], successCriteria: ['A recipe survives a restart'] };
+  assert.ok(h.savePlanDraft({ docId: draft.value.id, content: brief }).ok);
+  const approved = h.approvePlanDoc(draft.value.id);
+  assert.ok(approved.ok && approved.value.status === 'approved');
+
+  const spec = await h.draftSpec(p.value.id);
+  assert.ok(spec.ok && spec.value.kind === 'spec');
+  assert.deepEqual(spec.value.content.requirements.map((r) => r.id), ['REQ-001', 'REQ-002']);
+
+  const revision = h.revisePlanDoc(approved.value.id);
+  assert.ok(revision.ok && revision.value.version === 2);
+  assert.ok(h.savePlanDraft({ docId: revision.value.id, content: { ...brief, goals: ['Keep and share recipes'] } }).ok);
+  const noNote = h.approvePlanDoc(revision.value.id);
+  assert.ok(!noNote.ok && /change note/.test(noNote.error.message));
+  assert.ok(h.savePlanDraft({ docId: revision.value.id, content: { ...brief, goals: ['Keep and share recipes'] }, changeNote: 'Sharing is in' }).ok);
+  assert.ok(h.approvePlanDoc(revision.value.id).ok);
+  const diff = h.comparePlanDocs({ before: approved.value.id, after: revision.value.id });
+  assert.ok(diff.ok && diff.value.some((c) => c.target === 'goals'));
+  const overview = h.getPlanning(p.value.id);
+  assert.ok(overview.ok && overview.value.brief.versions.length === 2 && overview.value.spec.draft !== null);
+  assert.equal(overview.value.egm.state, 'not_scanned');
+  assert.ok(h.discardPlanDraft(spec.value.id).ok);
+});

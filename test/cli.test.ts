@@ -138,3 +138,35 @@ test('M3: iap agent run plans, runs and reconciles with the simulated model', (t
   assert.deepEqual(listed.map((x: { kind: string }) => x.kind), ['request', 'subtask', 'reconcile']);
   assert.equal(iap(home, 'agent', 'run', '--goal', '').code, 1);
 });
+
+test('M5: iap plan drafts, edits, approves and compares in separate processes', (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const project = JSON.parse(iap(home, 'project', 'create', '--name', 'Plans', '--idea', 'A recipe box', '--json').out);
+  assert.match(iap(home, 'plan', 'show', project.id).out, /Concept brief:\n  not started/);
+  assert.equal(iap(home, 'plan', 'spec', project.id).code, 1);
+
+  const draft = JSON.parse(iap(home, 'plan', 'brief', project.id, '--json').out);
+  assert.equal(draft.source, 'simulated');
+  const refused = iap(home, 'plan', 'approve', draft.id);
+  assert.equal(refused.code, 1);
+  assert.match(refused.err, /placeholder/);
+
+  const file = join(home, 'brief.json');
+  writeFileSync(file, JSON.stringify({ goals: ['Keep recipes'], users: ['Cooks'], scope: ['Local'], successCriteria: ['Survives a restart'] }));
+  assert.equal(iap(home, 'plan', 'edit', draft.id, '--file', file).code, 0);
+  const approved = iap(home, 'plan', 'approve', draft.id);
+  assert.equal(approved.code, 0, approved.err);
+  assert.match(approved.out, /brief v1 approved/);
+
+  const next = JSON.parse(iap(home, 'plan', 'revise', draft.id, '--json').out);
+  writeFileSync(file, JSON.stringify({ goals: ['Keep and share recipes'], users: ['Cooks'], scope: ['Local'], successCriteria: ['Survives a restart'] }));
+  assert.equal(iap(home, 'plan', 'edit', next.id, '--file', file, '--note', 'Sharing is in').code, 0);
+  assert.match(iap(home, 'plan', 'approve', next.id).out, /added goals: Keep and share recipes\n\s+removed goals: Keep recipes/);
+  assert.match(iap(home, 'plan', 'diff', draft.id, next.id).out, /added\s+goals: Keep and share recipes/);
+  const shown = iap(home, 'plan', 'show', project.id).out;
+  assert.match(shown, /v2\s+approved/);
+  assert.match(shown, /v1\s+superseded/);
+  assert.match(shown, /EGM: EGM was not checked/);
+  assert.equal(iap(home, 'plan', 'edit', next.id).code, 1, '--file is required');
+});

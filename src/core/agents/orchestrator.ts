@@ -8,9 +8,9 @@
 // its output contract.
 
 import { ValidationError } from '../errors.ts';
-import { redactString } from '../redact.ts';
 import type { AgentTask, AgentTaskSpec, AgentTaskStatus, Workspace } from '../workspace.ts';
 import type { ModelAdapter, ModelRequest, ModelResponse } from './model.ts';
+import { guardedCall } from './guard.ts';
 import { chooseStrategy, orderSubtasks, type PlannedSubtask, type Risk } from './strategy.ts';
 
 export interface AgentRequest {
@@ -26,12 +26,6 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 // Thinking counts as output, so the allowance must leave room for it.
 const MAX_OUTPUT_TOKENS = 8_000;
 
-/**
- * Estimated cost of billable calls in flight, per workspace. Parallel calls
- * (a team, or two requests at once) each reserve their estimate, so together
- * they can never pass the budget check for more than the budget allows.
- */
-const inFlight = new WeakMap<Workspace, number>();
 const MAX_SUBTASKS = 10;
 const TEAM_CONCURRENCY = 3;
 
@@ -171,76 +165,31 @@ export class Orchestrator {
     return this.ws.updateAgentTask(root.id, { status: 'succeeded', output, failure: null, resolution: null });
   }
 
-  private finish(id: string, status: AgentTaskStatus, failure: string, resolution: string | null): AgentTask {
-    return this.ws.updateAgentTask(id, { status, failure, resolution });
+  /** Remaining budget for the strategy choice; null when calls are free. */
+  private budgetState(): { remaining: number | null } {
+    if (!this.model.billable) return { remaining: null };
+    const cap = this.ws.monthlyBudgetUsd();
+    return { remaining: cap === null ? 0 : Math.max(0, cap - this.ws.spentThisMonth()) };
   }
 
-  private budgetState(): { cap: number | null; remaining: number | null } {
-    if (!this.model.billable) return { cap: null, remaining: null };
-    const cap = this.ws.monthlyBudgetUsd();
-    return { cap, remaining: cap === null ? 0 : Math.max(0, cap - this.ws.spentThisMonth()) };
+  private finish(id: string, status: AgentTaskStatus, failure: string, resolution: string | null): AgentTask {
+    return this.ws.updateAgentTask(id, { status, failure, resolution });
   }
 
   /** One model call under budget, timeout and permission limits. */
   private async call(task: AgentTask, purpose: ModelRequest['purpose'], instructions: string): Promise<CallOutcome> {
     const request = { purpose, taskTitle: task.title, instructions, maxOutputTokens: task.spec.maxOutputTokens };
-    let reserved = 0;
-    if (this.model.billable) {
-      const { cap, remaining } = this.budgetState();
-      const estimate = this.model.estimateCostUsd(request);
-      if (cap === null) {
-        return { ok: false, status: 'blocked', failure: 'Real model calls are off: no monthly budget is set.', resolution: 'Choose a monthly budget in Settings to allow real calls.' };
-      }
-      const available = remaining! - (inFlight.get(this.ws) ?? 0);
-      if (estimate > available) {
-        return {
-          ok: false,
-          status: 'blocked',
-          failure: `This call (up to $${estimate.toFixed(2)}) would exceed the monthly budget ($${Math.max(0, available).toFixed(2)} of $${cap} left).`,
-          resolution: 'Raise the monthly budget in Settings, or wait until next month.',
-        };
-      }
-      reserved = estimate;
-      inFlight.set(this.ws, (inFlight.get(this.ws) ?? 0) + reserved);
-    }
-
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, task.spec.timeoutMs);
-    let response: ModelResponse;
-    try {
-      response = await this.model.call({ ...request, signal: controller.signal });
-    } catch (e) {
-      if (timedOut) {
-        // An abandoned call may still be billed, so its estimate is counted as spent.
-        if (reserved) this.ws.recordSpend({ taskId: task.id, model: this.model.id, inputTokens: 0, outputTokens: 0, costUsd: reserved });
-        return { ok: false, status: 'timed_out', failure: `No answer within ${Math.round(task.spec.timeoutMs / 1000)} s.`, resolution: 'Retry, or split the task into smaller parts.' };
-      }
-      return {
-        ok: false,
-        status: 'failed',
-        failure: `The model call failed: ${redactString((e as Error).message)}`,
-        resolution: 'Retry the request. If it keeps failing, check the API key and connection in Settings.',
-      };
-    } finally {
-      clearTimeout(timer);
-      if (reserved) inFlight.set(this.ws, Math.max(0, (inFlight.get(this.ws) ?? 0) - reserved));
-    }
-
-    this.ws.recordSpend({ taskId: task.id, model: this.model.id, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens, costUsd: response.costUsd });
-    const current = this.ws.getAgentTask(task.id);
+    const outcome = await guardedCall(this.ws, this.model, request, { taskId: task.id, timeoutMs: task.spec.timeoutMs });
+    // Cost is recorded on the task whether or not the answer was usable.
+    const spent = this.ws.listSpend({ taskId: task.id });
     this.ws.updateAgentTask(task.id, {
-      inputTokens: current.inputTokens + response.usage.inputTokens,
-      outputTokens: current.outputTokens + response.usage.outputTokens,
-      costUsd: current.costUsd + response.costUsd,
+      inputTokens: spent.inputTokens,
+      outputTokens: spent.outputTokens,
+      costUsd: spent.costUsd,
     });
+    if (!outcome.ok) return outcome;
+    const { response } = outcome;
 
-    if (response.problem) {
-      return { ok: false, status: 'failed', failure: response.problem, resolution: 'Retry, or rephrase the goal more narrowly.' };
-    }
     const denied = response.toolRequests.filter((r) => !task.spec.allowedTools.includes(r.tool));
     if (denied.length) {
       return {

@@ -49,9 +49,20 @@ The Tools screen and `iap tools scan` read, and never write, these locations:
 
 MCP server environment variables and headers are reduced to their names, URLs lose query strings and credentials, and hook commands are redacted. The last 20 scans are kept in `iap.db`, and each scan is recorded in the audit log.
 
+## Planning documents (M5, DEC-019)
+
+Each project's `docs/designs/` folder holds its planning documents as Markdown, written by the app:
+
+| File | Content |
+|---|---|
+| `versions/brief-v<N>.md`, `versions/spec-v<N>.md` | Every version, including drafts, discarded and superseded ones |
+| `brief.md`, `spec.md` | The approved version |
+
+The database is the source of truth: editing these files does not change the app's copy, and the next save rewrites them. Approved versions cannot be changed or deleted (database triggers); revise them instead.
+
 ## Real model calls (M3, DEC-018)
 
-Real Claude calls need **both** a monthly budget and an Anthropic API key, set in *Settings → AI usage*. Without either, the agent uses the free simulated model.
+The main agent and the planning drafts both use this. Real Claude calls need **both** a monthly budget and an Anthropic API key, set in *Settings → AI usage*. Without either, the agent uses the free simulated model.
 
 | What | Where / how |
 |---|---|

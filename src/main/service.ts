@@ -7,6 +7,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { CLAUDE_MODEL, ClaudeModel, type ClaudeClient } from '../core/agents/claude.ts';
 import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
+import { Planner } from '../core/planner.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -16,8 +17,8 @@ import { moveCorruptStateAside, Workspace, type Fact, type WorkflowRun } from '.
 import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
-// Most handlers answer synchronously; the agent waits for (simulated) model calls.
-type AsyncMethod = 'runAgent';
+// Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
+type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -86,6 +87,16 @@ export class AppService {
       keyStored,
       keyStorageAvailable: this.keys.available(),
     };
+  }
+
+  /** For reads and edits that never call a model. */
+  private planner(): Planner {
+    return new Planner(this.workspace(), new SimulatedModel());
+  }
+
+  /** For drafting: the same model choice as the agent. */
+  private agentPlanner(): Planner {
+    return new Planner(this.workspace(), this.agentModel());
   }
 
   /** Real calls need both a budget and a key; otherwise the simulated model runs and says so. */
@@ -205,6 +216,24 @@ export class AppService {
         return new Orchestrator(this.workspace(), this.agentModel()).run({ runId: str(i.runId, 'Run id')!, title, goal });
       }),
     agentStatus: () => wrap(() => this.agentStatus()),
+    // Planning (M5). Content is validated in planner.ts; ids are checked to exist.
+    getPlanning: (projectId) => wrap(() => this.planner().overview(str(projectId, 'Project id')!)),
+    draftBrief: (projectId) => wrapAsync(() => this.agentPlanner().draftBrief(str(projectId, 'Project id')!)),
+    draftSpec: (projectId) => wrapAsync(() => this.agentPlanner().draftSpec(str(projectId, 'Project id')!)),
+    savePlanDraft: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Draft');
+        const note = i.changeNote === undefined ? undefined : i.changeNote === null ? null : str(i.changeNote, 'Change note')!;
+        return this.planner().saveDraft(str(i.docId, 'Document id')!, { content: i.content, changeNote: note });
+      }),
+    approvePlanDoc: (docId) => wrap(() => this.planner().approve(str(docId, 'Document id')!)),
+    revisePlanDoc: (docId) => wrap(() => this.planner().revise(str(docId, 'Document id')!)),
+    discardPlanDraft: (docId) => wrap(() => this.planner().discard(str(docId, 'Document id')!)),
+    comparePlanDocs: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Comparison');
+        return this.planner().compare(str(i.before, 'Earlier version')!, str(i.after, 'Later version')!);
+      }),
     // The key goes in and never comes back out: no handler returns it.
     setApiKey: (input) =>
       wrap(() => {

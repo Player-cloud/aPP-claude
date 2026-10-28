@@ -7,13 +7,14 @@ An installable AI development platform with two layers:
 
 The specification lives in [`docs/spec/`](docs/spec/). Start with [`docs/IMPLEMENTATION_ASSESSMENT.md`](docs/IMPLEMENTATION_ASSESSMENT.md) for the current plan, [`docs/DECISIONS.md`](docs/DECISIONS.md) for architecture decisions, and [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) for what is actually implemented and verified.
 
-## Current state: milestones M3 and M4 (main agent, tool inventory)
+## Current state: milestones M3, M4 and M5 (main agent, tool inventory, planning)
 
 Implemented and tested:
 
 - A Windows desktop app (Electron) with project creation, workflow runs with explicit states and blockers, an activity log, dark/light/system themes, a frosted-glass look, and a recovery screen for a damaged database.
 - A **read-only inventory of your Claude Code tools** (plugins, skills, commands, subagents, hooks, MCP servers) with conflict detection, on the Tools screen and in `iap tools scan`.
 - A **main agent** on running workflow runs that plans, picks a single agent, subagents or a team, and checks every result before a request counts as done. It uses a free **simulated model** until you choose a monthly budget and add an Anthropic API key in Settings → AI usage; then it calls Claude and stops before any call that would go over the budget.
+- **Planning** on each project: the agent drafts a concept brief from your idea and facts, then a specification with stable requirement IDs; you edit and approve each one. Approved versions are frozen, revisions need a reason and record what changed, and everything is kept as Markdown in the project's `docs/designs/`. EGM is detected from the tool scan but not used yet.
 - Under both: the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI.
 
 Not yet built: tool execution by agents, integrations, safe cleanup of tools, and the rest of the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
@@ -36,6 +37,8 @@ npm run iap -- run move <runId> blocked --reason "EGM not installed" --resolutio
 npm run iap -- events --project <projectId>
 npm run iap -- tools scan [--include <projectDir>]   # read-only; changes nothing
 npm run iap -- agent run <runId> --goal "..."      # simulated unless a budget is set and ANTHROPIC_API_KEY is set
+npm run iap -- plan brief <projectId>            # draft the concept brief; then plan edit / approve / revise / diff
+npm run iap -- plan show <projectId>
 npm run iap -- doctor
 ```
 

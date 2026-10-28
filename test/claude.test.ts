@@ -10,6 +10,7 @@ import { appPaths } from '../src/core/paths.ts';
 import { CLAUDE_MODEL, ClaudeModel, type ClaudeClient } from '../src/core/agents/claude.ts';
 import { SimulatedModel } from '../src/core/agents/model.ts';
 import { Orchestrator } from '../src/core/agents/orchestrator.ts';
+import { Planner } from '../src/core/planner.ts';
 import { AppService } from '../src/main/service.ts';
 import { MemoryKeyStore } from '../src/main/keystore.ts';
 
@@ -186,4 +187,32 @@ test('Service: the API key is validated, stored only in the key store, and never
   assert.ok(events.ok && events.value.some((e) => e.type === 'credential.stored'));
   s.close();
   assert.ok(!readFileSync(appPaths(home).db).includes(Buffer.from('kkkkkkkkkk')), 'the key is not in the database');
+});
+
+test('M5 with Claude: brief and spec drafts use their schemas, are billed, and the model cannot confirm facts or pick IDs', async (t) => {
+  const { ws } = setup(t);
+  ws.updateSetting('budget', '20');
+  const project = ws.createProject({ name: 'Recipes', idea: 'A recipe box', facts: [{ kind: 'confirmed', text: 'Offline' }] });
+  const brief = { goals: ['Keep recipes'], users: ['Cooks'], useCases: ['Add one'], scope: ['Local'], nonGoals: [], confirmed: ['Offline', 'Has 1M users'], assumptions: [], dependencies: [], risks: [], successCriteria: ['Survives restart'] };
+  const spec = { requirements: [{ id: 'REQ-999', title: 'Add a recipe', description: '', priority: 'MUST', acceptanceCriteria: ['It is listed'] }] };
+  const { client, calls } = fakeClient((b) => ({ text: JSON.stringify(b.system?.toString().includes('concept brief for') ? brief : spec) }));
+  const planner = new Planner(ws, new ClaudeModel(client));
+
+  const draft = await planner.draftBrief(project.id);
+  assert.equal(draft.source, CLAUDE_MODEL);
+  assert.ok(draft.kind === 'brief');
+  assert.deepEqual(draft.content.confirmed, ['Offline']);
+  assert.ok(draft.content.assumptions.includes('Has 1M users'));
+  const format = calls[0]!.output_config?.format as { type: string; schema: { required: string[] } } | undefined;
+  assert.equal(format?.type, 'json_schema');
+  assert.ok(format?.schema.required.includes('successCriteria'));
+  assert.deepEqual(JSON.parse(calls[0]!.messages[0]!.content as string).confirmed, ['Offline']);
+
+  planner.approve(draft.id);
+  const s = await planner.draftSpec(project.id);
+  assert.ok(s.kind === 'spec');
+  assert.deepEqual(s.content.requirements.map((r) => r.id), ['REQ-001'], 'the model\'s ID is replaced');
+  assert.ok((calls[1]!.output_config?.format as unknown as { schema: { required: string[] } }).schema.required.includes('requirements'));
+  // 2 calls of 1,000 input and 500 output tokens at $4 / $20 per million.
+  assert.equal(ws.spentThisMonth().toFixed(3), '0.028', 'both drafts are billed');
 });
