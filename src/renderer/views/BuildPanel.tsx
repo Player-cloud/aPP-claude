@@ -2,8 +2,10 @@
 // feature or bug fix runs in its own git worktree. Check commands only run
 // after the person approves them in a native dialog, results are shown as
 // recorded (never inferred), and the review lists every risk it found.
-import { useState, type FormEvent } from 'react';
-import type { Build, BuildDetail, CheckRun, Diff, Project } from '../../shared/api.ts';
+// "Polish the UI" (M9, DEC-025) adds an audit of the design system, chosen
+// Learning Studio references and design checks in the review.
+import { useEffect, useState, type FormEvent } from 'react';
+import type { Build, BuildDetail, CheckRun, DesignReference, Diff, Project } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Alert, Badge, formatTime } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
@@ -27,6 +29,80 @@ const CHECK: Record<CheckRun['status'], { label: string; tone: Tone }> = {
 };
 
 const PHASE: Record<CheckRun['phase'], string> = { baseline: 'Before', agent: 'Agent', verify: 'After' };
+
+const KIND: Record<Build['kind'], { label: string; choose: string }> = {
+  bugfix: { label: 'Bug fix', choose: 'Fix a bug' },
+  feature: { label: 'Feature', choose: 'Build a feature' },
+  ui_polish: { label: 'UI polish', choose: 'Polish the UI' },
+};
+
+const DANGER_RISKS = new Set(['regression', 'weakened_test', 'deleted_test']);
+const NEUTRAL_RISKS = new Set(['manual_check']);
+
+function ReferencePicker({ projectId, selected, onChange }: { projectId: string; selected: string[]; onChange: (ids: string[]) => void }) {
+  const [refs, setRefs] = useState<DesignReference[] | null>(null);
+  useEffect(() => {
+    call(iap().listReferences({}))
+      .then((all) => setRefs([...all.filter((r) => r.projectId === projectId), ...all.filter((r) => r.projectId !== projectId)]))
+      .catch(() => setRefs([]));
+  }, [projectId]);
+  return (
+    <fieldset className="plan-req">
+      <legend>Design references to follow (optional)</legend>
+      {refs && refs.length === 0 && <p className="muted">No references yet. Add some in the Learning Studio.</p>}
+      {refs && refs.length > 0 && (
+        <ul className="ref-pick" aria-label="References">
+          {refs.map((r) => (
+            <li key={r.id}>
+              <label className="check-row">
+                <input type="checkbox" checked={selected.includes(r.id)} onChange={(e) => onChange(e.target.checked ? [...selected, r.id] : selected.filter((x) => x !== r.id))} />
+                {r.mediaType.startsWith('image/') && <img src={`iap-ref://ref/${r.id}`} alt="" className="ref-pick-thumb" />}
+                <span>{r.title}</span>
+                {r.projectId === projectId && <span className="pill">This project</span>}
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="hint">The agent gets their descriptions and your notes as inspiration. They never change the specification.</p>
+    </fieldset>
+  );
+}
+
+function AuditSummary({ build }: { build: Build }) {
+  const a = build.uiAudit;
+  if (!a) return <p className="muted">The design system is audited when the work starts.</p>;
+  const list = (xs: unknown[], none = 'None found') => (xs.length ? xs.join(', ') : none);
+  return (
+    <>
+      <h4>UI audit (before any change)</h4>
+      <dl className="kv ui-audit" aria-label="UI audit">
+        <dt>Design tokens</dt>
+        <dd>
+          {a.tokenCount} {a.tokenSample.length > 0 && <span className="mono subtle">{a.tokenSample.slice(0, 4).join(' ')}</span>}
+        </dd>
+        <dt>Components</dt>
+        <dd>
+          {a.componentCount}
+          {a.componentDirs.length > 0 && <span className="subtle"> in {a.componentDirs.slice(0, 3).join(', ')}</span>}
+        </dd>
+        <dt>Styling</dt>
+        <dd>{list(a.styling)}</dd>
+        <dt>Libraries</dt>
+        <dd>{list([...a.uiLibraries, ...a.motionLibraries])}</dd>
+        <dt>Breakpoints</dt>
+        <dd>{a.breakpoints.length ? a.breakpoints.map((b) => `${b}px`).join(', ') : 'None found'}</dd>
+        <dt>Themes</dt>
+        <dd>{list(a.themes, 'No theme switch found')}</dd>
+        <dt>Reduced motion</dt>
+        <dd>{a.reducedMotion.handled ? 'Handled' : 'Not handled anywhere'}</dd>
+      </dl>
+      <p className="subtle">
+        Motion asked for: {build.motion ? 'yes' : 'no'} · References: {build.referenceIds.length} · Read {a.filesRead} files; nothing was run.
+      </p>
+    </>
+  );
+}
 
 function RepoSetup({ project, onChanged }: { project: Project; onChanged: () => Promise<void> }) {
   const [path, setPath] = useState('');
@@ -90,7 +166,9 @@ export function parseChecks(text: string) {
 const lines = (text: string) => text.split('\n').map((l) => l.trim()).filter(Boolean);
 
 function NewBuild({ projectId, specIds, onCreated }: { projectId: string; specIds: string[]; onCreated: () => Promise<void> }) {
-  const [kind, setKind] = useState<'feature' | 'bugfix'>('bugfix');
+  const [kind, setKind] = useState<Build['kind']>('bugfix');
+  const [refs, setRefs] = useState<string[]>([]);
+  const [motion, setMotion] = useState(false);
   const [title, setTitle] = useState('');
   const [goal, setGoal] = useState('');
   const [repro, setRepro] = useState('');
@@ -115,8 +193,11 @@ function NewBuild({ projectId, specIds, onCreated }: { projectId: string; specId
           requirementIds: reqs,
           components: lines(components),
           checks: parseChecks(checks),
+          ...(kind === 'ui_polish' ? { referenceIds: refs, motion } : {}),
         }),
       );
+      setRefs([]);
+      setMotion(false);
       setTitle('');
       setGoal('');
       setRepro('');
@@ -132,10 +213,10 @@ function NewBuild({ projectId, specIds, onCreated }: { projectId: string; specId
   return (
     <form className="plan-editor build-new" aria-label="New build work" onSubmit={submit}>
       <div className="radio-row" role="radiogroup" aria-label="Kind of work">
-        {(['bugfix', 'feature'] as const).map((k) => (
+        {(['bugfix', 'feature', 'ui_polish'] as const).map((k) => (
           <label key={k} className="radio-pill">
             <input type="radio" name="build-kind" checked={kind === k} onChange={() => setKind(k)} />
-            {k === 'bugfix' ? 'Fix a bug' : 'Build a feature'}
+            {KIND[k].choose}
           </label>
         ))}
       </div>
@@ -144,7 +225,7 @@ function NewBuild({ projectId, specIds, onCreated }: { projectId: string; specId
         <input id="b-title" className="input" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} />
       </div>
       <div className="field">
-        <label htmlFor="b-goal">{kind === 'feature' ? 'What to build' : 'What is wrong'}</label>
+        <label htmlFor="b-goal">{kind === 'feature' ? 'What to build' : kind === 'ui_polish' ? 'What to improve' : 'What is wrong'}</label>
         <textarea id="b-goal" className="textarea" rows={2} value={goal} onChange={(e) => setGoal(e.target.value)} />
       </div>
       {kind === 'bugfix' && (
@@ -164,6 +245,19 @@ function NewBuild({ projectId, specIds, onCreated }: { projectId: string; specId
             </label>
           ))}
         </fieldset>
+      )}
+      {kind === 'ui_polish' && (
+        <>
+          <p className="subtle">
+            When it starts, the app audits the project's design tokens, components, libraries and breakpoints, and the agent is asked to keep to them. The review then looks for new UI libraries, raw colours,
+            accessibility slips and motion problems.
+          </p>
+          <ReferencePicker projectId={projectId} selected={refs} onChange={setRefs} />
+          <label className="check-row">
+            <input type="checkbox" checked={motion} onChange={(e) => setMotion(e.target.checked)} />
+            <span>Animation is part of this work</span>
+          </label>
+        </>
       )}
       <div className="field">
         <label htmlFor="b-components">Files or folders it should change (optional, one per line or separated by commas)</label>
@@ -236,7 +330,7 @@ function BuildCard({ build, onChanged }: { build: Build; onChanged: () => Promis
       <summary>
         <Badge tone={STATUS[b.status].tone}>{STATUS[b.status].label}</Badge>
         <span className="finding-title">{b.title}</span>
-        <span className="pill">{b.kind === 'feature' ? 'Feature' : 'Bug fix'}</span>
+        <span className="pill">{KIND[b.kind].label}</span>
       </summary>
       <div className="finding-body">
         <p>{b.goal}</p>
@@ -253,6 +347,7 @@ function BuildCard({ build, onChanged }: { build: Build; onChanged: () => Promis
             </span>
           ))}
         </p>
+        {b.kind === 'ui_polish' && <AuditSummary build={b} />}
         {b.branch && (
           <p className="subtle">
             Branch <span className="mono">{b.branch}</span> in <span className="mono">{b.worktree}</span>
@@ -295,7 +390,7 @@ function BuildCard({ build, onChanged }: { build: Build; onChanged: () => Promis
               <ul className="small-list build-risks" aria-label="Risks">
                 {b.risks.map((r, i) => (
                   <li key={i}>
-                    <Badge tone={r.kind === 'regression' || r.kind === 'weakened_test' || r.kind === 'deleted_test' ? 'danger' : 'warn'}>{r.kind.replace(/_/g, ' ')}</Badge> {r.detail}
+                    <Badge tone={DANGER_RISKS.has(r.kind) ? 'danger' : NEUTRAL_RISKS.has(r.kind) ? 'neutral' : 'warn'}>{r.kind.replace(/_/g, ' ')}</Badge> {r.detail}
                   </li>
                 ))}
               </ul>
@@ -383,7 +478,7 @@ export function BuildPanel({ project, onProjectChanged, onChanged }: { project: 
       {project.repoPath && !adding && (
         <div className="btn-row">
           <button type="button" className="btn btn-sm btn-primary" onClick={() => setAdding(true)}>
-            New feature or bug fix
+            New feature, bug fix or UI polish
           </button>
         </div>
       )}

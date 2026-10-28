@@ -396,7 +396,7 @@ test('M6: fix a bug in a worktree, with commands approved in a native dialog and
     const panel = page.getByRole('region', { name: /Build work/ });
     await panel.getByRole('button', { name: 'Start a repository in the project folder' }).click();
     await panel.getByText(/^Repository:/).waitFor();
-    await panel.getByRole('button', { name: 'New feature or bug fix' }).click();
+    await panel.getByRole('button', { name: 'New feature, bug fix or UI polish' }).click();
     const form = panel.getByRole('form', { name: 'New build work' });
     await form.getByLabel('Title').fill('Missing marker file');
     await form.getByLabel('What is wrong').fill('The check fails because fixed.txt does not exist');
@@ -672,4 +672,87 @@ test('M9: collect design references in the Learning Studio, with a suggestion th
     await app.close();
   }
   for (const [name, data] of Object.entries(files)) assert.deepEqual(readFileSync(join(incoming, name)), data, `${name} was left as it was`);
+});
+
+test('M9: polish the UI with an audit of the design system, a chosen reference and design checks in the review', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const repo = join(home, 'club-hr');
+  const files: Record<string, string> = {
+    'package.json': JSON.stringify({ name: 'club-hr', dependencies: { react: '^18.3.0' } }),
+    'src/styles/tokens.css': ':root {\n  --bg: #0b1020;\n  --text: #f4f6fc;\n  --accent: #8b6cff;\n  --radius: 12px;\n}\n',
+    'src/styles/app.css': '.card { background: var(--bg); border-radius: var(--radius); }\n@media (max-width: 1060px) { .side { display: none; } }\n',
+    'src/components/Card.jsx': 'export function Card({ children }) {\n  return <div className="card">{children}</div>;\n}\n',
+  };
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(join(repo, path, '..'), { recursive: true });
+    writeFileSync(join(repo, path), text);
+  }
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: repo, encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'init');
+  const shotFile = join(home, 'calm-cards.png');
+  writeFileSync(shotFile, solidPng(320, 200, [139, 108, 255], [20, 16, 50]));
+
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'Import a repository' }).click();
+    const form = page.getByRole('region', { name: 'Import a repository' });
+    await form.getByLabel('Name').fill('Club HR');
+    await form.getByLabel('Repository folder').fill(repo);
+    await form.getByRole('button', { name: 'Import' }).click();
+    await page.getByRole('heading', { name: 'Club HR', level: 1 }).waitFor();
+
+    await page.getByRole('button', { name: 'Learning Studio' }).click();
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog;
+    }, shotFile);
+    await page.getByRole('button', { name: 'Add files' }).first().click();
+    await page.getByText('Added 1 file').waitFor();
+
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: /Club HR/ }).first().click();
+    const panel = page.getByRole('region', { name: /Build work/ });
+    await panel.getByRole('button', { name: 'New feature, bug fix or UI polish' }).click();
+    const build = panel.getByRole('form', { name: 'New build work' });
+    await build.getByLabel('Polish the UI').check();
+    await build.getByLabel('Title').fill('Calmer cards');
+    await build.getByLabel('What to improve').fill('Cards feel heavy; make them calmer and lift them on hover');
+    await build.getByRole('list', { name: 'References' }).getByLabel(/calm cards/).check();
+    await build.getByLabel('Animation is part of this work').check();
+    await build.getByLabel(/Check commands/).fill('unit = node -e "process.exit(0)"');
+    await build.getByRole('button', { name: 'Add' }).click();
+
+    const card = panel.locator('.build-card').first();
+    await card.getByText('UI polish', { exact: true }).waitFor();
+    await card.getByText('The design system is audited when the work starts.').waitFor();
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+    await card.getByRole('button', { name: 'Start and run checks' }).click();
+    const audit = card.getByRole('definition').filter({ hasText: /^4/ });
+    await card.getByText('UI audit (before any change)').waitFor();
+    await audit.first().waitFor();
+    await card.getByText('Not handled anywhere').waitFor();
+    await card.getByText(/Motion asked for: yes · References: 1/).waitFor();
+
+    // The person changes the worktree by hand, with two slips the review should catch.
+    const worktree = await card.locator('p:has-text("Branch") .mono').nth(1).innerText();
+    writeFileSync(join(worktree, 'src', 'styles', 'app.css'), files['src/styles/app.css'] + '.card:hover { border-color: #ff3366; transition: height 200ms; }\n');
+    await card.getByRole('button', { name: 'Verify', exact: true }).click();
+    await card.getByText('Ready for review', { exact: true }).waitFor();
+    const risks = card.getByRole('list', { name: 'Risks' });
+    await risks.getByText('off token value').waitFor();
+    await risks.getByText('motion reduced').waitFor();
+    await risks.getByText('motion performance').waitFor();
+    await risks.getByText('manual check').waitFor();
+    await card.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+    await shot(page, '22-ui-polish-review-dark-1280');
+  } finally {
+    await app.close();
+  }
+  assert.equal(readFileSync(join(repo, 'src', 'styles', 'app.css'), 'utf8'), files['src/styles/app.css'], 'the checkout is untouched');
 });

@@ -1393,6 +1393,27 @@ fieldset.field {
   margin: var(--space-1) 0;
   padding-left: var(--space-4);
 }
+.ref-pick {
+  display: grid;
+  gap: var(--space-1);
+  max-height: 220px;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.ref-pick .check-row {
+  align-items: center;
+}
+.ref-pick-thumb {
+  width: 40px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.ui-audit {
+  margin-bottom: var(--space-2);
+}
 .ref-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
