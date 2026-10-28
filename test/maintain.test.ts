@@ -69,7 +69,7 @@ test('M13: setup takes only the app’s own repository and records the running v
   const repo = platformRepo(home);
   const o = await maintenance.setup(repo);
   assert.equal(o.project?.kind, 'maintenance');
-  assert.equal(o.project?.repoPath, repo);
+  assert.equal(o.project?.repoPath, gitIn(repo, 'rev-parse', '--show-toplevel').trim(), 'the repository root as git reports it');
   assert.deepEqual(o.knownGood.map((k) => [k.version, k.releaseId, k.actor]), [[VERSION, null, 'joshua']]);
   assert.ok(ws.listEvents().some((e) => e.type === 'project.maintenance_created'));
   await assert.rejects(maintenance.setup(repo), /already set up/);
