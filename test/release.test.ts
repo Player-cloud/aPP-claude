@@ -203,7 +203,8 @@ test('M7-AC4: the release is prepared only on the commit that was checked, and c
   const d = await releaser.check(r.id);
   assert.equal(gate(d.release.gates, 'secrets'), 'passed');
   assert.equal(readFileSync(join(repo, 'src', 'sum.mjs'), 'utf8'), FIXED);
-  assert.equal(readFileSync(join(d.release.worktree!, 'src', 'sum.mjs'), 'utf8'), FIXED);
+  // Git for Windows may check files out with CRLF (core.autocrlf), so compare the content, not the line endings.
+  assert.equal(readFileSync(join(d.release.worktree!, 'src', 'sum.mjs'), 'utf8').replace(/\r\n/g, '\n'), FIXED);
 
   releaser.addException(r.id, 'builds', 'Hotfix made directly on main', 'Covered by the unit check on this commit');
   assert.deepEqual(releaser.classify(r.id, 'REQ-001', 'intentional_deviation', 'Fixed on main, not through a build').blocking, []);
