@@ -25,7 +25,9 @@ export interface Risk {
     | 'accessibility'
     | 'motion_reduced'
     | 'motion_performance'
-    | 'manual_check';
+    | 'manual_check'
+    // Platform work (M13, DEC-029)
+    | 'protected_change';
   detail: string;
 }
 

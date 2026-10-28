@@ -2536,3 +2536,34 @@ button.status-pill {
 .upd-sources td {
   vertical-align: top;
 }
+
+/* Platform maintenance (M13) */
+.plat-list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+}
+.plat-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.plat-list > li:last-child {
+  border-bottom: 0;
+}
+.plat-list > li > span:first-child {
+  min-width: 0;
+  flex: 1 1 16rem;
+  overflow-wrap: anywhere;
+}
+.plat-list .btn-row {
+  margin: 0;
+}
+.plat-meta {
+  display: block;
+  font-size: var(--text-xs);
+}

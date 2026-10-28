@@ -267,6 +267,7 @@ function PhaseStepper({ phases }: { phases: Phase[] }) {
 /** One safe next action, worked out from the project's records. */
 function nextStep(project: Project, planning: PlanningOverview | null, runs: RunWithNext[] | null, assessed: boolean | null): { title: string; detail: string; target: string } | null {
   if (!planning || !runs || assessed === null) return null;
+  if (project.kind === 'maintenance') return { title: 'Build an approved platform item', detail: 'Platform work starts from an approved improvement or update. It runs in a worktree of the app\u2019s source; the running app is not changed.', target: 'phase-build' };
   if (project.origin === 'imported' && !assessed) return { title: 'Assess the repository', detail: 'See what the imported code already has, read-only, before planning changes.', target: 'phase-assess' };
   const waiting = runs.filter((r) => needsPerson(r.state));
   if (waiting.length > 0)
@@ -320,13 +321,21 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
 
   return (
     <>
-      <h1 className="page-title">{p.name}</h1>
+      <h1 className="page-title">
+        {p.name} {p.kind === 'maintenance' && <span className="pill">Platform maintenance</span>}
+      </h1>
       <p className="page-lede">{p.idea ?? 'No idea recorded yet.'}</p>
       <PhaseStepper phases={phasesFor(planning.data, builds.data, runs.data, releases.data)} />
       <div className="content-grid">
         <div>
-          {p.origin === 'imported' && assessmentPanel}
-          <PlanningPanel projectId={p.id} onChanged={() => void planning.reload()} />
+          {p.kind === 'maintenance' && (
+            <Alert tone="info" title="This project is the app itself">
+              Work here starts from an approved improvement or update and runs in a worktree of <span className="mono">{p.repoPath}</span>. It ships only as a new version that you install. Backups, known-good versions and the
+              protected areas are on the Platform page.
+            </Alert>
+          )}
+          {p.origin === 'imported' && p.kind !== 'maintenance' && assessmentPanel}
+          {p.kind !== 'maintenance' && <PlanningPanel projectId={p.id} onChanged={() => void planning.reload()} />}
           <BuildPanel project={p} onProjectChanged={async () => void (await project.reload())} onChanged={() => void builds.reload()} />
           <ReleasePanel project={p} onChanged={() => void releases.reload()} />
           {p.origin !== 'imported' && assessmentPanel}

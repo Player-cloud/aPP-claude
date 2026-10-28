@@ -7,7 +7,7 @@ An installable AI development platform with two layers:
 
 The specification lives in [`docs/spec/`](docs/spec/). Start with [`docs/IMPLEMENTATION_ASSESSMENT.md`](docs/IMPLEMENTATION_ASSESSMENT.md) for the current plan, [`docs/DECISIONS.md`](docs/DECISIONS.md) for architecture decisions, and [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) for what is actually implemented and verified.
 
-## Current state: milestones M3 to M12 (main agent, tool inventory and cleanup, planning, build work, release gate, assessment, Learning Studio, improvements, update monitor)
+## Current state: milestones M3 to M13 (main agent, tool inventory and cleanup, planning, build work, release gate, assessment, Learning Studio, improvements, update monitor, controlled self-improvement)
 
 Implemented and tested:
 
@@ -23,9 +23,10 @@ Implemented and tested:
 - **Polish the UI**: a third kind of build work. It first audits the project's design tokens, components, libraries and breakpoints, gives the agent your chosen references as inspiration, and its review flags new UI libraries, raw colours, accessibility slips and motion problems. One check always asks you to look at the screens yourself.
 - **Improvements** (the first part of the Iterative Layer): the app reads its own records (blocked or failed runs, failed agent tasks, abandoned builds, accepted risks, checks that time out or cannot run, failed assessments, tool conflicts, spend near the budget) and shows what it observed, the likely cause and a recommendation separately, plus what it does not record. Findings become backlog items, a repeat adds evidence instead of a duplicate, and you move items from idea to released. Approving an item records your decision and changes nothing in the app. No AI calls.
 - **Updates**: *Check for updates* asks the npm registry, the security advisories, the Claude Code and Anthropic SDK release notes, your plugins' GitHub marketplaces and (with your key) the Anthropic model list what is new, and shows each change with what depends on it, a priority and a recommendation. Sources that did not answer are listed. You approve, you install, and the next check plus *Verify* confirm it. The app never installs anything.
+- **Platform**: approved improvements and app updates become build work in a worktree of the app's own source code. Every such build runs the app's type check, unit and end-to-end tests, changes to permissions, security, release gates, configuration or stored data need your separate approval, and a failed check blocks it with no override. A platform release takes no exceptions and plans the rollback: take a backup (and test it) before installing, record the installed version as known-good, and restore a backup if you go back. After release the app measures whether the problem came back and reopens the item if it did. The running app is never changed; you install the new version.
 - Under both: the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI.
 
-Not yet built: deployment, running code-review and security-review tools, integrations (so external state is never verified), and building approved improvements. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
+Not yet built: deployment, running code-review and security-review tools, integrations (so external state is never verified), and building or installing new app versions for you. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
 
 ```bash
 npm install

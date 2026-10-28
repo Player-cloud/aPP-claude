@@ -42,6 +42,10 @@ export type { Occurrence, SelfAssessmentReport, SelfFinding } from '../core/iter
 import type { CleanupOption, CleanupPlan } from '../core/cleanup/cleanup.ts';
 export type { CleanupAction, CleanupOption, CleanupPlan, CleanupResult, CleanupStatus, DryRun, Mechanism } from '../core/cleanup/cleanup.ts';
 import type { UpdateCheck, UpdateItem, UpdatesOverview } from '../core/updates/updates.ts';
+import type { BackupInfo, MaintenanceOverview, RecoveryTest } from '../core/maintain/maintain.ts';
+import type { KnownGood } from '../core/workspace.ts';
+export type { BackupInfo, MaintenanceOverview, PlatformCandidate, ProtectedArea, RecoveryTest } from '../core/maintain/maintain.ts';
+export type { BuildSource, KnownGood, Measurement, ProtectedApproval } from '../core/workspace.ts';
 export type { Confidence, SourceResult, SourceStatus, UpdateCheck, UpdateImpact, UpdateItem, UpdateKind, UpdatePriority, UpdatesOverview, UpdateStage } from '../core/updates/updates.ts';
 
 /** Kinds a reference can have, and the tags in use (M9). */
@@ -181,6 +185,22 @@ export interface IapApi {
   editImprovement(input: { id: string; title?: string; problem?: string; expectedOutcome?: string; successCriteria?: string; priority?: string; risk?: string; dependencies?: string[] }): Promise<Result<ImprovementDetail>>;
   moveImprovement(input: { id: string; to: string; reason?: string; result?: string; measuredOutcome?: string }): Promise<Result<ImprovementDetail>>;
   mergeImprovement(input: { id: string; into: string }): Promise<Result<ImprovementDetail>>;
+  /** M13: measure a released item from the self-assessment record, or record the person's own judgement. */
+  measureImprovement(id: string): Promise<Result<ImprovementDetail>>;
+  recordImprovementOutcome(input: { id: string; verdict: 'improved' | 'not_improved'; detail: string }): Promise<Result<ImprovementDetail>>;
+  /** Platform maintenance (M13): approved items become builds in a worktree of the app's own source code. */
+  getMaintenance(): Promise<Result<MaintenanceOverview>>;
+  setupMaintenance(input: { path: string }): Promise<Result<MaintenanceOverview>>;
+  startPlatformWork(input: { improvementId?: string; updateId?: string; kind?: string; components?: string[] }): Promise<Result<Build>>;
+  /** Asks in a native dialog first. */
+  approveProtectedChange(input: { buildId: string; reason: string }): Promise<Result<BuildDetail>>;
+  markKnownGood(input: { releaseId: string; note: string }): Promise<Result<KnownGood>>;
+  backupDatabase(): Promise<Result<BackupInfo>>;
+  /** Works while the database cannot be opened, too. */
+  listBackups(): Promise<Result<BackupInfo[]>>;
+  testRecovery(file: string): Promise<Result<RecoveryTest>>;
+  /** Asks in a native dialog first. The current database is moved aside, never deleted. */
+  restoreBackup(file: string): Promise<Result<{ restored: string; movedAside: string | null; status: AppStatus }>>;
   /** Planning (M5): concept brief and specification, versioned. */
   getPlanning(projectId: string): Promise<Result<PlanningOverview>>;
   draftBrief(projectId: string): Promise<Result<PlanDoc>>;
@@ -267,6 +287,17 @@ export const IAP_METHODS = [
   'editImprovement',
   'moveImprovement',
   'mergeImprovement',
+  'measureImprovement',
+  'recordImprovementOutcome',
+  'getMaintenance',
+  'setupMaintenance',
+  'startPlatformWork',
+  'approveProtectedChange',
+  'markKnownGood',
+  'backupDatabase',
+  'listBackups',
+  'testRecovery',
+  'restoreBackup',
   'getPlanning',
   'draftBrief',
   'draftSpec',

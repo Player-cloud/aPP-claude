@@ -11,6 +11,12 @@
 // "Polish the UI" (M9, DEC-025) is the same flow with an audit of the
 // project's design system at start, Learning Studio references in the
 // instructions, and design checks in the review.
+//
+// Platform work (M13, DEC-029) is the same flow in the platform-maintenance
+// project: it starts from an approved improvement or update, always runs the
+// mandatory checks, reports changes to protected areas, and cannot be marked
+// done while a mandatory check fails or a protected change lacks the person's
+// separate approval. There is no override.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
@@ -18,9 +24,10 @@ import type { ModelAdapter } from '../agents/model.ts';
 import { ValidationError } from '../errors.ts';
 import type { Spec } from '../planning.ts';
 import { redactString } from '../redact.ts';
-import type { Build, BuildKind, CheckRun, Workspace } from '../workspace.ts';
+import type { Build, BuildKind, BuildSource, CheckRun, Workspace } from '../workspace.ts';
 import { runBuildAgent } from './agent.ts';
-import { normalizeChecks, runCheck, type Check, type CheckResult } from './checks.ts';
+import { normalizeChecks, ranNoTests, runCheck, type Check, type CheckResult } from './checks.ts';
+import { MANDATORY_CHECKS, protectedApproved, protectedChanges, protectedFiles, TEST_CHECKS } from '../maintain/maintain.ts';
 import { addWorktree, commitWorktree, diffWorktree, git, inspectRepo, trackedFiles, type Diff } from './git.ts';
 import { reviewChange } from './review.ts';
 import { auditUi, describeAudit } from '../design/audit.ts';
@@ -92,8 +99,12 @@ export class Builder {
     return this.ws.setProjectRepo(projectId, at);
   }
 
-  create(projectId: string, input: BuildInput): Build {
-    return this.ws.createBuild({ projectId, ...this.validate(projectId, input) });
+  /** `source` is set only by platform maintenance (M13), never from a renderer's build definition. */
+  create(projectId: string, input: BuildInput, source: BuildSource | null = null): Build {
+    const platform = this.ws.getProject(projectId).kind === 'maintenance';
+    if (platform && !source) throw new ValidationError('Platform work starts from an approved improvement or update (Improvements or Updates → Build as platform work).');
+    if (!platform && source) throw new ValidationError('Only the platform-maintenance project builds improvements and updates.');
+    return this.ws.createBuild({ projectId, ...this.validate(projectId, input), source });
   }
 
   edit(buildId: string, input: BuildInput): Build {
@@ -164,6 +175,9 @@ export class Builder {
       const baseline = this.latest(buildId, 'baseline');
       const risks = reviewChange({ kind: build.kind, files: diff.files, patch: diff.patch, truncated: diff.truncated, components: build.components, baseline, final });
       if (build.kind === 'ui_polish') risks.push(...reviewUi({ files: diff.files, patch: diff.patch, audit: build.uiAudit, motion: build.motion }));
+      if (build.source) {
+        for (const c of protectedChanges(diff.files.map((f) => f.path))) risks.push({ kind: 'protected_change', detail: `Changes ${c.area.title.toLowerCase()}: ${c.files.join(', ')}. This needs your separate approval.` });
+      }
       this.ws.updateBuild(
         buildId,
         { status: 'review', changedFiles: diff.files, risks },
@@ -183,6 +197,10 @@ export class Builder {
     const build = this.ws.getBuild(buildId);
     if (build.status !== 'review') throw new ValidationError('Verify the change before marking it done.');
     const text = note?.trim().slice(0, 4_000) || null;
+    if (build.source) {
+      const blockers = this.platformBlockers(build);
+      if (blockers.length) throw new ValidationError(`Platform work cannot be marked done: ${blockers.join(' ')}`);
+    }
     if (build.risks?.length && (!text || text.length < 10)) throw new ValidationError('Explain why the remaining risks are acceptable before marking this done.');
     return await this.exclusive(buildId, async () => {
       const resultCommit = await commitWorktree(build.worktree!, `${KIND_WORD[build.kind].commit}: ${build.title}\n\nIterative Platform build ${build.id}`);
@@ -211,6 +229,27 @@ export class Builder {
     if (!build.worktree || !build.baseCommit) throw new ValidationError('This work has not started yet.');
     const d = await diffWorktree(build.worktree, build.baseCommit);
     return { ...d, patch: redactString(d.patch) };
+  }
+
+  /**
+   * What stops platform work from being finished (M13). A failed evaluation
+   * blocks the change; the person cannot explain it away with a note.
+   */
+  platformBlockers(build: Build): string[] {
+    if (!build.source) return [];
+    const out: string[] = [];
+    const final = new Map(this.latest(build.id, 'verify').map((r) => [r.checkId, r]));
+    for (const m of MANDATORY_CHECKS) {
+      const r = final.get(m.id);
+      if (!r) out.push(`Mandatory check "${m.id}" has not run in verification.`);
+      else if (r.status !== 'passed') out.push(`Mandatory check "${m.id}" ${r.status === 'failed' ? 'failed' : r.status.replace('_', ' ')}.`);
+      else if (TEST_CHECKS.has(m.id) && ranNoTests(r.output)) out.push(`Mandatory check "${m.id}" passed without running any tests.`);
+    }
+    for (const r of build.risks ?? []) {
+      if (r.kind === 'regression' || r.kind === 'weakened_test' || r.kind === 'deleted_test') out.push(`${r.detail}`);
+    }
+    if (!protectedApproved(build)) out.push(`It changes protected areas (${protectedFiles(build).join(', ')}) without your separate approval.`);
+    return out;
   }
 
   private async exclusive<T>(buildId: string, fn: () => Promise<T>): Promise<T> {
@@ -248,7 +287,9 @@ export class Builder {
     const ids = list('Requirement IDs', input.requirementIds ?? [], 50, 20);
     const spec = this.ws.approvedPlanDoc(projectId, 'spec');
     const known = new Set((spec?.content as Spec | undefined)?.requirements.map((r) => r.id) ?? []);
-    if (input.kind === 'feature' && ids.length === 0) {
+    const platform = this.ws.getProject(projectId).kind === 'maintenance';
+    // Platform work implements an approved backlog item or update instead of a product specification.
+    if (input.kind === 'feature' && ids.length === 0 && !platform) {
       throw new ValidationError(spec ? 'Name the requirement IDs this feature implements.' : 'Approve a specification first: a feature implements its requirements.');
     }
     const unknown = ids.filter((id) => !known.has(id));
@@ -262,6 +303,11 @@ export class Builder {
     });
     const checks = normalizeChecks(input.checks);
     if (checks.length === 0) throw new ValidationError('Add at least one check command (for example "npm test") so the change can be verified.');
+    if (platform) {
+      for (const m of MANDATORY_CHECKS) {
+        if (!checks.some((c) => c.id === m.id && c.command === m.command)) throw new ValidationError(`Platform work always runs the mandatory checks (${MANDATORY_CHECKS.map((c) => c.command).join(', ')}); "${m.command}" cannot be removed or changed.`);
+      }
+    }
     const repro = input.kind === 'bugfix' ? text('How to reproduce it', input.repro ?? '', 10_000) : null;
     const referenceIds = input.kind === 'ui_polish' ? list('References', input.referenceIds ?? [], 20, 60) : [];
     for (const id of referenceIds) {
@@ -278,6 +324,7 @@ export class Builder {
     const reqs = (spec?.requirements ?? []).filter((r) => build.requirementIds.includes(r.id));
     const baseline = this.latest(build.id, 'baseline');
     const lines = [
+      ...(build.source ? [`Platform work for ${build.source.ref} (approved by the person).`, ''] : []),
       build.kind === 'feature' ? `Implement this feature: ${build.goal}` : build.kind === 'ui_polish' ? `Polish the user interface: ${build.goal}` : `Fix this bug: ${build.goal}`,
       ...(build.repro ? ['', 'How to reproduce it:', build.repro] : []),
       ...(reqs.length ? ['', 'Requirements:', ...reqs.flatMap((r) => [`- ${r.id} (${r.priority}) ${r.title}`, ...r.acceptanceCriteria.map((c) => `  - accept: ${c}`)])] : []),
@@ -360,6 +407,8 @@ export function renderReport(build: Build, runs: CheckRun[], referenceTitles: st
     '',
     `Status: **${build.status}**. Branch \`${build.branch ?? '(not started)'}\` from commit \`${build.baseCommit?.slice(0, 12) ?? '-'}\`.`,
     ...(build.requirementIds.length ? [`Requirements: ${build.requirementIds.join(', ')}`] : []),
+    ...(build.source ? [`Platform work for **${build.source.ref}**: ${build.source.title}`] : []),
+    ...(build.protectedApproval ? [`Protected changes approved by ${build.protectedApproval.by} at ${build.protectedApproval.at}: ${build.protectedApproval.files.join(', ')}. Reason: ${build.protectedApproval.reason}`] : []),
     '',
     '## Task',
     '',

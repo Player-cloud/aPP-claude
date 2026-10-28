@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { ElectronApplication, Page } from 'playwright-core';
 import { launch, ROOT, SHOTS, tempHome } from './helpers.ts';
 import { buildClaudeFixture, CANARIES } from '../test/claude-fixture.ts';
-import { solidPng } from '../test/helpers.ts';
+import { platformRepo, solidPng } from '../test/helpers.ts';
 
 mkdirSync(SHOTS, { recursive: true });
 
@@ -988,6 +988,86 @@ test('M12: check trusted sources for updates, approve one, see it installed by t
     await inspector.getByLabel('Why you do not want it').fill('Waiting for the team');
     await dismiss.click();
     await inspector.getByText('Dismissed by', { exact: false }).waitFor();
+  } finally {
+    await app.close();
+  }
+});
+
+test('M13: an approved improvement becomes platform work with mandatory checks, a protected-change approval, and a tested backup', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const repo = platformRepo(join(home, 'code'));
+  const { app, page } = await launch(join(home, 'app'));
+  try {
+    await resize(app, 1280, 900);
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+    await page.getByRole('button', { name: 'Platform', exact: true }).first().click();
+    await page.getByRole('heading', { name: 'Set up platform maintenance' }).waitFor();
+    await page.getByLabel('Source folder').fill(repo);
+    await page.getByRole('button', { name: 'Set up' }).click();
+    const kg = page.getByRole('list', { name: 'Known-good versions' });
+    await kg.getByText('0.15.0', { exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
+
+    // An approved item, from typed feedback.
+    await page.evaluate(async () => {
+      const i = await window.iap.addFeedback({ text: 'Adding two numbers gives the difference.', title: 'Sums are wrong' });
+      if (!i.ok) throw new Error(i.error.message);
+      await window.iap.editImprovement({ id: i.value.id, expectedOutcome: 'Sums are right', successCriteria: 'No wrong-sum reports for a week' });
+      await window.iap.moveImprovement({ id: i.value.id, to: 'proposed' });
+      const a = await window.iap.moveImprovement({ id: i.value.id, to: 'approved' });
+      if (!a.ok) throw new Error(a.error.message);
+    });
+    await page.getByRole('button', { name: 'Improvements', exact: true }).first().click();
+    await page.getByRole('list', { name: 'Improvements' }).getByRole('button', { name: /Sums are wrong/ }).click();
+    const inspector = page.getByRole('region', { name: /IMP-1 Sums are wrong/ });
+    await inspector.getByRole('button', { name: 'Build as platform work' }).click();
+    await inspector.getByText(/is a draft in the platform-maintenance project/).waitFor();
+    await inspector.getByText('In progress', { exact: true }).first().waitFor();
+
+    await page.getByRole('button', { name: 'Platform', exact: true }).first().click();
+    await page.getByRole('list', { name: 'Platform builds' }).getByText(/IMP-1: Sums are wrong/).waitFor();
+    await page.getByRole('button', { name: 'Open the project' }).click();
+    await page.getByText('This project is the app itself').waitFor();
+    const panel = page.getByRole('region', { name: /Build work/ });
+    const card = panel.locator('.build-card').first();
+    await card.getByText(/Platform work for IMP-1/).waitFor();
+    await card.getByText('deps: npm ci').waitFor();
+    await card.getByRole('button', { name: 'Start and run checks' }).click();
+    await card.getByText('In progress', { exact: true }).waitFor();
+
+    // The fix plus a change to production configuration, made by hand in the worktree.
+    const worktree = await card.locator('p:has-text("Branch") .mono').nth(1).innerText();
+    writeFileSync(join(worktree, 'src', 'sum.mjs'), 'export const sum = (a, b) => a + b;\n');
+    const pkg = JSON.parse(readFileSync(join(worktree, 'package.json'), 'utf8'));
+    writeFileSync(join(worktree, 'package.json'), JSON.stringify({ ...pkg, description: 'adds numbers' }, null, 2));
+    await card.getByRole('button', { name: 'Verify', exact: true }).click();
+    await card.getByText('Ready for review', { exact: true }).waitFor();
+    await card.getByRole('list', { name: 'Risks' }).getByText(/production configuration: package\.json/).waitFor();
+    await card.getByLabel(/Why the remaining risks are acceptable/).fill('The description change is wanted.');
+    await card.getByRole('button', { name: 'Mark done' }).click();
+    await card.getByText(/without your separate approval/).waitFor();
+    await card.getByLabel('Why these protected changes are needed').fill('Adds a description for the installer.');
+    await card.getByRole('button', { name: 'Approve protected changes…' }).click();
+    await card.getByText('Protected changes approved').waitFor();
+    await card.scrollIntoViewIfNeeded();
+    await shot(page, '29-platform-build-dark-1280');
+    await card.getByLabel(/Why the remaining risks are acceptable/).fill('Protected change approved; the unit check covers the fix.');
+    await card.getByRole('button', { name: 'Mark done' }).click();
+    await panel.getByText('Done', { exact: true }).waitFor();
+    assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }), '', 'the source checkout is never edited');
+
+    // A backup before installing the new version, and a recovery drill on a copy.
+    await page.getByRole('button', { name: 'Platform', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Take a backup' }).click();
+    const backups = page.getByRole('list', { name: 'Backups' });
+    await backups.getByText('Restorable').waitFor();
+    await backups.getByRole('button', { name: 'Test recovery' }).click();
+    await page.getByText('Recovery test passed').waitFor();
+    await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
+    await shot(page, '30-platform-dark-1280');
   } finally {
     await app.close();
   }

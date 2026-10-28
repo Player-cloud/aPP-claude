@@ -8,6 +8,11 @@
 // "Prepared" means the gates passed (or were knowingly excepted) on a known
 // commit. It is release preparation only: nothing here deploys, tags, pushes
 // or publishes. Deployment is a separate step with its own approval.
+//
+// A platform release (M13) always runs the release checks for the app,
+// starts from a plan whose rollback is the last known-good version and its
+// database backup, and cannot take gate exceptions: a failed evaluation
+// blocks it.
 
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,7 +21,8 @@ import { credentialLines, redactString } from '../redact.ts';
 import type { Release, ReleaseCheckRun, Workspace } from '../workspace.ts';
 import { normalizeChecks, runCheck, type Check, type CheckResult } from '../build/checks.ts';
 import { addDetachedWorktree, inspectRepo, isAncestor, resetDetachedWorktree, trackedFiles } from '../build/git.ts';
-import { GATE_IDS, blockingGates, evaluateGates, type Gate, type GateException, type IncludedBuild, type ReleaseEvidence, type ReleasePlan } from './gates.ts';
+import { GATE_IDS, blockingGates, evaluateGates, type Gate, type GateException, type IncludedBuild, type PlatformItems, type ReleaseEvidence, type ReleasePlan } from './gates.ts';
+import { protectedApproved, protectedFiles, RELEASE_CHECKS, withMandatory } from '../maintain/maintain.ts';
 
 export interface ReleaseInput {
   version: string;
@@ -63,9 +69,11 @@ export class Releaser {
     const project = this.ws.getProject(projectId);
     const version = String(input.version ?? '').trim();
     if (!VERSION.test(version)) throw new ValidationError('Use a version like 1.2.0.');
-    const checks = normalizeChecks(input.checks);
+    const platform = project.kind === 'maintenance';
+    const checks = platform ? withMandatory(normalizeChecks(input.checks ?? []), RELEASE_CHECKS) : normalizeChecks(input.checks);
     if (!checks.length) throw new ValidationError('Add at least one release check, such as your test command.');
-    return this.ws.createRelease({ projectId: project.id, version, plan: plan(input.plan), checks, buildIds: this.buildIds(projectId, input.buildIds) });
+    const p = plan(input.plan);
+    return this.ws.createRelease({ projectId: project.id, version, plan: platform ? this.platformPlan(p, version) : p, checks, buildIds: this.buildIds(projectId, input.buildIds) });
   }
 
   /** Changes the plan or the included work. Gates found earlier no longer apply, so the release goes back to draft. */
@@ -75,7 +83,7 @@ export class Releaser {
     return this.ws.updateRelease(
       releaseId,
       {
-        plan: input.plan ? plan(input.plan) : r.plan,
+        plan: input.plan ? (this.ws.getProject(r.projectId).kind === 'maintenance' ? this.platformPlan(plan(input.plan), r.version) : plan(input.plan)) : r.plan,
         buildIds: input.buildIds ? this.buildIds(r.projectId, input.buildIds) : r.buildIds,
         status: 'draft',
         evidence: null,
@@ -129,6 +137,7 @@ export class Releaser {
         checkResults: checkResults.map((c) => ({ ...c, output: c.output.slice(-2_000) })),
         flaggedLines,
         reviewTools: reviewTools(this.ws),
+        platform: project.kind === 'maintenance' ? this.platformItems(r.buildIds) : null,
       };
       this.evaluate(releaseId, evidence, 'release.checked');
       return this.detail(releaseId);
@@ -152,6 +161,7 @@ export class Releaser {
   /** The person accepts a failed or blocked gate, with a reason and a mitigation (FR-QA-004). The record is permanent. */
   addException(releaseId: string, gateId: string, why: string, mitigation: string): ReleaseDetail {
     const r = this.open(releaseId);
+    if (this.ws.getProject(r.projectId).kind === 'maintenance') throw new ValidationError('A platform release takes no exceptions: a failed evaluation blocks it. Fix the cause and run the ship-check again.');
     if (!(GATE_IDS as readonly string[]).includes(gateId)) throw new ValidationError(`Unknown gate "${gateId}".`);
     const gate = r.gates?.find((g) => g.id === gateId);
     if (!gate) throw new ValidationError('Run the ship-check first.');
@@ -211,6 +221,7 @@ export class Releaser {
       classifications: r.classifications,
       // An exception is for the commit it was given on; a new commit needs a new decision.
       exceptions: this.ws.listGateExceptions(releaseId).filter((e) => e.commit === evidence.commit),
+      platform: evidence.platform ?? null,
     });
     const blocking = blockingGates(gates);
     this.ws.updateRelease(
@@ -255,9 +266,47 @@ export class Releaser {
         note: b.note,
         merged: b.resultCommit ? await isAncestor(repo, b.resultCommit, head) : false,
         branch: b.branch,
+        ...(b.source ? { source: b.source, protectedFiles: protectedFiles(b), protectedApproved: protectedApproved(b) } : {}),
       });
     }
     return out;
+  }
+
+  /** Where each included platform item stands now: it must still be approved (or further along). */
+  private platformItems(buildIds: string[]): PlatformItems {
+    const items: PlatformItems['items'] = [];
+    for (const id of buildIds) {
+      const s = this.ws.getBuild(id).source;
+      if (!s) continue;
+      let status = 'missing';
+      let approved = false;
+      if (s.type === 'improvement') {
+        const i = this.ws.getImprovement(s.id);
+        status = i.status;
+        approved = ['approved', 'in_progress', 'verified', 'released'].includes(i.status) && i.approvedAt !== null;
+      } else {
+        const u = this.ws.getUpdate(s.id);
+        status = u.stage;
+        approved = ['approved', 'installed', 'verified'].includes(u.stage) && u.approval !== null;
+      }
+      items.push({ ref: s.ref, title: s.title, status, approved });
+    }
+    return { items };
+  }
+
+  /** The person's plan, with the platform's own target, health check, rollback and monitoring filled in where left empty. */
+  private platformPlan(p: ReleasePlan, version: string): ReleasePlan {
+    const kg = this.ws.listKnownGood()[0];
+    return {
+      target: p.target || `Windows installer for ${version.replace(/^v/, '')} (npm run dist:win), installed by you on your own PC`,
+      healthCheck: p.healthCheck || 'Open the app: Settings shows the database is healthy and your projects load. Then mark the version known-good in Improvements → Platform maintenance.',
+      rollback:
+        p.rollback ||
+        `Reinstall the known-good version ${kg ? kg.version : '(none recorded yet)'} and restore the database backup you took before installing (Platform maintenance → Backups, or "iap recover --from <backup> --confirm" with the app closed).`,
+      monitoring: p.monitoring || 'Run a self-assessment after a week of use, then measure each released item in Improvements.',
+      migrations: p.migrations || 'The new version may move the data format forward. Take a backup in Platform maintenance before installing it.',
+      envVars: p.envVars,
+    };
   }
 
   private writeReport(releaseId: string): void {

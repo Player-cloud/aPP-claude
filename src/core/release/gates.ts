@@ -4,6 +4,10 @@
 // the exact release commit, a secrets scan, and the person's release plan.
 // Nothing here deploys. A required gate that fails or cannot run blocks the
 // release unless the person records an exception with a mitigation plan.
+//
+// A platform release (M13, DEC-029) checks approved backlog items and updates
+// instead of a product specification, adds the protected-changes gate, and
+// takes no exceptions.
 
 import type { Requirement } from '../planning.ts';
 import { ranNoTests, type CheckResult } from '../build/checks.ts';
@@ -46,7 +50,7 @@ export interface Gate {
   exception?: GateException;
 }
 
-export const GATE_IDS = ['spec', 'drift', 'builds', 'risks', 'tests', 'secrets', 'reviews', 'plan'] as const;
+export const GATE_IDS = ['spec', 'drift', 'builds', 'risks', 'tests', 'secrets', 'reviews', 'plan', 'protected'] as const;
 export type GateId = (typeof GATE_IDS)[number];
 
 export interface ReleasePlan {
@@ -76,6 +80,15 @@ export interface IncludedBuild {
   /** True when the build's branch is part of the release commit. */
   merged: boolean;
   branch: string | null;
+  /** Platform work (M13): the item it implements, its protected files, and whether the person approved them. */
+  source?: { type: 'improvement' | 'update'; id: string; ref: string; title: string } | null;
+  protectedFiles?: string[];
+  protectedApproved?: boolean;
+}
+
+/** For a platform release: where each included item stands now. */
+export interface PlatformItems {
+  items: { ref: string; title: string; status: string; approved: boolean }[];
 }
 
 export interface GateInput {
@@ -91,6 +104,8 @@ export interface GateInput {
   plan: ReleasePlan;
   classifications: Record<string, { kind: 'intentional_deviation' | 'spec_change'; note: string }>;
   exceptions: GateException[];
+  /** Set for a platform release (M13). */
+  platform?: PlatformItems | null;
 }
 
 /** The evidence a ship-check gathers. Stored with the release (field names avoid the redactor's secret-looking keys). */
@@ -104,12 +119,24 @@ export interface ReleaseEvidence {
   /** "path:line" of lines that look like a credential; null when the scan could not run. */
   flaggedLines: string[] | null;
   reviewTools: string[];
+  /** Set for a platform release (M13). */
+  platform?: PlatformItems | null;
 }
 
 const CRITICAL_RISKS = new Set<Risk['kind']>(['regression', 'weakened_test', 'deleted_test']);
 
 export function evaluateGates(input: GateInput): Gate[] {
-  const gates: Gate[] = [specGate(input), driftGate(input), buildsGate(input), risksGate(input), testsGate(input), secretsGate(input), reviewsGate(input), planGate(input)];
+  const gates: Gate[] = [
+    input.platform ? platformItemsGate(input.platform) : specGate(input),
+    input.platform ? { id: 'drift', title: 'Specification drift', required: false, severity: 'low', status: 'skipped', summary: 'Platform work follows approved improvements and updates, not a product specification.', evidence: [] } : driftGate(input),
+    buildsGate(input),
+    risksGate(input),
+    testsGate(input),
+    secretsGate(input),
+    reviewsGate(input),
+    planGate(input),
+    ...(input.platform ? [protectedGate(input)] : []),
+  ];
   for (const g of gates) {
     const ex = [...input.exceptions].reverse().find((e) => e.gateId === g.id);
     if (ex && (g.status === 'failed' || g.status === 'blocked')) g.exception = ex;
@@ -127,6 +154,24 @@ function specGate({ spec, specOutdated }: GateInput): Gate {
   if (!spec) return { ...base, status: 'failed', summary: 'No specification has been approved.', evidence: [] };
   if (specOutdated) return { ...base, status: 'failed', summary: 'The concept brief was revised after the specification was approved.', evidence: [] };
   return { ...base, status: 'passed', summary: `Approved, with ${spec.requirements.length} requirements.`, evidence: [] };
+}
+
+function platformItemsGate({ items }: PlatformItems): Gate {
+  const base = { id: 'spec' as const, title: 'Approved platform items', required: true, severity: 'high' as const };
+  if (!items.length) return { ...base, status: 'failed', summary: 'No platform work is included.', evidence: [] };
+  const evidence = items.map((i) => `${i.ref} ${i.title}: ${i.status.replace('_', ' ')}`);
+  const bad = items.filter((i) => !i.approved);
+  if (bad.length) return { ...base, status: 'failed', summary: `${bad.map((i) => i.ref).join(', ')} ${bad.length === 1 ? 'is' : 'are'} no longer approved.`, evidence };
+  return { ...base, status: 'passed', summary: `Every included change implements an item you approved (${items.map((i) => i.ref).join(', ')}).`, evidence };
+}
+
+function protectedGate({ builds }: GateInput): Gate {
+  const base = { id: 'protected' as const, title: 'Protected changes have your approval', required: true, severity: 'critical' as const };
+  const touching = builds.filter((b) => b.protectedFiles?.length);
+  const missing = touching.filter((b) => !b.protectedApproved);
+  const evidence = touching.map((b) => `${b.title}: ${b.protectedFiles!.join(', ')} (${b.protectedApproved ? 'approved' : 'NOT approved'})`);
+  if (missing.length) return { ...base, status: 'failed', summary: `${missing.length} item${missing.length === 1 ? ' changes' : 's change'} permissions, security, release gates, configuration or stored data without your approval.`, evidence };
+  return { ...base, status: 'passed', summary: touching.length ? `${touching.length} item${touching.length === 1 ? '' : 's'} with protected changes, all approved.` : 'No protected area is changed.', evidence };
 }
 
 function driftGate({ spec, builds, classifications }: GateInput): Gate {

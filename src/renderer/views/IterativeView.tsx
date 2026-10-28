@@ -113,6 +113,8 @@ function Inspector({ id, items, onChanged, onClose }: { id: string; items: Impro
   const [mergeInto, setMergeInto] = useState('');
   const [form, setForm] = useState({ title: '', problem: '', expectedOutcome: '', successCriteria: '', priority: 'medium', risk: 'low' });
   const [saved, setSaved] = useState(false);
+  const [outcome, setOutcome] = useState({ verdict: 'improved' as 'improved' | 'not_improved', detail: '' });
+  const [platformNote, setPlatformNote] = useState<string | null>(null);
 
   const show = (d: ImprovementDetail) => {
     setDetail(d);
@@ -146,8 +148,9 @@ function Inspector({ id, items, onChanged, onClose }: { id: string; items: Impro
   const i = detail.item;
   const editable = !i.mergedInto && (i.status === 'idea' || i.status === 'proposed');
 
+  const platform = detail.builds.length > 0;
   const move = async (to: ImprovementStatus) => {
-    const needs = MOVE[to].needs ?? (i.status === 'rejected' || i.status === 'blocked' ? { field: 'reason' as const } : undefined);
+    const needs = to === 'released' && platform ? undefined : MOVE[to].needs ?? (i.status === 'rejected' || i.status === 'blocked' ? { field: 'reason' as const } : undefined);
     if (needs && moving !== to) {
       setMoving(to);
       setMoveText('');
@@ -160,6 +163,21 @@ function Inspector({ id, items, onChanged, onClose }: { id: string; items: Impro
   const save = async (event: FormEvent) => {
     event.preventDefault();
     if (await act(() => call(iap().editImprovement({ id: i.id, ...form })))) setSaved(true);
+  };
+
+  const buildPlatform = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const b = await call(iap().startPlatformWork({ improvementId: i.id }));
+      setPlatformNote(`"${b.title}" is a draft in the platform-maintenance project. Open it from Platform or Projects to start it.`);
+      show(await call(iap().getImprovement(i.id)));
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const moveNeeds = moving ? MOVE[moving].needs ?? { field: 'reason' as const, label: i.status === 'blocked' ? 'How it was unblocked' : 'Why it is reopened', hint: 'Recorded with the move.' } : null;
@@ -296,6 +314,71 @@ function Inspector({ id, items, onChanged, onClose }: { id: string; items: Impro
                 </button>
                 <button type="button" className="btn" onClick={() => setMoving(null)}>
                   Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {(detail.builds.length > 0 || i.status === 'approved' || platformNote) && (
+        <div aria-label="Platform work">
+          <h3 className="ref-subhead">Platform work</h3>
+          {platformNote && <Alert title="Build created">{platformNote}</Alert>}
+          {detail.builds.map((b) => (
+            <p key={b.id} className="subtle">
+              {b.title}: {b.status.replace('_', ' ')}
+            </p>
+          ))}
+          {detail.releases.map((r) => (
+            <p key={r.id} className="subtle">
+              In prepared release {r.version}
+            </p>
+          ))}
+          {(i.status === 'approved' || (i.status === 'in_progress' && platform)) && detail.builds.every((b) => b.status === 'abandoned') && (
+            <div className="btn-row">
+              <button type="button" className="btn" disabled={busy} onClick={() => void buildPlatform()}>
+                Build as platform work
+              </button>
+            </div>
+          )}
+          {i.status === 'approved' && <p className="hint">Builds it in a worktree of the app&rsquo;s source with the mandatory checks. The running app is not changed.</p>}
+        </div>
+      )}
+      {detail.reopens && <p className="subtle">Reopens IMP-{detail.reopens.number}, which was released but did not have the intended effect.</p>}
+      {detail.reopenedBy && <Alert tone="warn">Reopened as IMP-{detail.reopenedBy.number} ({STATUS_LABEL[detail.reopenedBy.status].toLowerCase()}): the measured outcome showed the problem was not solved.</Alert>}
+      {i.status === 'released' && (
+        <div aria-label="Measured outcome">
+          <h3 className="ref-subhead">Did it work?</h3>
+          {detail.measurements.length === 0 && <p className="muted">Not measured yet. Passing checks do not show the improvement happened.</p>}
+          <ul className="upd-list">
+            {detail.measurements.map((m) => (
+              <li key={m.id}>
+                <Badge tone={m.verdict === 'improved' ? 'ok' : m.verdict === 'not_improved' ? 'danger' : 'neutral'}>{m.verdict === 'improved' ? 'Improved' : m.verdict === 'not_improved' ? 'Not improved' : 'Too early'}</Badge> {m.detail}{' '}
+                <span className="subtle">
+                  ({formatDate(m.at)}, {m.method === 'person' ? `by ${m.actor}` : 'from the self-assessment'})
+                </span>
+              </li>
+            ))}
+          </ul>
+          {(i.signature || i.reopens) && (
+            <div className="btn-row">
+              <button type="button" className="btn" disabled={busy} onClick={() => void act(() => call(iap().measureImprovement(i.id)))}>
+                Measure from the records
+              </button>
+            </div>
+          )}
+          {!i.signature && !i.reopens && (
+            <div className="field">
+              <label htmlFor="imp-outcome">What you observed against the success criteria</label>
+              <textarea id="imp-outcome" className="textarea" rows={2} value={outcome.detail} onChange={(e) => setOutcome({ ...outcome, detail: e.target.value })} />
+              <div className="btn-row">
+                <select className="select" aria-label="Outcome" value={outcome.verdict} onChange={(e) => setOutcome({ ...outcome, verdict: e.target.value as 'improved' | 'not_improved' })}>
+                  <option value="improved">Improved</option>
+                  <option value="not_improved">Not improved (reopen)</option>
+                </select>
+                <button type="button" className="btn" disabled={busy || outcome.detail.trim().length < 10} onClick={() => void act(() => call(iap().recordImprovementOutcome({ id: i.id, ...outcome })))}>
+                  Record outcome
                 </button>
               </div>
             </div>

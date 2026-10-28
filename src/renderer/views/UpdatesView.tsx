@@ -48,6 +48,9 @@ const SOURCE: Record<SourceStatus, { label: string; tone: Tone }> = {
 
 const KIND_LABEL: Record<UpdateItem['kind'], string> = { library: 'App library', runtime: 'App runtime', cli: 'Claude Code', model: 'Claude model', plugin: 'Plugin' };
 
+/** Updates to what the app is built from; they ship as a new app version (M13). */
+const BUILT_IN = new Set<UpdateItem['kind']>(['library', 'runtime', 'model']);
+
 function List({ title, items, className }: { title: string; items: string[]; className?: string }) {
   if (!items.length) return null;
   return (
@@ -67,6 +70,7 @@ function Inspector({ item, onChanged, onClose }: { item: UpdateItem; onChanged: 
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [dismissing, setDismissing] = useState(false);
+  const [built, setBuilt] = useState<string | null>(null);
   const i = item;
 
   const act = async (run: () => Promise<UpdateItem>) => {
@@ -195,7 +199,33 @@ function Inspector({ item, onChanged, onClose }: { item: UpdateItem; onChanged: 
           )}
         </div>
         {i.stage === 'recommended' && <p className="subtle">Approving records your decision. It installs nothing; install it yourself with the steps above.</p>}
-        {i.stage === 'approved' && <p className="subtle">Install it with the steps above. The next check sees the new version and marks it installed.</p>}
+        {i.stage === 'approved' && !BUILT_IN.has(i.kind) && <p className="subtle">Install it with the steps above. The next check sees the new version and marks it installed.</p>}
+        {i.stage === 'approved' && BUILT_IN.has(i.kind) && (
+          <div aria-label="Platform work">
+            <p className="subtle">This is part of the app itself, so it changes through a new app version. Build it as platform work: a worktree of the app&rsquo;s source with the mandatory checks. The next check after you install that version marks it installed.</p>
+            {built ? (
+              <Alert title="Build created">{built}</Alert>
+            ) : (
+              <div className="btn-row">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    setError(null);
+                    call(iap().startPlatformWork({ updateId: i.id }))
+                      .then((b) => setBuilt(`"${b.title}" is a draft in the platform-maintenance project.`))
+                      .catch((e: Error) => setError(e.message))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  Build as platform work
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {dismissing && (
           <div className="field">
             <label htmlFor="upd-reason">Why you do not want it</label>
