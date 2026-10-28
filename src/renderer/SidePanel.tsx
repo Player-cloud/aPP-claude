@@ -1,6 +1,6 @@
 // The context panel between the rail and the work surface. Its contents follow
-// the current section: the project explorer, the improvement backlog and
-// the planned Iterative Layer modules, or the settings groups. Hidden below 1060px (M2-AC9).
+// the current section: the project explorer, the tool, update and improvement
+// filters, or the settings groups. Hidden below 1060px (M2-AC9).
 import { useState } from 'react';
 import type { Project, ToolKind, ToolScan } from '../shared/api.ts';
 import type { Section } from './App.tsx';
@@ -8,10 +8,7 @@ import { Icon } from './icons.tsx';
 import { KIND_LABEL as REF_KIND_LABEL, type StudioFilter } from './views/LearningStudioView.tsx';
 import { KIND_LABEL, type ToolFilter } from './views/ToolsView.tsx';
 import { STATUS_LABEL, type ImprovementFilter } from './views/IterativeView.tsx';
-
-const PLANNED = [
-  { icon: 'radar', label: 'Ecosystem monitor', hint: 'Updates to Claude, plugins and MCP servers' },
-] as const;
+import { STAGE_LABEL, type UpdateFilter } from './views/UpdatesView.tsx';
 
 const KIND_ORDER: ToolKind[] = ['plugin', 'skill', 'command', 'agent', 'hook', 'mcp_server', 'marketplace'];
 
@@ -81,21 +78,28 @@ function ImprovementFilters({ filter, onFilter }: { filter: ImprovementFilter; o
         </ul>
         <p className="side-note">Only you approve. Approving changes nothing in the app.</p>
       </nav>
-      <ul className="side-list" aria-label="Planned modules">
-        {PLANNED.map((m) => (
-          <li key={m.label} className="side-row">
-            <span className="side-icon">
-              <Icon name={m.icon} size={16} />
-            </span>
-            <span className="side-row-text">
-              <span>{m.label}</span>
-              <span className="side-row-hint">{m.hint}</span>
-            </span>
+    </>
+  );
+}
+
+function UpdateFilters({ filter, onFilter }: { filter: UpdateFilter; onFilter: (f: UpdateFilter) => void }) {
+  return (
+    <nav aria-label="Update filters" className="tree">
+      <button type="button" className="tree-root" aria-current={filter === 'all' ? 'page' : undefined} onClick={() => onFilter('all')}>
+        <Icon name="radar" size={18} />
+        <span className="tree-label">All open and recent</span>
+      </button>
+      <ul className="tree-children">
+        {(Object.entries(STAGE_LABEL) as [UpdateFilter, string][]).map(([id, label]) => (
+          <li key={id}>
+            <button type="button" className="tree-item" aria-current={filter === id ? 'page' : undefined} onClick={() => onFilter(id)}>
+              <span className="tree-label">{label}</span>
+            </button>
           </li>
         ))}
-        <li className="side-note">Planned. Nothing here runs yet.</li>
       </ul>
-    </>
+      <p className="side-note">Checking only reads trusted sources. The app never installs an update.</p>
+    </nav>
   );
 }
 
@@ -161,6 +165,8 @@ export function SidePanel({
   onStudioFilter,
   improvementFilter,
   onImprovementFilter,
+  updateFilter,
+  onUpdateFilter,
 }: {
   section: Section;
   projects: Project[] | null;
@@ -174,8 +180,10 @@ export function SidePanel({
   onStudioFilter: (f: StudioFilter) => void;
   improvementFilter: ImprovementFilter;
   onImprovementFilter: (f: ImprovementFilter) => void;
+  updateFilter: UpdateFilter;
+  onUpdateFilter: (f: UpdateFilter) => void;
 }) {
-  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', studio: 'Learning Studio', tools: 'Tools', iterative: 'Improvements', settings: 'Settings' }[section];
+  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', studio: 'Learning Studio', tools: 'Tools', updates: 'Updates', iterative: 'Improvements', settings: 'Settings' }[section];
   return (
     <aside className="side" aria-label={`${title} panel`}>
       <div className="side-head">
@@ -189,6 +197,7 @@ export function SidePanel({
       {(section === 'projects' || section === 'activity') && <ProjectTree section={section} projects={projects} selected={selected} onSelect={onSelect} />}
       {section === 'studio' && <StudioFilters filter={studioFilter} onFilter={onStudioFilter} />}
       {section === 'tools' && <ToolFilters scan={toolScan} filter={toolFilter} onFilter={onToolFilter} />}
+      {section === 'updates' && <UpdateFilters filter={updateFilter} onFilter={onUpdateFilter} />}
       {section === 'iterative' && <ImprovementFilters filter={improvementFilter} onFilter={onImprovementFilter} />}
       {section === 'settings' && (
         <nav aria-label="Settings groups" className="tree">

@@ -25,6 +25,9 @@ import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
 import { Studio, type DesignReference, type ReferenceEdit } from '../core/studio/library.ts';
 import { describeAudit } from '../core/design/audit.ts';
 import { Cleanup, claudeRunner, type CleanupPlan } from '../core/cleanup/cleanup.ts';
+import { bundledVersions, claudeVersionReader, fixtureFetcher, httpFetcher, UpdateMonitor, type UpdateCheck, type UpdateItem } from '../core/updates/updates.ts';
+import { CLAUDE_MODEL } from '../core/agents/claude.ts';
+import { homedir } from 'node:os';
 import { Backlog, type ImprovementDetail, type ImprovementStatus, type SelfAssessmentRecord } from '../core/iterate/backlog.ts';
 import type { Assessment } from '../core/workspace.ts';
 import type { AgentTask } from '../core/workspace.ts';
@@ -54,6 +57,13 @@ Tool cleanup (changes your Claude Code setup only after --confirm; plans are kep
   tools run <planId> --confirm [--accept] [--reason <why>]   Make the change (--accept: other tools or workflows depend on it)
   tools restore <planId> --confirm                     Undo it where the app can
   tools cancel <planId> | tools cleanups
+
+Updates (asks trusted sources what is new; nothing is ever installed by the app)
+  updates check                               Ask npm, the release notes, the security advisories, the model list (with ANTHROPIC_API_KEY) and plugin marketplaces
+  updates list | updates show <UPD-n>
+  updates approve <UPD-n> [--note <text>]     Record that you want it (the app shows how to install it; it installs nothing)
+  updates dismiss <UPD-n> --reason <why> | updates reopen <UPD-n>
+  updates verify <UPD-n>                      After you installed it: check the version and run a fresh tool scan
 
 Main agent (simulated unless a monthly budget is set and ANTHROPIC_API_KEY holds your key)
   agent run [runId] --goal <text> [--title <text>]   Plan, delegate and reconcile a request (the run must be "running")
@@ -380,6 +390,35 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
           for (const p of list) out(`${p.id}  ${p.status.padEnd(9)} ${p.action.padEnd(9)} ${p.entry.invocation ?? p.entry.name}`);
         });
         return 0;
+      }
+      case 'updates check': {
+        const c = await cliUpdates(ws).check();
+        print(c, () => describeCheck(c, ws, out));
+        return 0;
+      }
+      case 'updates list': {
+        const { items, stale } = cliUpdates(ws).overview();
+        print(items, () => {
+          if (!items.length) out('Nothing found yet. Run: iap updates check');
+          for (const i of items) out(`UPD-${i.number}  ${i.stage.padEnd(11)} ${i.priority.padEnd(11)} ${i.title}`);
+          for (const s of stale) out(`stale source: ${s.name} (last answered ${s.lastOk ?? 'never'})`);
+        });
+        return 0;
+      }
+      case 'updates show': {
+        const i = ws.getUpdate(updateId(ws, need(rest[0], 'UPD-n')));
+        print(i, () => describeUpdate(i, out));
+        return 0;
+      }
+      case 'updates approve':
+      case 'updates dismiss':
+      case 'updates reopen':
+      case 'updates verify': {
+        const m = cliUpdates(ws);
+        const id = updateId(ws, need(rest[0], 'UPD-n'));
+        const i = sub === 'approve' ? m.approve(id, values.note ?? null) : sub === 'dismiss' ? m.dismiss(id, values.reason ?? '') : sub === 'reopen' ? m.reopen(id) : await m.verify(id);
+        print(i, () => describeUpdate(i, out));
+        return sub === 'verify' && i.stage === 'failed' ? 4 : 0;
       }
       case 'iter assess': {
         const a = new Backlog(ws).assess();
@@ -745,6 +784,59 @@ function describeAssessment(a: Assessment, out: Out): void {
 function cliCleanup(ws: Workspace): Cleanup {
   // The same folders as the last scan, so the rescan after a change can be compared with it.
   return new Cleanup(ws, ws.latestToolScan()?.roots ?? defaultScanRoots(), claudeRunner(process.env.IAP_CLAUDE_COMMAND ? JSON.parse(process.env.IAP_CLAUDE_COMMAND) as string[] : undefined));
+}
+
+function cliUpdates(ws: Workspace): UpdateMonitor {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  return new UpdateMonitor(ws, {
+    fetcher: process.env.IAP_UPDATE_FIXTURE ? fixtureFetcher(process.env.IAP_UPDATE_FIXTURE) : httpFetcher(),
+    bundled: bundledVersions(),
+    claudeVersion: claudeVersionReader(claudeRunner(process.env.IAP_CLAUDE_COMMAND ? (JSON.parse(process.env.IAP_CLAUDE_COMMAND) as string[]) : undefined), homedir()),
+    listModels: apiKey
+      ? async () => (await new Anthropic({ apiKey, maxRetries: 1 }).models.list({ limit: 100 })).data.map((m) => ({ id: m.id, createdAt: m.created_at ?? null, name: m.display_name ?? null }))
+      : null,
+    currentModel: CLAUDE_MODEL,
+    rescan: () => runToolScan(ws.latestToolScan()?.roots ?? defaultScanRoots()),
+  });
+}
+
+/** Accepts UPD-n or the id. */
+function updateId(ws: Workspace, ref: string): string {
+  const n = /^UPD-(\d+)$/i.exec(ref);
+  if (!n) return ref;
+  const hit = ws.listUpdates({}).find((i) => i.number === Number(n[1]));
+  if (!hit) throw new ValidationError(`No update ${ref}.`);
+  return hit.id;
+}
+
+function describeCheck(c: UpdateCheck, ws: Workspace, out: Out): void {
+  out(`Update check ${c.at}`);
+  for (const s of c.sources) out(`  ${s.status.padEnd(12)} ${s.name}: ${s.detail}`);
+  for (const n of c.notChecked) out(`  not checked: ${n}`);
+  out(`  ${c.created.length} new, ${c.updated.length} seen again, ${c.installed.length} now installed`);
+  for (const id of c.created) {
+    const i = ws.getUpdate(id);
+    out(`  UPD-${i.number}  ${i.priority.padEnd(11)} ${i.title}`);
+  }
+}
+
+function describeUpdate(i: UpdateItem, out: Out): void {
+  out(`UPD-${i.number}  ${i.stage}  ${i.title}`);
+  out(`  ${i.priority}, ${i.confidence} confidence. Installed ${i.installedVersion ?? 'unknown'}${i.observedVersion ? `, found ${i.observedVersion}` : ''}`);
+  out(`  source: ${i.source.name}${i.source.url ? ` (${i.source.url})` : ''}, detected ${i.detectedAt}, last seen ${i.lastSeenAt}`);
+  for (const l of i.summary) out(`  - ${l}`);
+  for (const w of i.impacts.workflows) out(`  workflow: ${w}`);
+  for (const t of i.impacts.tests) out(`  test: ${t}`);
+  out(`  recommendation: ${i.recommendation}`);
+  for (const e of i.evaluation) out(`  evaluate: ${e}`);
+  for (const s of i.installSteps) out(`  install: ${s}`);
+  if (i.approval) out(`  approved by ${i.approval.by} at ${i.approval.at}${i.approval.note ? `: ${i.approval.note}` : ''}`);
+  if (i.dismissal) out(`  dismissed by ${i.dismissal.by}: ${i.dismissal.reason}`);
+  if (i.installed) out(`  installed: ${i.installed.evidence}`);
+  if (i.verification) {
+    out(`  verification ${i.verification.passed ? 'passed' : 'FAILED'} at ${i.verification.at}`);
+    for (const e of i.verification.evidence) out(`    ${e}`);
+  }
 }
 
 function describeCleanup(p: CleanupPlan, out: Out): void {

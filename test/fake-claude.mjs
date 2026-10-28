@@ -5,6 +5,12 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { join } from 'node:path';
 
 const [area, verb, name, flag, scope] = process.argv.slice(2);
+if (area === '--version') {
+  const file = process.env.FAKE_CLAUDE_VERSION_FILE;
+  const version = file && existsSync(file) ? readFileSync(file, 'utf8').trim() : process.env.FAKE_CLAUDE_VERSION ?? '2.0.0';
+  console.log(`${version} (Claude Code)`);
+  process.exit(0);
+}
 const config = process.env.FAKE_CLAUDE_CONFIG;
 const userFile = process.env.FAKE_CLAUDE_USER_FILE;
 appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }) + '\n');

@@ -133,7 +133,7 @@ export function findClaude(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
 export function claudeRunner(prefix?: string[]): ClaudeRunner {
   return (args, cwd) =>
     new Promise((done) => {
-      if (args.some((a) => a !== '--scope' && !SAFE_ARG.test(a))) return done({ exitCode: null, output: '', error: 'Refused: an argument was not a plain name.' });
+      if (args.some((a) => a !== '--scope' && a !== '--version' && !SAFE_ARG.test(a))) return done({ exitCode: null, output: '', error: 'Refused: an argument was not a plain name.' });
       let file: string;
       let argv: string[];
       let shell = false;

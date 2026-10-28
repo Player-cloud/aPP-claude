@@ -7,6 +7,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveAppHome } from '../core/paths.ts';
+import { fixtureFetcher } from '../core/updates/updates.ts';
 import { channel, IAP_METHODS } from '../shared/api.ts';
 import { EncryptedFileKeyStore } from './keystore.ts';
 import { serveReference } from './references.ts';
@@ -123,6 +124,8 @@ if (smokeTest) {
       },
       // Tests replace the claude executable with a stand-in (a JSON array: program and arguments).
       claudeCommand: process.env.IAP_CLAUDE_COMMAND ? (JSON.parse(process.env.IAP_CLAUDE_COMMAND) as string[]) : undefined,
+      // Tests answer the update sources from a file instead of the network (M12).
+      fetcher: process.env.IAP_UPDATE_FIXTURE ? fixtureFetcher(process.env.IAP_UPDATE_FIXTURE) : undefined,
       // M11: changes to the person's Claude Code setup are approved in a native dialog the page cannot click.
       confirmCleanup: async ({ title, lines }) => {
         const options = {

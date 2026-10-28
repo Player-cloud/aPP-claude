@@ -14,10 +14,11 @@ import { ProjectsView } from './views/ProjectsView.tsx';
 import { RecoveryView } from './views/RecoveryView.tsx';
 import { SettingsView } from './views/SettingsView.tsx';
 import { ToolsView, type ToolFilter } from './views/ToolsView.tsx';
+import { UpdatesView, type UpdateFilter } from './views/UpdatesView.tsx';
 
-export type Section = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'iterative' | 'settings';
+export type Section = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'updates' | 'iterative' | 'settings';
 
-type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'iterate' | 'settings';
+type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'radar' | 'iterate' | 'settings';
 
 // Groups are separated by a divider in the rail: Project Layer, then Iterative Layer.
 const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
@@ -29,6 +30,7 @@ const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
   ],
   [
     { id: 'tools', label: 'Tools', icon: 'tools' },
+    { id: 'updates', label: 'Updates', icon: 'radar' },
     { id: 'iterative', label: 'Improvements', icon: 'iterate' },
   ],
 ];
@@ -39,6 +41,7 @@ export const SECTION_LABEL: Record<Section, string> = {
   activity: 'Activity',
   studio: 'Learning Studio',
   tools: 'Tools',
+  updates: 'Updates',
   iterative: 'Improvements',
   settings: 'Settings',
 };
@@ -78,6 +81,7 @@ export function App() {
   const [toolFilter, setToolFilter] = useState<ToolFilter>('all');
   const [studioFilter, setStudioFilter] = useState<StudioFilter>('all');
   const [improvementFilter, setImprovementFilter] = useState<ImprovementFilter>('all');
+  const [updateFilter, setUpdateFilter] = useState<UpdateFilter>('all');
   // Runs of every project, for the top bar's run status and the Command Centre.
   const [runs, setRuns] = useState<Record<string, RunWithNext[]> | null>(null);
   const [agent, setAgent] = useState<AgentStatus | null>(null);
@@ -236,6 +240,8 @@ export function App() {
         onStudioFilter={setStudioFilter}
         improvementFilter={improvementFilter}
         onImprovementFilter={setImprovementFilter}
+        updateFilter={updateFilter}
+        onUpdateFilter={setUpdateFilter}
       />
 
       <div className="main">
@@ -306,6 +312,7 @@ export function App() {
           )}
           {section === 'studio' && <LearningStudioView projects={projects ?? []} filter={studioFilter} onFilter={setStudioFilter} />}
           {section === 'tools' && <ToolsView scan={toolScan} error={toolError} filter={toolFilter} onScan={scanTools} onRefresh={async () => setToolScan(await call(iap().getToolScan()))} />}
+          {section === 'updates' && <UpdatesView filter={updateFilter} onFilter={setUpdateFilter} />}
           {section === 'iterative' && <IterativeView filter={improvementFilter} onFilter={setImprovementFilter} />}
           {section === 'settings' && settings && <SettingsView status={status} settings={settings} onSettings={setSettings} />}
         </main>

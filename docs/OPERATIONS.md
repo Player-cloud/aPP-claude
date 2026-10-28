@@ -62,6 +62,18 @@ MCP server environment variables and headers are reduced to their names, URLs lo
 | Results | The app scans again. *Done* only when Claude Code succeeded and the scan shows it; otherwise *partial* or *failed* with Claude Code's output and next steps. A Claude Code session that is already open needs `/reload-plugins` or a restart |
 | Undo | `iap tools restore <planId> --confirm` or *Restore…*: moves files back, re-enables or reinstalls plugins. A removed MCP server is re-added by you from the kept copy (re-enter its secrets) |
 
+## Update monitor (M12, DEC-028)
+
+| What | Where / how |
+|---|---|
+| Checking | *Updates* → *Check for updates*, or `iap updates check`. Manual only; nothing runs in the background |
+| What is sent | HTTPS requests to `registry.npmjs.org` (package names, and the installed versions for the advisory check) and `raw.githubusercontent.com` (release notes and plugin marketplace files, public). The Anthropic model list is requested only when an API key is stored (in the app: Settings → AI usage; CLI: `ANTHROPIC_API_KEY`); it costs nothing |
+| Installed versions | App libraries: fixed when the app is built. Claude Code: `claude --version` from your PATH. Plugins: the latest tool scan (scan first) |
+| Decisions | `iap updates approve <UPD-n> [--note]`, `dismiss <UPD-n> --reason`, `reopen`. Approving installs nothing |
+| Installing | Done by you: `claude update` for Claude Code, `claude plugin update <id> --scope <scope>` for a plugin, and a new app release for the app's own libraries. The next check marks the item installed |
+| Verifying | *Verify* or `iap updates verify <UPD-n>`: re-reads the version and, for Claude Code and plugins, runs a fresh tool scan. Exit code 4 when verification fails |
+| Records | Checks and items stay in `iap.db` for good; every step is in the audit log |
+
 ## Planning documents (M5, DEC-019)
 
 Each project's `docs/designs/` folder holds its planning documents as Markdown, written by the app:
