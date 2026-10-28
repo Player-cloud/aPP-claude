@@ -180,7 +180,12 @@ test('M9-AC7: polish the UI: audit at start, references as inspiration, design r
 
 test('M9: a version 9 database gains the new build kind, and existing builds and check results are kept', (t) => {
   const { home, cleanup } = tempHome();
-  t.after(cleanup);
+  let again: Workspace | null = null;
+  // Close before removing the folder: Windows cannot delete an open database.
+  t.after(() => {
+    again?.close();
+    cleanup();
+  });
   const ws = Workspace.open(home);
   const project = ws.createProject({ name: 'Old' });
   const b = ws.createBuild({ projectId: project.id, kind: 'bugfix', title: 'Old fix', goal: 'g', requirementIds: [], components: [], checks: [CHECK], repro: 'r' });
@@ -201,8 +206,7 @@ test('M9: a version 9 database gains the new build kind, and existing builds and
     PRAGMA user_version = 9;`);
   raw.close();
 
-  const again = Workspace.open(home);
-  t.after(() => again.close());
+  again = Workspace.open(home);
   const old = again.getBuild(b.id);
   assert.deepEqual([old.kind, old.title, old.referenceIds, old.motion, old.uiAudit], ['bugfix', 'Old fix', [], false, null]);
   assert.equal(again.listCheckRuns(b.id).length, 1, 'check results still point at the build');
