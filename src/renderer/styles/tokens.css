@@ -1,7 +1,9 @@
 /*
  * Design tokens (FR-DESIGN-004). Every colour, size and duration used by the
- * UI comes from here. Direction (DEC-015): graphite frosted glass with soft
- * violet and teal light, after joshua's reference designs.
+ * UI comes from here. Direction (DEC-021): "Iterative Studio" smoked glass on
+ * a midnight base, after joshua's design document (v1.0 proposal). It refines
+ * DEC-015: violet for selection and primary actions, blue for progress, cyan
+ * only for work that is really running, amber for review, coral for risk.
  * Themes: [data-theme="dark"] (default), [data-theme="light"]; "system" is
  * resolved in the renderer from prefers-color-scheme.
  */
@@ -10,14 +12,18 @@
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Cascadia Code", Consolas, ui-monospace, monospace;
 
+  /* Type: badge 11-12, metadata 12-13, body 14-16, card 15-17, section 19-23, page 26-32. */
+  --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
   --text-md: 0.9375rem;
   --text-lg: 1.0625rem;
+  --text-section: 1.25rem;
   --text-xl: 1.5rem;
-  --text-2xl: 2rem;
+  --text-2xl: 1.875rem;
   --leading: 1.5;
 
+  /* 4 px spacing scale. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -26,82 +32,98 @@
   --space-6: 32px;
   --space-7: 48px;
 
-  --radius-sm: 8px;
-  --radius-md: 12px;
+  /* Radii: control, card, panel, shell. */
+  --radius-sm: 10px;
+  --radius-md: 14px;
   --radius-lg: 18px;
   --radius-xl: 24px;
   --radius-pill: 999px;
 
   --rail-width: 72px;
-  --side-width: 264px;
+  --side-width: 256px;
   --panel-width: 320px;
+  --topbar-height: 60px;
 
-  --glass-blur: 24px;
-  --glass-saturate: 140%;
+  --glass-blur: 18px;
+  --glass-saturate: 125%;
 
-  --duration-fast: 120ms;
-  --duration-base: 200ms;
+  /* Motion: micro, fast, panel, layout, workflow. Ambient drift is not used. */
+  --duration-micro: 120ms;
+  --duration-fast: 180ms;
+  --duration-base: 180ms;
+  --duration-panel: 240ms;
+  --duration-layout: 320ms;
+  --duration-workflow: 420ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0d0e12;
-  --bg-elevated: #17181e;
-  --rail: #121318;
-  --surface: #1a1b22;
-  --surface-hover: #22232b;
-  --surface-selected: #2a2737;
-  --border: #2a2b33;
-  --border-strong: #3a3b46;
+  --bg: #080a12;
+  --bg-elevated: #0d1120;
+  --rail: #0d1120;
+  --surface: #171d2d;
+  --surface-hover: #29324a;
+  --surface-selected: #2c2a4f;
+  --border: rgba(212, 225, 255, 0.14);
+  --border-strong: rgba(221, 232, 255, 0.25);
 
-  --text: #f2f2f5;
-  --text-muted: #a9abb8;
-  --text-subtle: #7e8090;
+  --text: #f4f6fc;
+  --text-muted: #a5aec4;
+  --text-subtle: #8490a9;
 
   --accent: #8b6cff;
-  --accent-strong: #a855f7;
+  --accent-strong: #9d82ff;
   --accent-text: #ffffff;
   --accent-soft: rgba(139, 108, 255, 0.16);
-  --accent-gradient: linear-gradient(135deg, #6d5dfc 0%, #a855f7 100%);
-  --teal: #2dd4bf;
+  --accent-gradient: linear-gradient(135deg, #7b5cff 0%, #8b6cff 100%);
+  --teal: #53ded8;
+  --blue: #5ca8ff;
+  --cyan: #53ded8;
+  --cyan-soft: rgba(83, 222, 216, 0.12);
 
   --focus: #b7a6ff;
 
-  --ok: #3ccf91;
-  --ok-soft: rgba(60, 207, 145, 0.14);
-  --warn: #f5b84b;
-  --warn-soft: rgba(245, 184, 75, 0.14);
-  --danger: #ff6b81;
-  --danger-soft: rgba(255, 107, 129, 0.13);
-  --info: #7fb2ff;
-  --info-soft: rgba(127, 178, 255, 0.13);
+  --ok: #56d7a0;
+  --ok-soft: rgba(86, 215, 160, 0.14);
+  --warn: #f2b865;
+  --warn-soft: rgba(242, 184, 101, 0.14);
+  --danger: #ff718b;
+  --danger-soft: rgba(255, 113, 139, 0.13);
+  --info: #5ca8ff;
+  --info-soft: rgba(92, 168, 255, 0.13);
+  --neutral: #9ba7c0;
+  --neutral-soft: rgba(155, 167, 192, 0.13);
 
-  --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  /* Elevation E1-E3. */
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  --shadow-e3: 0 18px 50px rgba(0, 0, 0, 0.26);
 
-  /* Frosted glass (DEC-015). Surfaces are translucent over --backdrop. */
+  /* Layer 0, atmosphere: near-black with two low-opacity light fields. */
   --backdrop:
-    radial-gradient(900px 520px at 62% -14%, rgba(45, 212, 191, 0.2), transparent 64%),
-    radial-gradient(760px 620px at 104% 10%, rgba(139, 92, 246, 0.22), transparent 60%),
-    radial-gradient(700px 600px at -6% 108%, rgba(109, 93, 252, 0.18), transparent 62%),
-    linear-gradient(180deg, #121318 0%, #0b0c10 100%);
-  --glass-bg: rgba(30, 31, 39, 0.55);
-  --glass-bg-strong: rgba(22, 23, 29, 0.72);
-  --glass-inset: rgba(255, 255, 255, 0.04);
-  --glass-inset-hover: rgba(255, 255, 255, 0.075);
-  --glass-border: rgba(255, 255, 255, 0.075);
-  --glass-border-strong: rgba(255, 255, 255, 0.14);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --glass-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
-  --glow: 0 6px 26px rgba(139, 92, 246, 0.42);
-  --field-bg: rgba(0, 0, 0, 0.22);
+    radial-gradient(900px 560px at 72% -12%, rgba(139, 108, 255, 0.16), transparent 64%),
+    radial-gradient(760px 600px at -4% 108%, rgba(92, 168, 255, 0.1), transparent 62%),
+    linear-gradient(180deg, #0b0e18 0%, #080a12 100%);
+  /* Shell chrome is translucent; dense content stays mostly opaque. */
+  --glass-bg: rgba(22, 28, 45, 0.82);
+  --glass-bg-strong: rgba(25, 31, 49, 0.92);
+  --content-bg: rgba(25, 31, 49, 0.92);
+  --raised-bg: rgba(32, 40, 61, 0.96);
+  --glass-inset: rgba(255, 255, 255, 0.035);
+  --glass-inset-hover: rgba(255, 255, 255, 0.07);
+  --glass-border: rgba(212, 225, 255, 0.12);
+  --glass-border-strong: rgba(221, 232, 255, 0.22);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --glass-shadow: 0 18px 50px rgba(0, 0, 0, 0.26);
+  --glow: 0 6px 22px rgba(139, 108, 255, 0.35);
+  --field-bg: rgba(8, 10, 18, 0.5);
   --pill-bg: rgba(255, 255, 255, 0.06);
 
   /* The context panel next to the rail. */
-  --side-bg: rgba(22, 23, 29, 0.6);
-  --side-active: rgba(255, 255, 255, 0.08);
-  --tree-line: rgba(255, 255, 255, 0.12);
+  --side-bg: rgba(17, 22, 38, 0.94);
+  --side-active: rgba(139, 108, 255, 0.18);
+  --tree-line: rgba(212, 225, 255, 0.14);
 }
 
 [data-theme="light"] {
@@ -124,7 +146,10 @@
   --accent-text: #ffffff;
   --accent-soft: rgba(112, 70, 232, 0.12);
   --accent-gradient: linear-gradient(135deg, #6d4ce6 0%, #a855f7 100%);
-  --teal: #0f9d8a;
+  --teal: #0f8f88;
+  --blue: #1d6fc4;
+  --cyan: #0f8f88;
+  --cyan-soft: rgba(15, 143, 136, 0.1);
 
   --focus: #7046e8;
 
@@ -136,8 +161,11 @@
   --danger-soft: rgba(196, 37, 63, 0.1);
   --info: #1d6fc4;
   --info-soft: rgba(29, 111, 196, 0.1);
+  --neutral: #5d6680;
+  --neutral-soft: rgba(93, 102, 128, 0.1);
 
   --shadow: 0 8px 24px rgba(22, 26, 46, 0.08);
+  --shadow-e3: 0 18px 44px rgba(22, 26, 46, 0.12);
 
   --backdrop:
     radial-gradient(900px 600px at 70% -16%, rgba(170, 140, 255, 0.32), transparent 62%),
@@ -145,6 +173,8 @@
     linear-gradient(180deg, #f6f5fb 0%, #eeedf6 100%);
   --glass-bg: rgba(255, 255, 255, 0.62);
   --glass-bg-strong: rgba(255, 255, 255, 0.78);
+  --content-bg: rgba(255, 255, 255, 0.9);
+  --raised-bg: #ffffff;
   --glass-inset: rgba(255, 255, 255, 0.6);
   --glass-inset-hover: rgba(255, 255, 255, 0.9);
   --glass-border: rgba(255, 255, 255, 0.8);
@@ -181,6 +211,7 @@
   --glass-saturate: 100%;
   --glass-bg: var(--surface);
   --glass-bg-strong: var(--bg-elevated);
+  --content-bg: var(--surface);
 }
 [data-glass="off"][data-theme="light"] {
   --side-bg: #1a1430;
@@ -199,7 +230,11 @@
 
 @media (prefers-reduced-motion: reduce) {
   :root {
+    --duration-micro: 0ms;
     --duration-fast: 0ms;
     --duration-base: 0ms;
+    --duration-panel: 0ms;
+    --duration-layout: 0ms;
+    --duration-workflow: 0ms;
   }
 }

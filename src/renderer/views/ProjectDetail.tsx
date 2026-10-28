@@ -1,11 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { RunState, RunWithNext, Workflow } from '../../shared/api.ts';
+import type { Build, PlanningOverview, Project, RunState, RunWithNext, Workflow } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { AgentPanel } from './AgentPanel.tsx';
 import { PlanningPanel } from './PlanningPanel.tsx';
 import { BuildPanel } from './BuildPanel.tsx';
-import { Alert, Empty, formatDate, formatTime, StateBadge, stateLabel } from '../ui.tsx';
+import { Alert, Empty, formatDate, formatTime, needsPerson, StateBadge, stateLabel } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
 const WORKFLOWS: { id: Workflow; label: string }[] = [
@@ -161,9 +161,112 @@ function RunCard({ run, onChanged }: { run: RunWithNext; onChanged: () => void }
   );
 }
 
+type PhaseState = 'done' | 'current' | 'active' | 'idle';
+
+interface Phase {
+  id: string;
+  label: string;
+  state: PhaseState;
+  detail: string;
+  target: string;
+}
+
+const runSummary = (list: RunWithNext[]) => {
+  if (list.length === 0) return 'Not started';
+  const open = list.filter((r) => !['completed', 'failed', 'cancelled'].includes(r.state));
+  if (open.length > 0) return `${open.length} open · ${stateLabel(open[0]!.state)}`;
+  return `${list.filter((r) => r.state === 'completed').length} of ${list.length} completed`;
+};
+
+/** The lifecycle as recorded: a phase is only marked done when its own records say so. */
+function phasesFor(planning: PlanningOverview | null, builds: Build[] | null, runs: RunWithNext[] | null): Phase[] {
+  const of = (w: Workflow) => runs?.filter((r) => r.workflow === w) ?? [];
+  const specApproved = !!planning?.spec.approved;
+  const plan: Phase = {
+    id: 'plan',
+    label: 'Plan',
+    target: 'phase-plan',
+    state: specApproved ? 'done' : 'current',
+    detail: !planning
+      ? 'Loading'
+      : specApproved
+        ? `Spec v${planning.spec.approved!.version} approved`
+        : planning.brief.approved
+          ? 'Brief approved · spec next'
+          : planning.brief.draft
+            ? 'Brief in draft'
+            : runSummary(of('plan')),
+  };
+  const openBuilds = builds?.filter((b) => b.status === 'draft' || b.status === 'in_progress' || b.status === 'review') ?? [];
+  const doneBuilds = builds?.filter((b) => b.status === 'completed') ?? [];
+  const build: Phase = {
+    id: 'build',
+    label: 'Build',
+    target: 'phase-build',
+    state: specApproved ? 'current' : openBuilds.length > 0 ? 'active' : 'idle',
+    detail: !builds ? 'Loading' : builds.length === 0 ? 'Not started' : `${openBuilds.length} open · ${doneBuilds.length} done`,
+  };
+  const later = (id: Workflow, label: string): Phase => {
+    const list = of(id);
+    const open = list.some((r) => !['completed', 'failed', 'cancelled'].includes(r.state));
+    return { id, label, target: 'runs-title', state: open ? 'active' : 'idle', detail: runSummary(list) };
+  };
+  return [plan, build, later('design', 'Design & Animation'), later('review', 'Check & Review'), later('ship', 'Ship & Deploy')];
+}
+
+function PhaseStepper({ phases }: { phases: Phase[] }) {
+  return (
+    <nav className="phases" aria-label="Project phases">
+      <ol>
+        {phases.map((p, i) => (
+          <li key={p.id}>
+            <button
+              type="button"
+              className="phase"
+              data-state={p.state}
+              aria-current={p.state === 'current' ? 'step' : undefined}
+              onClick={() => document.getElementById(p.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            >
+              <span className="phase-mark" aria-hidden="true">
+                {p.state === 'done' ? <Icon name="check" size={14} /> : i + 1}
+              </span>
+              <span className="phase-text">
+                <span className="phase-label">{p.label}</span>
+                <span className="phase-detail">
+                  {p.state === 'done' && <span className="visually-hidden">Done: </span>}
+                  {p.detail}
+                </span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+/** One safe next action, worked out from the project's records. */
+function nextStep(project: Project, planning: PlanningOverview | null, runs: RunWithNext[] | null): { title: string; detail: string; target: string } | null {
+  if (!planning || !runs) return null;
+  const waiting = runs.filter((r) => needsPerson(r.state));
+  if (waiting.length > 0)
+    return {
+      title: `${waiting.length} ${waiting.length === 1 ? 'run needs' : 'runs need'} your decision`,
+      detail: waiting.map((r) => `${r.title} (${stateLabel(r.state).toLowerCase()})`).join(', '),
+      target: 'runs-title',
+    };
+  if (!planning.brief.approved) return { title: 'Approve the concept brief', detail: 'Draft it, fill the placeholders and approve it.', target: 'phase-plan' };
+  if (!planning.spec.approved) return { title: 'Approve the specification', detail: 'The brief is approved. Draft the specification next.', target: 'phase-plan' };
+  if (planning.specOutdated) return { title: 'Update the specification', detail: 'The brief changed after the spec was approved.', target: 'phase-plan' };
+  if (!project.repoPath) return { title: 'Choose a repository', detail: 'Build work needs the git repository this project lives in.', target: 'phase-build' };
+  return { title: 'Start a feature or bug fix', detail: 'Planning is approved and a repository is set.', target: 'phase-build' };
+}
+
 export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLoaded: (name: string) => void }) {
   const project = useAsync(() => call(iap().getProject(projectId)), [projectId]);
   const runs = useAsync(() => call(iap().listRuns(projectId)), [projectId]);
+  const planning = useAsync(() => call(iap().getPlanning(projectId)), [projectId]);
+  const builds = useAsync(() => call(iap().listBuilds(projectId)), [projectId]);
   const [workflow, setWorkflow] = useState<Workflow>('plan');
   const [title, setTitle] = useState('');
   const [startError, setStartError] = useState<string | null>(null);
@@ -189,15 +292,17 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
   const p = project.data;
   const confirmed = p.facts.filter((f) => f.kind === 'confirmed');
   const assumptions = p.facts.filter((f) => f.kind === 'assumption');
+  const next = nextStep(p, planning.data, runs.data);
 
   return (
     <>
       <h1 className="page-title">{p.name}</h1>
       <p className="page-lede">{p.idea ?? 'No idea recorded yet.'}</p>
+      <PhaseStepper phases={phasesFor(planning.data, builds.data, runs.data)} />
       <div className="content-grid">
         <div>
-          <PlanningPanel projectId={p.id} />
-          <BuildPanel project={p} onProjectChanged={async () => void (await project.reload())} />
+          <PlanningPanel projectId={p.id} onChanged={() => void planning.reload()} />
+          <BuildPanel project={p} onProjectChanged={async () => void (await project.reload())} onChanged={() => void builds.reload()} />
           <section className="card" aria-labelledby="runs-title">
             <h2 className="card-title" id="runs-title">
               Workflow runs {runs.data && <span className="count-pill">{runs.data.length}</span>}
@@ -236,8 +341,20 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
             </div>
           </section>
         </div>
-        <aside aria-label="Project context">
-          <section className="card" aria-labelledby="start-title">
+        <aside className="context-col inspector" aria-label="Project context">
+          {next && (
+            <section className="card card-glass next-step" aria-labelledby="next-title">
+              <p className="eyebrow">Next step</p>
+              <h2 className="card-title" id="next-title">
+                {next.title}
+              </h2>
+              <p className="muted">{next.detail}</p>
+              <button type="button" className="btn btn-sm" onClick={() => document.getElementById(next.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+                Go there
+              </button>
+            </section>
+          )}
+          <section className="card card-glass" aria-labelledby="start-title">
             <h2 className="card-title" id="start-title">
               Start a run
             </h2>
@@ -262,7 +379,7 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
               </button>
             </form>
           </section>
-          <section className="card" aria-labelledby="ws-title">
+          <section className="card card-glass" aria-labelledby="ws-title">
             <h2 className="card-title" id="ws-title">
               Workspace
             </h2>

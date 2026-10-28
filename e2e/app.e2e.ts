@@ -75,6 +75,19 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await page.getByRole('list', { name: 'All projects' }).getByRole('button', { name: /Recipe sharing app/ }).waitFor();
     await shot(page, '08-projects-overview-dark-1280');
+
+    // Command Centre: the run shows on the board under its real state, and the palette opens a project.
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
+    const board = page.getByRole('region', { name: /^Planning, 1/ });
+    await board.getByRole('button', { name: /Initial plan, Recipe sharing app/ }).waitFor();
+    await page.getByRole('region', { name: 'Recent activity' }).getByText(/Run moved blocked → planned/).waitFor();
+    await shot(page, '09-home-dark-1280');
+    await page.keyboard.press('Control+k');
+    await page.getByRole('combobox', { name: 'Search projects or go to' }).fill('recipe');
+    await page.keyboard.press('Enter');
+    await page.getByRole('heading', { level: 1, name: 'Recipe sharing app' }).waitFor();
+    await page.getByRole('navigation', { name: 'Project phases' }).getByRole('button', { name: /Plan/ }).first().waitFor();
+    await shot(page, '10-project-phases-dark-1280');
   } finally {
     await app.close();
   }
@@ -107,11 +120,11 @@ test('M2-AC6: theme preference applies immediately and persists', async (t) => {
     // Frosted glass is on by default and can be switched to solid panels.
     assert.equal(await page.evaluate(() => document.documentElement.dataset.glass), 'on');
     const blur = () => page.locator('.rail').evaluate((el) => getComputedStyle(el).backdropFilter);
-    assert.match(await blur(), /blur\(24px\)/);
+    assert.match(await blur(), /blur\(18px\)/);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('radio', { name: 'Solid panels' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.glass === 'off');
-    assert.doesNotMatch(await blur(), /blur\(24px\)/);
+    assert.doesNotMatch(await blur(), /blur\(18px\)/);
     await shot(page, '07-settings-solid-light-1280');
     await page.getByRole('radio', { name: 'Frosted glass' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.glass === 'on');
@@ -197,9 +210,10 @@ test('M2-AC7/AC9: keyboard navigation, visible focus, and layouts at target size
       const style = getComputedStyle(el);
       return { label: el.getAttribute('aria-label'), outline: style.outlineStyle, width: style.outlineWidth };
     });
-    assert.equal(focused.label, 'Projects');
+    assert.equal(focused.label, 'Home');
     assert.equal(focused.outline, 'solid');
     assert.notEqual(focused.width, '0px');
+    await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Enter');
     await page.getByRole('heading', { level: 1, name: 'Activity' }).waitFor();
@@ -221,6 +235,10 @@ test('M2-AC7/AC9: keyboard navigation, visible focus, and layouts at target size
       if (w === 1024) assert.equal(layout.side, 0, `side panel should be hidden at ${w}px`);
       else assert.ok(layout.side >= 200, `side panel should be shown at ${w}px`);
       await shot(page, `07-projects-dark-${w}`);
+      await page.getByRole('button', { name: 'Home', exact: true }).click();
+      await page.getByRole('heading', { level: 1, name: 'Welcome back' }).waitFor();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, `home overflows at ${w}x${h}`);
+      await shot(page, `07-home-dark-${w}`);
     }
   } finally {
     await app.close();

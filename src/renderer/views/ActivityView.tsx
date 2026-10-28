@@ -2,7 +2,7 @@ import { call, iap } from '../api.ts';
 import { Alert, Empty, formatTime } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
-const describe = (type: string, payload: Record<string, unknown>) => {
+export const describe = (type: string, payload: Record<string, unknown>) => {
   switch (type) {
     case 'project.created':
       return `Created project "${String(payload.name)}"`;

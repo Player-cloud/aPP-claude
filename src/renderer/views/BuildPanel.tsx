@@ -362,16 +362,19 @@ function BuildCard({ build, onChanged }: { build: Build; onChanged: () => Promis
   );
 }
 
-export function BuildPanel({ project, onProjectChanged }: { project: Project; onProjectChanged: () => Promise<void> }) {
+export function BuildPanel({ project, onProjectChanged, onChanged }: { project: Project; onProjectChanged: () => Promise<void>; onChanged?: () => void }) {
   const builds = useAsync(() => call(iap().listBuilds(project.id)), [project.id]);
   const planning = useAsync(() => call(iap().getPlanning(project.id)), [project.id]);
   const [adding, setAdding] = useState(false);
   const spec = planning.data?.spec.approved;
   const specIds = spec?.kind === 'spec' ? spec.content.requirements.map((r) => r.id) : [];
-  const reload = async () => void (await builds.reload());
+  const reload = async () => {
+    await builds.reload();
+    onChanged?.();
+  };
 
   return (
-    <section className="card" aria-labelledby="build-title">
+    <section className="card" id="phase-build" aria-labelledby="build-title">
       <h2 className="card-title" id="build-title">
         Build work {builds.data && builds.data.length > 0 && <span className="count-pill">{builds.data.length}</span>}
       </h2>

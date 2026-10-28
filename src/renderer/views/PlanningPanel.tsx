@@ -345,12 +345,15 @@ function PlanCard({
   );
 }
 
-export function PlanningPanel({ projectId }: { projectId: string }) {
+export function PlanningPanel({ projectId, onChanged }: { projectId: string; onChanged?: () => void }) {
   const overview = useAsync(() => call(iap().getPlanning(projectId)), [projectId]);
   const o = overview.data;
-  const reload = async () => void (await overview.reload());
+  const reload = async () => {
+    await overview.reload();
+    onChanged?.();
+  };
   return (
-    <section className="card" aria-labelledby="planning-title">
+    <section className="card" id="phase-plan" aria-labelledby="planning-title">
       <h2 className="card-title" id="planning-title">
         Planning
       </h2>
