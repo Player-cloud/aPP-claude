@@ -20,9 +20,10 @@ import type { ChangedFile } from './build/git.ts';
 import type { Risk } from './build/review.ts';
 import type { AgentStep } from './build/agent.ts';
 import type { DriftKind, Gate, GateException, ReleaseEvidence, ReleasePlan } from './release/gates.ts';
+import type { AssessmentReport, AssessmentScope } from './assess/assessor.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -46,6 +47,21 @@ export interface Project {
   repoPath: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One read-only assessment of a project's repository (M8). */
+export interface Assessment {
+  id: string;
+  projectId: string;
+  scope: AssessmentScope;
+  status: 'scoped' | 'completed' | 'failed';
+  repoPath: string;
+  commit: string | null;
+  report: AssessmentReport | null;
+  reportPath: string | null;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
 }
 
 export interface WorkflowRun {
@@ -289,6 +305,29 @@ const MIGRATIONS: Record<number, string> = {
       BEGIN SELECT RAISE(ABORT, 'exceptions are append-only'); END;
     CREATE TRIGGER release_exceptions_no_delete BEFORE DELETE ON release_exceptions
       BEGIN SELECT RAISE(ABORT, 'exceptions are append-only'); END;
+  `,
+  8: `
+    -- M8: read-only assessments. The scope is recorded before the assessment runs (FR-PROJ-003);
+    -- a finished report never changes and no assessment is ever deleted.
+    CREATE TABLE assessments (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      scope TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('scoped','completed','failed')),
+      repo_path TEXT NOT NULL,
+      commit_hash TEXT,
+      report TEXT,
+      report_path TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX assessments_project ON assessments(project_id, created_at);
+    CREATE TRIGGER assessments_finished_frozen BEFORE UPDATE ON assessments
+      WHEN OLD.status <> 'scoped'
+      BEGIN SELECT RAISE(ABORT, 'a finished assessment cannot change'); END;
+    CREATE TRIGGER assessments_no_delete BEFORE DELETE ON assessments
+      BEGIN SELECT RAISE(ABORT, 'assessments are never deleted'); END;
   `,
 };
 
@@ -585,6 +624,21 @@ export class Workspace {
   // ---- Projects -----------------------------------------------------------
 
   createProject(input: { name: string; idea?: string; facts?: Fact[] }): Project {
+    return this.insertProject(input, 'new', null);
+  }
+
+  /**
+   * Registers an existing repository as a project (M8, FR-PROJ-002). Only its
+   * location is recorded: nothing in the repository is read or changed here.
+   * The caller checks that the folder is a git repository.
+   */
+  importProject(input: { name: string; idea?: string; repoPath: string }): Project {
+    const taken = this.listProjects().find((p) => p.repoPath === input.repoPath && p.status === 'active');
+    if (taken) throw new ValidationError(`This repository is already the project "${taken.name}".`);
+    return this.insertProject(input, 'imported', input.repoPath);
+  }
+
+  private insertProject(input: { name: string; idea?: string; facts?: Fact[] }, origin: Project['origin'], repoPath: string | null): Project {
     const name = requireText('Project name', input.name, 120);
     const idea = optionalText('Idea', input.idea, 10_000);
     const facts = (input.facts ?? []).map((fact) => {
@@ -603,11 +657,11 @@ export class Workspace {
     this.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO projects (id, name, origin, status, idea, facts, workspace_path, docs_path, created_at, updated_at)
-           VALUES (?, ?, 'new', 'active', ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO projects (id, name, origin, status, idea, facts, workspace_path, docs_path, repo_path, created_at, updated_at)
+           VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, name, idea, JSON.stringify(facts), workspacePath, docsPath, at, at);
-      this.record('project.created', id, null, { name, origin: 'new', facts: facts.length });
+        .run(id, name, origin, idea, JSON.stringify(facts), workspacePath, docsPath, repoPath, at, at);
+      this.record(origin === 'new' ? 'project.created' : 'project.imported', id, null, { name, origin, facts: facts.length, ...(repoPath ? { repoPath } : {}) });
     });
     return this.getProject(id);
   }
@@ -971,6 +1025,50 @@ export class Workspace {
     }));
   }
 
+  // ---- Assessments (M8) ------------------------------------------------------
+
+  /** Records the scope before anything is read (FR-PROJ-003). */
+  createAssessment(input: { projectId: string; scope: AssessmentScope; repoPath: string }): Assessment {
+    const project = this.getProject(input.projectId);
+    const id = `asm_${randomUUID()}`;
+    this.transaction(() => {
+      this.db
+        .prepare(`INSERT INTO assessments (id, project_id, scope, status, repo_path, created_at) VALUES (?, ?, ?, 'scoped', ?, ?)`)
+        .run(id, project.id, JSON.stringify(input.scope), input.repoPath, this.timestamp());
+      this.record('assessment.scoped', project.id, null, { assessmentId: id, scope: input.scope, repoPath: input.repoPath });
+    });
+    return this.getAssessment(id);
+  }
+
+  /** Stores the finished report. A finished assessment is frozen by a database trigger. */
+  finishAssessment(id: string, result: { commit: string | null; report: AssessmentReport | null; reportPath: string | null; error: string | null }): Assessment {
+    const a = this.getAssessment(id);
+    const status = result.error === null ? 'completed' : 'failed';
+    this.transaction(() => {
+      this.db
+        .prepare('UPDATE assessments SET status = ?, commit_hash = ?, report = ?, report_path = ?, error = ?, completed_at = ? WHERE id = ?')
+        .run(status, result.commit, result.report ? JSON.stringify(redact(result.report)) : null, result.reportPath, result.error === null ? null : redactString(result.error), this.timestamp(), id);
+      this.record(`assessment.${status}`, a.projectId, null, {
+        assessmentId: id,
+        commit: result.commit,
+        ...(result.report ? { counts: result.report.counts, unchanged: result.report.unchanged } : {}),
+        ...(result.error === null ? {} : { error: result.error }),
+      });
+    });
+    return this.getAssessment(id);
+  }
+
+  getAssessment(id: string): Assessment {
+    const row = this.db.prepare('SELECT * FROM assessments WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Assessment', id);
+    return toAssessment(row);
+  }
+
+  listAssessments(projectId: string): Assessment[] {
+    this.getProject(projectId);
+    return (this.db.prepare('SELECT * FROM assessments WHERE project_id = ? ORDER BY created_at DESC, id').all(projectId) as Record<string, unknown>[]).map(toAssessment);
+  }
+
   // ---- Releases (M7) --------------------------------------------------------
 
   createRelease(input: { projectId: string; version: string; plan: ReleasePlan; checks: Check[]; buildIds: string[] }): Release {
@@ -1306,6 +1404,22 @@ function toRelease(row: Record<string, unknown>): Release {
     updatedAt: String(row.updated_at),
     checkedAt: (row.checked_at as string | null) ?? null,
     preparedAt: (row.prepared_at as string | null) ?? null,
+  };
+}
+
+function toAssessment(row: Record<string, unknown>): Assessment {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    scope: JSON.parse(String(row.scope)) as AssessmentScope,
+    status: row.status as Assessment['status'],
+    repoPath: String(row.repo_path),
+    commit: (row.commit_hash as string | null) ?? null,
+    report: row.report === null || row.report === undefined ? null : (JSON.parse(String(row.report)) as AssessmentReport),
+    reportPath: (row.report_path as string | null) ?? null,
+    error: (row.error as string | null) ?? null,
+    createdAt: String(row.created_at),
+    completedAt: (row.completed_at as string | null) ?? null,
   };
 }
 

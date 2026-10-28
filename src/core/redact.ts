@@ -43,3 +43,22 @@ function redactValue(value: unknown, depth: number): unknown {
   }
   return value;
 }
+
+const PRIVATE_KEY_START = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+
+/**
+ * Lines of one file that hold a known credential format, as "path:line".
+ * The value itself is never returned (M7 ship-check, M8 assessment).
+ */
+export function credentialLines(path: string, text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  const hits: string[] = [];
+  // Private keys span lines, so look at the whole file for those.
+  if (PRIVATE_KEY_START.test(text) && redactString(text) !== text) {
+    hits.push(`${path}:${lines.findIndex((l) => PRIVATE_KEY_START.test(l)) + 1}`);
+  }
+  lines.forEach((line, i) => {
+    if (redactString(line) !== line) hits.push(`${path}:${i + 1}`);
+  });
+  return [...new Set(hits)];
+}

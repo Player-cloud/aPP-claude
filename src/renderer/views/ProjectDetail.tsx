@@ -6,6 +6,7 @@ import { AgentPanel } from './AgentPanel.tsx';
 import { PlanningPanel } from './PlanningPanel.tsx';
 import { BuildPanel } from './BuildPanel.tsx';
 import { ReleasePanel } from './ReleasePanel.tsx';
+import { AssessmentPanel } from './AssessmentPanel.tsx';
 import { Alert, Empty, formatDate, formatTime, needsPerson, StateBadge, stateLabel } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
@@ -264,8 +265,9 @@ function PhaseStepper({ phases }: { phases: Phase[] }) {
 }
 
 /** One safe next action, worked out from the project's records. */
-function nextStep(project: Project, planning: PlanningOverview | null, runs: RunWithNext[] | null): { title: string; detail: string; target: string } | null {
-  if (!planning || !runs) return null;
+function nextStep(project: Project, planning: PlanningOverview | null, runs: RunWithNext[] | null, assessed: boolean | null): { title: string; detail: string; target: string } | null {
+  if (!planning || !runs || assessed === null) return null;
+  if (project.origin === 'imported' && !assessed) return { title: 'Assess the repository', detail: 'See what the imported code already has, read-only, before planning changes.', target: 'phase-assess' };
   const waiting = runs.filter((r) => needsPerson(r.state));
   if (waiting.length > 0)
     return {
@@ -286,6 +288,7 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
   const planning = useAsync(() => call(iap().getPlanning(projectId)), [projectId]);
   const builds = useAsync(() => call(iap().listBuilds(projectId)), [projectId]);
   const releases = useAsync(() => call(iap().listReleases(projectId)), [projectId]);
+  const assessments = useAsync(() => call(iap().listAssessments(projectId)), [projectId]);
   const [workflow, setWorkflow] = useState<Workflow>('plan');
   const [title, setTitle] = useState('');
   const [startError, setStartError] = useState<string | null>(null);
@@ -311,7 +314,8 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
   const p = project.data;
   const confirmed = p.facts.filter((f) => f.kind === 'confirmed');
   const assumptions = p.facts.filter((f) => f.kind === 'assumption');
-  const next = nextStep(p, planning.data, runs.data);
+  const next = nextStep(p, planning.data, runs.data, assessments.data ? assessments.data.some((a) => a.status === 'completed') : null);
+  const assessmentPanel = <AssessmentPanel project={p} onChanged={() => void assessments.reload()} />;
 
   return (
     <>
@@ -320,9 +324,11 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
       <PhaseStepper phases={phasesFor(planning.data, builds.data, runs.data, releases.data)} />
       <div className="content-grid">
         <div>
+          {p.origin === 'imported' && assessmentPanel}
           <PlanningPanel projectId={p.id} onChanged={() => void planning.reload()} />
           <BuildPanel project={p} onProjectChanged={async () => void (await project.reload())} onChanged={() => void builds.reload()} />
           <ReleasePanel project={p} onChanged={() => void releases.reload()} />
+          {p.origin !== 'imported' && assessmentPanel}
           <section className="card" aria-labelledby="runs-title">
             <h2 className="card-title" id="runs-title">
               Workflow runs {runs.data && <span className="count-pill">{runs.data.length}</span>}
@@ -406,8 +412,14 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
             <dl className="kv">
               <dt>Status</dt>
               <dd>{p.status}</dd>
-              <dt>Created</dt>
+              <dt>{p.origin === 'imported' ? 'Imported' : 'Created'}</dt>
               <dd>{formatTime(p.createdAt)}</dd>
+              {p.repoPath && (
+                <>
+                  <dt>Repository</dt>
+                  <dd className="mono">{p.repoPath}</dd>
+                </>
+              )}
               <dt>Designs</dt>
               <dd className="mono">{p.docsPath}</dd>
               <dt>ID</dt>

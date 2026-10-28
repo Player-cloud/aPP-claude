@@ -81,6 +81,17 @@ The database is the source of truth: editing these files does not change the app
 | Reports | `<project folder>/docs/releases/<releaseId>.md` |
 | Preparing | Needs every required gate passed or excepted and the repository still at the checked commit. Nothing is deployed, tagged or pushed: deploy yourself using the plan |
 
+## Import and assessment (M8, DEC-023)
+
+| What | Where / how |
+|---|---|
+| Import | Records the repository's location (`git rev-parse --show-toplevel`) as a project with origin `imported`. Nothing in the repository is copied, moved or changed; a repository can belong to one active project |
+| What is read | The current commit only, through `git ls-tree` and `git cat-file` (git's object store). Uncommitted changes are counted, not read. Vendored and generated folders, lockfiles, binaries and files over 512 KB are listed but not read; at most 6,000 files and 48 MB are read, and the rest is reported as not inspected |
+| What is never done | No code, test, build or script from the repository runs; no hook runs; `git status` is run without optional locks so the index is not rewritten; no outside service is contacted; no model is called |
+| Unchanged check | HEAD, every branch and tag, and `git status` are compared before and after; the report says whether they matched |
+| Scope | Full, codebase only, one category or one capability, plus capabilities you mark not applicable. The scope is stored (`assessment.scoped` event) before anything is read |
+| Reports | `<project folder>/docs/assessments/<assessmentId>.md`, never inside the repository. Finished assessments cannot change or be deleted |
+
 ## Real model calls (M3, DEC-018)
 
 The main agent, the planning drafts and the build agent all use this. A build agent run is also capped at $3 and 40 turns. Real Claude calls need **both** a monthly budget and an Anthropic API key, set in *Settings → AI usage*. Without either, the agent uses the free simulated model.
