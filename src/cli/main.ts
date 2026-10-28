@@ -30,6 +30,7 @@ import { CLAUDE_MODEL } from '../core/agents/claude.ts';
 import { homedir } from 'node:os';
 import { Backlog, type ImprovementDetail, type ImprovementStatus, type SelfAssessmentRecord } from '../core/iterate/backlog.ts';
 import type { Assessment } from '../core/workspace.ts';
+import { listBackups, Maintenance, restoreBackup, type MaintenanceOverview } from '../core/maintain/maintain.ts';
 import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
 
@@ -125,11 +126,24 @@ Improvements (the app assesses its own records; approving an item changes nothin
             [--risk <low|medium|high>] [--depends <IMP-n>]...      Only before approval
   iter move <IMP-n> <status> [--reason <why>] [--result <what was done>] [--outcome <measured outcome>]
   iter merge <duplicate IMP-n> --into <IMP-n>  Link a duplicate to the item that stays (nothing is deleted)
+  iter measure <IMP-n>                        After release: did the problem come back? (reopens it as a new item if so)
+  iter outcome <IMP-n> --verdict <improved|not_improved> --note <what you observed>   Your own judgement, for items no detector counts
+
+Platform maintenance (approved items are built in worktrees of the app's own source; the running app is never changed)
+  platform setup <sourceFolder>              Use the app's source repository (records the running version as known-good)
+  platform status
+  platform start <IMP-n|UPD-n> [--kind <feature|bugfix|ui_polish>] [--component <path>]... [--check <id=command>]...
+                                              A build with the mandatory checks; then: iap build start <buildId> --confirm
+  platform approve <buildId> --reason <why> --confirm   Approve its changes to protected areas (permissions, security, gates, config, data)
+  platform backup | platform backups          Copy the database before installing a new version; list the copies
+  platform test-recovery <backupFile>         Open a copy of a backup in a throwaway folder, as a restore would
+  platform known-good <releaseId> --note <health check result>   From the installed version: record it as known-good
 
 Audit and health
   events [--project <id>] [--run <id>] [--limit <n>]
   doctor
   recover --confirm        If the database is corrupt, move it aside (kept, not deleted) and start fresh
+  recover --from <backupFile> --confirm   With the app closed: put a backup in place (the current database is moved aside)
 
 Global options
   --json                   Machine-readable output
@@ -201,6 +215,8 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       action: { type: 'string' },
       finding: { type: 'string' },
       accept: { type: 'boolean', default: false },
+      from: { type: 'string' },
+      verdict: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -224,6 +240,31 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
   }
 
   // `recover` must work when the database cannot be opened, so it runs first.
+  if (command === 'recover' && values.from !== undefined) {
+    const backups = listBackups(home);
+    const info = backups.find((b) => b.path === resolve(values.from!) || b.file === values.from);
+    if (!info) {
+      err(`${values.from} is not in the backups folder. Backups:\n${backups.map((b) => `  ${b.file}`).join('\n') || '  none'}`);
+      return 1;
+    }
+    if (!values.confirm) {
+      err(`recover --from replaces the current database with the backup ${info.file} (taken by ${info.version ?? 'an unknown version'}). The current database is moved aside, not deleted. Close the app first, then re-run with --confirm.`);
+      return 1;
+    }
+    try {
+      const r = restoreBackup(home, info.path);
+      const ws = Workspace.open(home);
+      try {
+        ws.recordPlatformEvent('platform.restored', { backup: r.restored, movedAside: r.movedAside, via: 'cli' });
+      } finally {
+        ws.close();
+      }
+      print(r, () => out(`Restored ${r.restored}.${r.movedAside ? ` The previous database is at ${r.movedAside}.` : ''}`));
+      return 0;
+    } catch (e) {
+      return fail(e, err);
+    }
+  }
   if (command === 'recover') {
     if (!values.confirm) {
       err('recover moves the current database aside and starts a new, empty one. Re-run with --confirm to proceed.');
@@ -472,6 +513,74 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
         const b = new Backlog(ws);
         const kept = b.merge(b.resolve(need(rest[0], 'IMP-n')).id, b.resolve(need(values.into, '--into')).id);
         print(kept, () => out(`Merged into IMP-${kept.number}: ${kept.title}`));
+        return 0;
+      }
+      case 'iter measure': {
+        const b = new Backlog(ws);
+        const id = b.resolve(need(rest[0], 'IMP-n')).id;
+        const m = b.measure(id);
+        const d = b.detail(id);
+        print(d, () => {
+          out(`IMP-${d.item.number} ${m.verdict.replace('_', ' ')}: ${m.detail}`);
+          if (d.reopenedBy) out(`Reopened as IMP-${d.reopenedBy.number} (proposed): ${d.reopenedBy.title}`);
+        });
+        return m.verdict === 'not_improved' ? 4 : 0;
+      }
+      case 'iter outcome': {
+        const b = new Backlog(ws);
+        const id = b.resolve(need(rest[0], 'IMP-n')).id;
+        const m = b.recordOutcome(id, values.verdict, values.note);
+        const d = b.detail(id);
+        print(d, () => out(`IMP-${d.item.number} ${m.verdict.replace('_', ' ')}.${d.reopenedBy ? ` Reopened as IMP-${d.reopenedBy.number}.` : ''}`));
+        return 0;
+      }
+      case 'platform setup':
+      case 'platform status': {
+        const m = maintenance(ws);
+        const o = sub === 'setup' ? await m.setup(resolve(need(rest[0], 'sourceFolder'))) : m.overview();
+        print(o, () => describeMaintenance(o, out));
+        return 0;
+      }
+      case 'platform start': {
+        const ref = need(rest[0], 'IMP-n|UPD-n');
+        const isUpdate = /^UPD-/i.test(ref) || ref.startsWith('upd_');
+        const b = maintenance(ws).start({ [isUpdate ? 'updateId' : 'improvementId']: ref, kind: values.kind as 'feature' | undefined, components: values.component, checks: parseChecks(values.check) });
+        print(b, () => out(`${b.id}  platform ${b.kind} draft: ${b.title}\n  checks: ${b.checks.map((c) => c.command).join('; ')}\nStart it with: iap build start ${b.id} --confirm`));
+        return 0;
+      }
+      case 'platform approve': {
+        const id = need(rest[0], 'buildId');
+        const m = maintenance(ws);
+        const request = m.protectedRequest(id, values.reason ?? '');
+        if (!values.confirm) {
+          err(`This approves changes to protected areas:\n${request.lines.map((l) => `  ${l}`).join('\n')}\nRe-run with --confirm to approve them.`);
+          return 1;
+        }
+        const b = m.approveProtected(id, values.reason ?? '');
+        print(b, () => out(`Approved by ${b.protectedApproval!.by}: ${b.protectedApproval!.files.join(', ')}`));
+        return 0;
+      }
+      case 'platform backup': {
+        const info = maintenance(ws).backup();
+        print(info, () => out(`Backed up to ${info.path} (data format ${info.schemaVersion}, ${info.sizeBytes} bytes). Test it with: iap platform test-recovery ${info.file}`));
+        return 0;
+      }
+      case 'platform backups': {
+        const list = listBackups(home);
+        print(list, () => {
+          if (!list.length) out('No backups yet. Take one with: iap platform backup');
+          for (const b of list) out(`${b.file}  data format ${b.schemaVersion ?? '?'}  ${b.restorable ? 'restorable' : `NOT restorable: ${b.problem}`}`);
+        });
+        return 0;
+      }
+      case 'platform test-recovery': {
+        const r = maintenance(ws).testRecovery(need(rest[0], 'backupFile'));
+        print(r, () => out(`${r.passed ? 'PASSED' : 'FAILED'}: ${r.detail}`));
+        return r.passed ? 0 : 4;
+      }
+      case 'platform known-good': {
+        const k = maintenance(ws).markKnownGood(need(rest[0], 'releaseId'), values.note ?? '');
+        print(k, () => out(`${k.version} is recorded as known-good${k.backupPath ? `, with the backup ${k.backupPath}` : ''}.`));
         return 0;
       }
       case 'project show': {
@@ -874,7 +983,28 @@ function describeSelfAssessment(a: SelfAssessmentRecord, out: Out): void {
   for (const g of a.report.gaps) out(`    ${g}`);
 }
 
-function describeImprovement({ item: i, allowed, recurrence, dependencies, mergedFrom, mergedInto }: ImprovementDetail, out: Out): void {
+/** The CLI runs from the source tree, so the running version is the one in package.json. */
+function maintenance(ws: Workspace): Maintenance {
+  const version = (JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+  return new Maintenance(ws, new Builder(ws, new SimulatedModel()), version);
+}
+
+function describeMaintenance(o: MaintenanceOverview, out: Out): void {
+  if (!o.project) {
+    out(`Platform maintenance is not set up. Run: iap platform setup <folder with the app's source code>   (running ${o.runningVersion})`);
+    return;
+  }
+  out(`Platform maintenance: ${o.project.repoPath}   running ${o.runningVersion}   project ${o.project.id}`);
+  out(`  mandatory checks: ${o.mandatoryChecks.map((c) => c.command).join('; ')}`);
+  out(`  release adds: ${o.releaseChecks.filter((c) => !o.mandatoryChecks.includes(c)).map((c) => c.command).join('; ')}`);
+  out(`  protected areas: ${o.protectedAreas.map((a) => a.title).join('; ')}`);
+  for (const k of o.knownGood) out(`  known-good ${k.version}${k.commit ? ` (${k.commit.slice(0, 12)})` : ''} at ${k.at} by ${k.actor}: ${k.note}`);
+  out(`  backups: ${o.backups.length ? o.backups.map((b) => b.file).join(', ') : 'none (take one before installing a new version: iap platform backup)'}`);
+  for (const c of o.candidates) out(`  can build: ${c.ref} ${c.title}${c.blocked ? ` [${c.blocked}]` : ''}`);
+  for (const b of o.builds) out(`  build ${b.id} ${b.status.padEnd(11)} ${b.title}`);
+}
+
+function describeImprovement({ item: i, allowed, recurrence, dependencies, mergedFrom, mergedInto, builds, releases, measurements, reopens, reopenedBy }: ImprovementDetail, out: Out): void {
   out(`IMP-${i.number}  ${i.title}`);
   out(`  status: ${i.status}${i.reason ? ` (${i.reason})` : ''}   priority: ${i.priority}   risk: ${i.risk}   from: ${i.source === 'feedback' ? 'feedback' : 'self-assessment'}`);
   out(`  problem: ${i.problem}`);
@@ -887,6 +1017,11 @@ function describeImprovement({ item: i, allowed, recurrence, dependencies, merge
   out(`  recurrence: ${recurrence.sinceApproval === null ? recurrence.note : `${recurrence.sinceApproval} since approval (${recurrence.note})`}`);
   if (mergedInto) out(`  merged into IMP-${mergedInto.number}`);
   if (mergedFrom.length) out(`  merged from: ${mergedFrom.map((m) => `IMP-${m.number}`).join(', ')}`);
+  for (const b of builds) out(`  platform work: ${b.id} ${b.status} ${b.title}`);
+  for (const r of releases) out(`  in prepared release ${r.version} (${r.id})`);
+  for (const m of measurements) out(`  measured ${m.at}: ${m.verdict.replace('_', ' ')} (${m.method === 'person' ? `by ${m.actor}` : 'from recurrence'}): ${m.detail}`);
+  if (reopens) out(`  reopens IMP-${reopens.number} (${reopens.status})`);
+  if (reopenedBy) out(`  reopened as IMP-${reopenedBy.number} (${reopenedBy.status})`);
   out('  evidence:');
   for (const e of i.evidence) {
     out(`    ${e.at}  ${e.summary}`);
@@ -950,6 +1085,7 @@ function describeRelease({ release: r, checkRuns, exceptions, blocking }: Releas
 
 function describeBuild({ build: b, checkRuns }: BuildDetail, out: Out): void {
   out(`${b.id}  ${b.kind} ${b.status}: ${b.title}`);
+  if (b.source) out(`  platform work for ${b.source.ref}${b.protectedApproval ? `; protected changes approved by ${b.protectedApproval.by}: ${b.protectedApproval.files.join(', ')}` : ''}`);
   if (b.branch) out(`  branch ${b.branch} in ${b.worktree}`);
   if (b.uiAudit) for (const line of describeAudit(b.uiAudit)) out(`  audit: ${line}`);
   if (b.referenceIds.length) out(`  references: ${b.referenceIds.join(', ')}${b.motion ? '   motion: yes' : ''}`);

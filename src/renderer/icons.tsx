@@ -57,6 +57,7 @@ const paths: Record<string, ReactElement> = {
       <path d="M4 17l5-4.5 3.5 3 3-2.5 4.5 4" />
     </>
   ),
+  shield: <path d="M12 3.5l7 2.6v5.4c0 4.4-3 7.7-7 9-4-1.3-7-4.6-7-9V6.1zM9 12l2 2 4-4" />,
   play: <path d="M8 5.5v13l10.5-6.5z" />,
   archive: <path d="M4 5h16v4H4zM5.5 9v9.5a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V9M10 13h4" />,
   database: (

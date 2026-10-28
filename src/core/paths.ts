@@ -28,8 +28,10 @@ export interface AppPaths {
   references: string;
   /** Backups and moved-aside files from tool cleanup (M11). */
   cleanup: string;
+  /** Database backups taken before a platform update, for recovery (M13). */
+  backups: string;
 }
 
 export function appPaths(home: string): AppPaths {
-  return { home, db: join(home, 'iap.db'), projects: join(home, 'projects'), worktrees: join(home, 'worktrees'), references: join(home, 'references'), cleanup: join(home, 'cleanup') };
+  return { home, db: join(home, 'iap.db'), projects: join(home, 'projects'), worktrees: join(home, 'worktrees'), references: join(home, 'references'), cleanup: join(home, 'cleanup'), backups: join(home, 'backups') };
 }

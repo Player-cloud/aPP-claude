@@ -142,6 +142,22 @@ if (smokeTest) {
         const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
         return response === 0;
       },
+      // M13: protected platform changes and database restores are approved in a native dialog the page cannot click.
+      confirmAction: async ({ title, lines, button }) => {
+        const options = {
+          type: 'warning' as const,
+          title: 'Approve this change?',
+          message: title,
+          detail: lines.join('\n'),
+          buttons: [button, 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const parent = BrowserWindow.getFocusedWindow();
+        const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+        return response === 0;
+      },
       // M9: reference files come only from a native picker, never from a path the page supplies.
       pickFiles: async () => {
         const options = {

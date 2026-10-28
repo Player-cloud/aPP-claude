@@ -109,6 +109,12 @@ const SETTINGS_GROUPS = [
   { icon: 'database', label: 'Data', target: 'data-title' },
 ] as const;
 
+const PLATFORM_GROUPS = [
+  { icon: 'board', label: 'Platform work', target: 'plat-work' },
+  { icon: 'archive', label: 'Backups and recovery', target: 'plat-recovery' },
+  { icon: 'shield', label: 'Rules', target: 'plat-rules' },
+] as const;
+
 function ProjectTree({
   section,
   projects,
@@ -183,7 +189,7 @@ export function SidePanel({
   updateFilter: UpdateFilter;
   onUpdateFilter: (f: UpdateFilter) => void;
 }) {
-  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', studio: 'Learning Studio', tools: 'Tools', updates: 'Updates', iterative: 'Improvements', settings: 'Settings' }[section];
+  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', studio: 'Learning Studio', tools: 'Tools', updates: 'Updates', iterative: 'Improvements', platform: 'Platform', settings: 'Settings' }[section];
   return (
     <aside className="side" aria-label={`${title} panel`}>
       <div className="side-head">
@@ -199,6 +205,16 @@ export function SidePanel({
       {section === 'tools' && <ToolFilters scan={toolScan} filter={toolFilter} onFilter={onToolFilter} />}
       {section === 'updates' && <UpdateFilters filter={updateFilter} onFilter={onUpdateFilter} />}
       {section === 'iterative' && <ImprovementFilters filter={improvementFilter} onFilter={onImprovementFilter} />}
+      {section === 'platform' && (
+        <nav aria-label="Platform groups" className="tree">
+          {PLATFORM_GROUPS.map((g) => (
+            <button key={g.target} type="button" className="tree-root" onClick={() => document.getElementById(g.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+              <Icon name={g.icon} size={18} />
+              <span className="tree-label">{g.label}</span>
+            </button>
+          ))}
+        </nav>
+      )}
       {section === 'settings' && (
         <nav aria-label="Settings groups" className="tree">
           {SETTINGS_GROUPS.map((g) => (

@@ -18,6 +18,7 @@ import { REFERENCE_KINDS, Studio, type ReferenceEdit } from '../core/studio/libr
 import { Backlog, type ImprovementStatus } from '../core/iterate/backlog.ts';
 import { Cleanup, claudeRunner, type CleanupPlan } from '../core/cleanup/cleanup.ts';
 import { bundledVersions, claudeVersionReader, httpFetcher, UpdateMonitor, type Fetcher, type ModelInfo } from '../core/updates/updates.ts';
+import { listBackups, Maintenance, restoreBackup } from '../core/maintain/maintain.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -28,7 +29,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference';
+type AsyncMethod = 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -88,6 +89,12 @@ export interface ServiceOptions {
   listModels?: (apiKey: string) => Promise<ModelInfo[]>;
   /** Exact versions of the built-in libraries; read from the build when omitted. */
   bundled?: Record<string, string | null>;
+  /**
+   * Asks the person, outside the renderer, before a protected platform change
+   * is approved or a database backup is restored (M13). The desktop app shows
+   * a native dialog.
+   */
+  confirmAction?: (request: { title: string; lines: string[]; button: string }) => Promise<boolean>;
 }
 
 /** What the native approval dialog shows: the exact command or move, and what else changes. */
@@ -151,6 +158,7 @@ export class AppService {
   private readonly claudeClient: (apiKey: string) => ClaudeClient;
   private readonly confirmChecks: NonNullable<ServiceOptions['confirmChecks']>;
   private readonly confirmCleanup: NonNullable<ServiceOptions['confirmCleanup']>;
+  private readonly confirmAction: NonNullable<ServiceOptions['confirmAction']>;
   private readonly claudeCommand: string[] | undefined;
   private readonly checkTimeoutMs: number | undefined;
   private readonly pickFiles: () => Promise<string[]>;
@@ -167,6 +175,7 @@ export class AppService {
     // Without a way to ask (plain Node, tests), commands never run unless a caller supplies one.
     this.confirmChecks = options.confirmChecks ?? (async () => false);
     this.confirmCleanup = options.confirmCleanup ?? (async () => false);
+    this.confirmAction = options.confirmAction ?? (async () => false);
     this.claudeCommand = options.claudeCommand;
     this.fetcher = options.fetcher ?? httpFetcher();
     this.bundled = options.bundled;
@@ -279,6 +288,10 @@ export class AppService {
 
   private cleanup(): Cleanup {
     return new Cleanup(this.workspace(), this.scanRoots(), claudeRunner(this.claudeCommand));
+  }
+
+  private maintenance(): Maintenance {
+    return new Maintenance(this.workspace(), this.builder(), this.version);
   }
 
   private updates(): UpdateMonitor {
@@ -417,6 +430,61 @@ export class AppService {
       }),
     reopenUpdate: (id) => wrap(() => this.updates().reopen(str(id, 'Update id')!)),
     verifyUpdate: (id) => wrapAsync(() => this.updates().verify(str(id, 'Update id')!)),
+    // Platform maintenance (M13). Work starts only from an approved item; protected changes and restores ask in a native dialog.
+    getMaintenance: () => wrap(() => this.maintenance().overview()),
+    setupMaintenance: (input) => wrapAsync(() => this.maintenance().setup(str(obj(input, 'Setup').path, 'Folder')!)),
+    startPlatformWork: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Platform work');
+        const components = i.components === undefined ? undefined : i.components;
+        if (components !== undefined && (!Array.isArray(components) || components.some((c) => typeof c !== 'string'))) throw new ValidationError('Components must be a list of text items.');
+        return this.maintenance().start({
+          improvementId: str(i.improvementId, 'Improvement', true),
+          updateId: str(i.updateId, 'Update', true),
+          kind: str(i.kind, 'Kind', true) as BuildInput['kind'] | undefined,
+          components: components as string[] | undefined,
+        });
+      }),
+    approveProtectedChange: (input) =>
+      wrapAsync(async () => {
+        const i = obj(input, 'Approval');
+        const buildId = str(i.buildId, 'Build id')!;
+        const reason = str(i.reason, 'Reason')!;
+        const m = this.maintenance();
+        const request = m.protectedRequest(buildId, reason);
+        const title = this.workspace().getBuild(buildId).title;
+        const ok = await this.confirmAction({ title: `Approve protected changes in "${title}"?`, lines: [...request.lines, '', `Your reason: ${request.reason}`, '', 'These areas control approvals, permissions, security, release gates, configuration or stored data. The approval covers these files only.'], button: 'Approve these changes' });
+        if (!ok) throw new ValidationError('Not approved. Nothing was changed.');
+        m.approveProtected(buildId, reason);
+        return this.builder().detail(buildId);
+      }),
+    markKnownGood: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Known-good');
+        return this.maintenance().markKnownGood(str(i.releaseId, 'Release id')!, str(i.note, 'Note')!);
+      }),
+    backupDatabase: () => wrap(() => this.maintenance().backup()),
+    listBackups: () => wrap(() => listBackups(this.home)),
+    testRecovery: (file) => wrap(() => this.maintenance().testRecovery(str(file, 'Backup')!)),
+    restoreBackup: (file) =>
+      wrapAsync(async () => {
+        const path = str(file, 'Backup')!;
+        const info = listBackups(this.home).find((b) => b.path === path || b.file === path);
+        if (!info) throw new ValidationError('Choose a backup from the list.');
+        if (!info.restorable) throw new ValidationError(`This backup cannot be restored: ${info.problem}`);
+        const dbPath = appPaths(this.home).db;
+        const ok = await this.confirmAction({
+          title: `Restore the database backup taken ${info.at.slice(0, 16).replace('T', ' ')}?`,
+          lines: [`Backup: ${info.path}`, `Taken by version ${info.version ?? 'unknown'} (data format ${info.schemaVersion}).`, `Replaces: ${dbPath}`, '', 'The current database is moved aside next to it, not deleted. Anything recorded since the backup will not show until you restore that file.'],
+          button: 'Restore this backup',
+        });
+        if (!ok) throw new ValidationError('Not approved. Nothing was changed.');
+        this.close();
+        const r = restoreBackup(this.home, info.path);
+        this.tryOpen();
+        this.ws?.recordPlatformEvent('platform.restored', { backup: r.restored, movedAside: r.movedAside, version: this.version });
+        return { ...r, status: this.status() };
+      }),
     // The renderer cannot grant tools: delegated tasks get none (DEC-017).
     runAgent: (input) =>
       wrapAsync(async () => {
@@ -572,6 +640,21 @@ export class AppService {
           result: str(i.result, 'Result', true),
           measuredOutcome: str(i.measuredOutcome, 'Measured outcome', true),
         });
+        return backlog.detail(id);
+      }),
+    measureImprovement: (id) =>
+      wrap(() => {
+        const backlog = new Backlog(this.workspace());
+        const item = backlog.resolve(str(id, 'Improvement id')!);
+        backlog.measure(item.id);
+        return backlog.detail(item.id);
+      }),
+    recordImprovementOutcome: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Outcome');
+        const backlog = new Backlog(this.workspace());
+        const id = str(i.id, 'Improvement id')!;
+        backlog.recordOutcome(id, i.verdict, i.detail);
         return backlog.detail(id);
       }),
     mergeImprovement: (input) =>

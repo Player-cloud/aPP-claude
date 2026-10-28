@@ -34,7 +34,7 @@ const DRIFT: Record<DriftFinding['kind'], string> = {
 
 const lines = (text: string) => text.split(/[\n,]/).map((l) => l.trim()).filter(Boolean);
 
-function NewRelease({ projectId, builds, onCreated }: { projectId: string; builds: Build[]; onCreated: () => Promise<void> }) {
+function NewRelease({ projectId, builds, platform, onCreated }: { projectId: string; builds: Build[]; platform: boolean; onCreated: () => Promise<void> }) {
   const [version, setVersion] = useState('');
   const [checks, setChecks] = useState('');
   const [included, setIncluded] = useState<string[]>(builds.filter((b) => b.status === 'completed').map((b) => b.id));
@@ -91,8 +91,9 @@ function NewRelease({ projectId, builds, onCreated }: { projectId: string; build
         ))}
       </fieldset>
       <div className="field">
-        <label htmlFor="r-checks">Release checks, one per line as id = command</label>
-        <textarea id="r-checks" className="textarea mono" rows={2} value={checks} onChange={(e) => setChecks(e.target.value)} placeholder="unit = npm test" />
+        <label htmlFor="r-checks">{platform ? 'Extra release checks (optional), one per line as id = command' : 'Release checks, one per line as id = command'}</label>
+        <textarea id="r-checks" className="textarea mono" rows={2} value={checks} onChange={(e) => setChecks(e.target.value)} placeholder={platform ? 'lint = npm run lint' : 'unit = npm test'} />
+        {platform && <p className="hint">The app's release checks always run: npm ci, npm run typecheck, npm test, npm run test:e2e and npm audit. Leave the plan below empty to use the platform plan: install it yourself, roll back to the known-good version and your database backup.</p>}
       </div>
       {text('r-target', 'Where it goes', target, setTarget, 'Windows installer on GitHub Releases')}
       {text('r-health', 'How you will know it works', healthCheck, setHealthCheck, 'Install it and open a project')}
@@ -149,7 +150,7 @@ function Classify({ finding, onSubmit }: { finding: DriftFinding; onSubmit: (kin
   );
 }
 
-function Gates({ detail, open, act }: { detail: ReleaseDetail; open: boolean; act: (label: string, fn: () => Promise<unknown>) => Promise<void> }) {
+function Gates({ detail, open, platform, act }: { detail: ReleaseDetail; open: boolean; platform: boolean; act: (label: string, fn: () => Promise<unknown>) => Promise<void> }) {
   const r = detail.release;
   if (!r.gates) return <p className="muted">The ship-check has not run since this release was last changed.</p>;
   return (
@@ -187,7 +188,8 @@ function Gates({ detail, open, act }: { detail: ReleaseDetail; open: boolean; ac
                 Exception by {g.exception.actor}, {formatTime(g.exception.at)}: {g.exception.reason} Mitigation: {g.exception.mitigation}
               </p>
             )}
-            {open && g.required && (g.status === 'failed' || g.status === 'blocked') && !g.exception && (
+            {open && platform && g.required && (g.status === 'failed' || g.status === 'blocked') && <p className="subtle">A platform release takes no exceptions. Fix the cause and run the ship-check again.</p>}
+            {open && !platform && g.required && (g.status === 'failed' || g.status === 'blocked') && !g.exception && (
               <ExceptionForm gate={g} onSubmit={(reason, mitigation) => act('exception', () => call(iap().addGateException({ releaseId: r.id, gateId: g.id, reason, mitigation })))} />
             )}
           </details>
@@ -197,7 +199,7 @@ function Gates({ detail, open, act }: { detail: ReleaseDetail; open: boolean; ac
   );
 }
 
-function ReleaseCard({ release, onChanged }: { release: Release; onChanged: () => Promise<void> }) {
+function ReleaseCard({ release, platform, onChanged }: { release: Release; platform: boolean; onChanged: () => Promise<void> }) {
   const detail = useAsync(() => call(iap().getRelease(release.id)), [release.id, release.updatedAt]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -248,7 +250,7 @@ function ReleaseCard({ release, onChanged }: { release: Release; onChanged: () =
         <p className="subtle">
           Goes to {r.plan.target || '(not given)'}. Health check: {r.plan.healthCheck || '(not given)'}. Rollback: {r.plan.rollback || '(not given)'}.
         </p>
-        {d && <Gates detail={d} open={open} act={act} />}
+        {d && <Gates detail={d} open={open} platform={platform} act={act} />}
         {latestRuns.length > 0 && (
           <>
             <h4>Release checks</h4>
@@ -329,6 +331,7 @@ export function ReleasePanel({ project, onChanged }: { project: Project; onChang
         <NewRelease
           projectId={project.id}
           builds={builds.data}
+          platform={project.kind === 'maintenance'}
           onCreated={async () => {
             setAdding(false);
             await reload();
@@ -338,7 +341,7 @@ export function ReleasePanel({ project, onChanged }: { project: Project; onChang
       {releases.data && releases.data.length > 0 && (
         <div className="findings">
           {releases.data.map((r) => (
-            <ReleaseCard key={r.id} release={r} onChanged={reload} />
+            <ReleaseCard key={r.id} release={r} platform={project.kind === 'maintenance'} onChanged={reload} />
           ))}
         </div>
       )}

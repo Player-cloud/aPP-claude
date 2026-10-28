@@ -10,15 +10,16 @@ import { HomeView } from './views/HomeView.tsx';
 import { IterativeView, type ImprovementFilter } from './views/IterativeView.tsx';
 import { LearningStudioView, type StudioFilter } from './views/LearningStudioView.tsx';
 import { ProjectDetail } from './views/ProjectDetail.tsx';
+import { PlatformView } from './views/PlatformView.tsx';
 import { ProjectsView } from './views/ProjectsView.tsx';
 import { RecoveryView } from './views/RecoveryView.tsx';
 import { SettingsView } from './views/SettingsView.tsx';
 import { ToolsView, type ToolFilter } from './views/ToolsView.tsx';
 import { UpdatesView, type UpdateFilter } from './views/UpdatesView.tsx';
 
-export type Section = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'updates' | 'iterative' | 'settings';
+export type Section = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'updates' | 'iterative' | 'platform' | 'settings';
 
-type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'radar' | 'iterate' | 'settings';
+type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'radar' | 'iterate' | 'shield' | 'settings';
 
 // Groups are separated by a divider in the rail: Project Layer, then Iterative Layer.
 const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
@@ -32,6 +33,7 @@ const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
     { id: 'tools', label: 'Tools', icon: 'tools' },
     { id: 'updates', label: 'Updates', icon: 'radar' },
     { id: 'iterative', label: 'Improvements', icon: 'iterate' },
+    { id: 'platform', label: 'Platform', icon: 'shield' },
   ],
 ];
 
@@ -43,6 +45,7 @@ export const SECTION_LABEL: Record<Section, string> = {
   tools: 'Tools',
   updates: 'Updates',
   iterative: 'Improvements',
+  platform: 'Platform',
   settings: 'Settings',
 };
 
@@ -314,6 +317,14 @@ export function App() {
           {section === 'tools' && <ToolsView scan={toolScan} error={toolError} filter={toolFilter} onScan={scanTools} onRefresh={async () => setToolScan(await call(iap().getToolScan()))} />}
           {section === 'updates' && <UpdatesView filter={updateFilter} onFilter={setUpdateFilter} />}
           {section === 'iterative' && <IterativeView filter={improvementFilter} onFilter={setImprovementFilter} />}
+          {section === 'platform' && (
+            <PlatformView
+              onOpenProject={(id, name) => {
+                void loadProjects();
+                openProject(id, name);
+              }}
+            />
+          )}
           {section === 'settings' && settings && <SettingsView status={status} settings={settings} onSettings={setSettings} />}
         </main>
       </div>

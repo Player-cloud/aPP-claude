@@ -8,10 +8,15 @@
 // created; the person can also merge two items, which links them. Approving an
 // item changes nothing in the app: it records the person's decision. The backlog
 // cannot change approval rules, permissions or security gates.
+//
+// Platform work (M13): an item built as platform work is verified only when that
+// build is finished, released only in a prepared platform release, and measured
+// afterwards. A measurement that shows the problem came back reopens it as a
+// new proposed item, because passing tests alone is not the intended benefit.
 
 import { randomUUID } from 'node:crypto';
 import { ValidationError } from '../errors.ts';
-import type { Workspace } from '../workspace.ts';
+import type { Build, Measurement, Workspace } from '../workspace.ts';
 import { selfAssess, TELEMETRY_GAPS, type Level, type Occurrence, type SelfAssessmentReport } from './assess.ts';
 
 export const IMPROVEMENT_STATUSES = ['idea', 'proposed', 'approved', 'in_progress', 'verified', 'released', 'blocked', 'rejected'] as const;
@@ -20,7 +25,7 @@ export const LEVELS = ['low', 'medium', 'high'] as const;
 
 export interface Evidence {
   at: string;
-  source: 'self_assessment' | 'feedback' | 'merge';
+  source: 'self_assessment' | 'feedback' | 'merge' | 'measurement';
   summary: string;
   /** The self-assessment it came from. */
   assessmentId: string | null;
@@ -52,6 +57,8 @@ export interface Improvement {
   result: string | null;
   measuredOutcome: string | null;
   mergedInto: string | null;
+  /** A follow-up (M13): the released item whose measured outcome showed the problem came back. */
+  reopens: string | null;
   createdAt: string;
   updatedAt: string;
   releasedAt: string | null;
@@ -95,7 +102,23 @@ export interface ImprovementDetail {
   dependencies: ImprovementLink[];
   mergedFrom: ImprovementLink[];
   mergedInto: ImprovementLink | null;
+  /** Platform work (M13). */
+  builds: { id: string; title: string; status: Build['status'] }[];
+  /** Prepared platform releases that include a finished build of this item. */
+  releases: { id: string; version: string }[];
+  measurements: Measurement[];
+  reopens: ImprovementLink | null;
+  reopenedBy: ImprovementLink | null;
 }
+
+/** What platform work exists for an item, for the moves that depend on it. */
+export interface PlatformLinks {
+  builds: Pick<Build, 'status'>[];
+  preparedReleases: number;
+}
+
+/** Days a detector item must stay quiet after release before it counts as improved. */
+export const QUIET_DAYS = 7;
 
 export interface ImprovementsOverview {
   items: Improvement[];
@@ -136,7 +159,7 @@ export function allowedMoves(item: Improvement): ImprovementStatus[] {
 }
 
 /** Checks a move and returns the fields it changes. `actor` is the person making it. */
-export function planMove(item: Improvement, input: MoveInput, actor: string, at: string, deps: Improvement[]): Partial<Improvement> {
+export function planMove(item: Improvement, input: MoveInput, actor: string, at: string, deps: Improvement[], links: PlatformLinks = { builds: [], preparedReleases: 0 }): Partial<Improvement> {
   if (item.mergedInto) throw new ValidationError(`IMP-${item.number} was merged into another item and cannot move.`);
   const to = input.to;
   if (!IMPROVEMENT_STATUSES.includes(to)) throw new ValidationError(`Unknown status: ${String(to)}`);
@@ -163,6 +186,7 @@ export function planMove(item: Improvement, input: MoveInput, actor: string, at:
       break;
     }
     case 'verified': {
+      if (links.builds.length && !links.builds.some((b) => b.status === 'completed')) throw new ValidationError('Finish its platform work first: the build must pass the mandatory checks and be marked done.');
       const result = text(input.result, 'Result');
       if (!result) throw new ValidationError('Write the result: what was done and how it was checked.');
       patch.result = result;
@@ -170,7 +194,10 @@ export function planMove(item: Improvement, input: MoveInput, actor: string, at:
     }
     case 'released': {
       const measured = text(input.measuredOutcome, 'Measured outcome');
-      if (!measured) throw new ValidationError('Write the measured outcome against the success criteria. Passing tests alone is not a measured outcome.');
+      if (links.builds.length) {
+        // Platform work is measured after release, from evidence (M13).
+        if (!links.preparedReleases) throw new ValidationError('Include its finished platform build in a platform release and prepare that release first.');
+      } else if (!measured) throw new ValidationError('Write the measured outcome against the success criteria. Passing tests alone is not a measured outcome.');
       patch.measuredOutcome = measured;
       patch.releasedAt = at;
       break;
@@ -299,7 +326,7 @@ export class Backlog {
 
   move(id: string, input: MoveInput): Improvement {
     const item = this.ws.getImprovement(id);
-    const patch = planMove(item, input, this.ws.actorName(), this.ws.nowIso(), item.dependencies.map((d) => this.ws.getImprovement(d)));
+    const patch = planMove(item, input, this.ws.actorName(), this.ws.nowIso(), item.dependencies.map((d) => this.ws.getImprovement(d)), this.links(item.id));
     return this.ws.updateImprovement(id, patch, {
       type: 'improvement.moved',
       payload: { from: item.status, to: input.to, ...(patch.reason ? { reason: patch.reason } : {}), ...(patch.approver ? { approver: patch.approver } : {}) },
@@ -353,16 +380,104 @@ export class Backlog {
       dependencies: item.dependencies.map((d) => link(this.ws.getImprovement(d))),
       mergedFrom: this.ws.listImprovements({ includeMerged: true }).filter((i) => i.mergedInto === item.id).map(link),
       mergedInto: item.mergedInto ? link(this.ws.getImprovement(item.mergedInto)) : null,
+      builds: this.ws.listBuildsForSource(item.id).map((b) => ({ id: b.id, title: b.title, status: b.status })),
+      releases: this.preparedReleases(item.id),
+      measurements: this.ws.listMeasurements(item.id),
+      reopens: item.reopens ? link(this.ws.getImprovement(item.reopens)) : null,
+      reopenedBy: ((r) => (r ? link(r) : null))(this.ws.reopenedBy(item.id)),
     };
+  }
+
+  /**
+   * Measures a released item from the self-assessment record (M13). The
+   * problem coming back means it did not work: a follow-up item is proposed.
+   * No recurrence for QUIET_DAYS after release means it worked. Anything else
+   * is too early to say.
+   */
+  measure(id: string): Measurement {
+    const item = this.ws.getImprovement(id);
+    if (item.status !== 'released' || !item.releasedAt) throw new ValidationError(`IMP-${item.number} is not released yet. Measure it after release.`);
+    if (!this.signatures(item).size) throw new ValidationError('This item has no detector to count. Record the outcome yourself against its success criteria.');
+    const latest = this.ws.latestSelfAssessment();
+    if (!latest || latest.at <= item.releasedAt) {
+      return this.ws.recordMeasurement({ improvementId: id, method: 'recurrence', verdict: 'too_early', recurrences: null, assessmentId: latest?.id ?? null, detail: 'No self-assessment has run since the release. Run one after using the new version for a while.', followupId: null });
+    }
+    const sigs = this.signatures(item);
+    const after = latest.report.findings.filter((f) => sigs.has(f.signature)).flatMap((f) => f.observation.occurrences).filter((o) => o.at > item.releasedAt!);
+    if (after.length) {
+      return this.reopen(item, `The problem came back ${after.length} time${after.length === 1 ? '' : 's'} after the release (self-assessment ${latest.at.slice(0, 10)}).`, 'recurrence', after.length, latest.id, after);
+    }
+    const quietDays = (Date.parse(latest.at) - Date.parse(item.releasedAt)) / 86_400_000;
+    if (quietDays < QUIET_DAYS) {
+      return this.ws.recordMeasurement({ improvementId: id, method: 'recurrence', verdict: 'too_early', recurrences: 0, assessmentId: latest.id, detail: `Not seen since the release, but only ${Math.floor(quietDays)} of ${QUIET_DAYS} days have passed. Measure again later.`, followupId: null });
+    }
+    return this.ws.recordMeasurement({ improvementId: id, method: 'recurrence', verdict: 'improved', recurrences: 0, assessmentId: latest.id, detail: `Not seen in the ${Math.floor(quietDays)} days since the release (self-assessment ${latest.at.slice(0, 10)}). Success criteria: ${item.successCriteria}`, followupId: null });
+  }
+
+  /** The person's own judgement against the success criteria, for items no detector can count. */
+  recordOutcome(id: string, verdict: unknown, detail: unknown): Measurement {
+    const item = this.ws.getImprovement(id);
+    if (item.status !== 'released' || !item.releasedAt) throw new ValidationError(`IMP-${item.number} is not released yet. Record the outcome after release.`);
+    if (verdict !== 'improved' && verdict !== 'not_improved') throw new ValidationError('The outcome is "improved" or "not_improved".');
+    const body = text(detail, 'What you observed');
+    if (!body || body.length < 10) throw new ValidationError('Write what you observed against the success criteria (at least 10 characters). Passing tests alone is not an outcome.');
+    if (verdict === 'not_improved') return this.reopen(item, body, 'person', null, null, []);
+    return this.ws.recordMeasurement({ improvementId: id, method: 'person', verdict: 'improved', recurrences: null, assessmentId: null, detail: body, followupId: null });
+  }
+
+  /** Records "not improved" and proposes a follow-up that tracks the same finding. One follow-up per item. */
+  private reopen(item: Improvement, detail: string, method: Measurement['method'], recurrences: number | null, assessmentId: string | null, occurrences: Occurrence[]): Measurement {
+    return this.ws.inTransaction(() => {
+      let follow = this.ws.reopenedBy(item.id);
+      if (!follow) {
+        follow = this.ws.createImprovement({
+          title: `Reopened: ${item.title}`.slice(0, 120),
+          problem: `IMP-${item.number} was released but did not have the intended effect. ${detail}\n\nOriginal problem: ${item.problem}`.slice(0, 4000),
+          expectedOutcome: item.expectedOutcome,
+          successCriteria: item.successCriteria,
+          priority: item.priority,
+          risk: item.risk,
+          status: 'proposed',
+          source: item.source,
+          signature: null,
+          reopens: item.id,
+          evidence: [{ at: this.ws.nowIso(), source: 'measurement', summary: detail, assessmentId, occurrences }],
+        });
+      }
+      return this.ws.recordMeasurement({ improvementId: item.id, method, verdict: 'not_improved', recurrences, assessmentId, detail, followupId: follow.id });
+    });
+  }
+
+  private links(id: string): PlatformLinks {
+    return { builds: this.ws.listBuildsForSource(id), preparedReleases: this.preparedReleases(id).length };
+  }
+
+  private preparedReleases(id: string): { id: string; version: string }[] {
+    const project = this.ws.maintenanceProject();
+    if (!project) return [];
+    const done = new Set(this.ws.listBuildsForSource(id).filter((b) => b.status === 'completed').map((b) => b.id));
+    if (!done.size) return [];
+    return this.ws.listReleases(project.id).filter((r) => r.status === 'prepared' && r.buildIds.some((b) => done.has(b))).map((r) => ({ id: r.id, version: r.version }));
+  }
+
+  /** The findings an item tracks: its own, its merged duplicates', and for a follow-up, the item it reopens. */
+  private signatures(item: Improvement, seen = new Set<string>()): Set<string> {
+    const out = new Set<string>();
+    if (seen.has(item.id)) return out;
+    seen.add(item.id);
+    if (item.signature) out.add(item.signature);
+    for (const m of this.ws.listImprovements({ includeMerged: true }).filter((i) => i.mergedInto === item.id)) for (const s of this.signatures(m, seen)) out.add(s);
+    if (item.reopens) for (const s of this.signatures(this.ws.getImprovement(item.reopens), seen)) out.add(s);
+    return out;
   }
 
   /** How often the item's finding came back after it was approved (detector items only). */
   recurrence(item: Improvement): Recurrence {
-    if (!item.signature) return { sinceApproval: null, measuredAt: null, note: 'Typed feedback has no detector to count; write the measured outcome yourself.' };
+    const signatures = this.signatures(item);
+    if (!signatures.size) return { sinceApproval: null, measuredAt: null, note: 'Typed feedback has no detector to count; write the measured outcome yourself.' };
     if (!item.approvedAt) return { sinceApproval: null, measuredAt: null, note: 'Counted from approval.' };
     const latest = this.ws.latestSelfAssessment();
     if (!latest || latest.at <= item.approvedAt) return { sinceApproval: null, measuredAt: null, note: 'Run a self-assessment after approval to count recurrences.' };
-    const signatures = new Set([item.signature, ...this.ws.listImprovements({ includeMerged: true }).filter((i) => i.mergedInto === item.id && i.signature).map((i) => i.signature!)]);
     const after = latest.report.findings.filter((f) => signatures.has(f.signature)).flatMap((f) => f.observation.occurrences).filter((o) => o.at > item.approvedAt!);
     return { sinceApproval: after.length, measuredAt: latest.at, note: after.length ? 'The problem came back after approval.' : 'Not seen since approval.' };
   }

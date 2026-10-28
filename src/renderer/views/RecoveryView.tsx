@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { AppStatus } from '../../shared/api.ts';
+import { useEffect, useState } from 'react';
+import type { AppStatus, BackupInfo } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Alert } from '../ui.tsx';
 
@@ -10,6 +10,26 @@ export function RecoveryView({ status, onRecovered }: { status: AppStatus; onRec
   const [error, setError] = useState<string | null>(null);
   const [movedTo, setMovedTo] = useState<string | null>(null);
   const tooNew = status.state === 'too_new';
+  const [backups, setBackups] = useState<BackupInfo[]>([]);
+  const [restored, setRestored] = useState(false);
+
+  // Going back to an older version (M13): a backup that version took can be put back in place.
+  useEffect(() => {
+    if (!tooNew) return;
+    call(iap().listBackups())
+      .then((list) => setBackups(list.filter((b) => b.restorable)))
+      .catch(() => setBackups([]));
+  }, [tooNew]);
+
+  const restore = async (file: string) => {
+    setError(null);
+    try {
+      await call(iap().restoreBackup(file));
+      setRestored(true);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   const recover = async () => {
     setError(null);
@@ -40,8 +60,34 @@ export function RecoveryView({ status, onRecovered }: { status: AppStatus; onRec
               Open the new workspace
             </button>
           </>
+        ) : restored ? (
+          <>
+            <Alert title="Backup restored">The database the newer version wrote was kept next to it, not deleted.</Alert>
+            <button type="button" className="btn btn-primary" onClick={onRecovered}>
+              Open the workspace
+            </button>
+          </>
         ) : tooNew ? (
-          <p className="muted">Install the latest version of the app to open this workspace.</p>
+          <>
+            <p className="muted">Install the latest version of the app to open this workspace{backups.length ? ', or restore a backup this version can read:' : '.'}</p>
+            {backups.length > 0 && (
+              <ul className="plat-list" aria-label="Backups this version can restore">
+                {backups.map((b) => (
+                  <li key={b.file}>
+                    <span>
+                      <span className="mono">{b.file}</span>
+                      <span className="subtle plat-meta">
+                        Version {b.version ?? 'unknown'} · data format {b.schemaVersion}
+                      </span>
+                    </span>
+                    <button type="button" className="btn btn-sm" onClick={() => void restore(b.file)}>
+                      Restore…
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         ) : !confirming ? (
           <div className="btn-row">
             <button type="button" className="btn btn-primary" onClick={() => setConfirming(true)}>

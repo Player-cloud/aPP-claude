@@ -301,11 +301,19 @@ function Checks({ runs }: { runs: CheckRun[] }) {
   );
 }
 
+/** Whether the person's approval covers every protected file the last review reported. */
+function protectedCovered(b: Build): boolean {
+  const covered = new Set(b.protectedApproval?.files ?? []);
+  const files = (b.risks ?? []).filter((r) => r.kind === 'protected_change').flatMap((r) => (b.changedFiles ?? []).map((f) => f.path).filter((p) => r.detail.includes(p)));
+  return files.every((f) => covered.has(f));
+}
+
 function BuildCard({ build, onChanged }: { build: Build; onChanged: () => Promise<void> }) {
   const detail = useAsync(() => call(iap().getBuild(build.id)), [build.id, build.updatedAt]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  const [reason, setReason] = useState('');
   const [diff, setDiff] = useState<Diff | null>(null);
   const d: BuildDetail | null = detail.data;
   const b = d?.build ?? build;
@@ -331,8 +339,14 @@ function BuildCard({ build, onChanged }: { build: Build; onChanged: () => Promis
         <Badge tone={STATUS[b.status].tone}>{STATUS[b.status].label}</Badge>
         <span className="finding-title">{b.title}</span>
         <span className="pill">{KIND[b.kind].label}</span>
+        {b.source && <span className="pill">{b.source.ref}</span>}
       </summary>
       <div className="finding-body">
+        {b.source && (
+          <p className="subtle">
+            Platform work for {b.source.ref} ({b.source.title}). The mandatory checks always run, and it cannot be marked done while one fails or a protected change lacks your approval.
+          </p>
+        )}
         <p>{b.goal}</p>
         {b.requirementIds.length > 0 && <p className="subtle">Requirements: {b.requirementIds.join(', ')}</p>}
         {b.repro && (
@@ -398,6 +412,23 @@ function BuildCard({ build, onChanged }: { build: Build; onChanged: () => Promis
               <p className="subtle">No risks found by the automatic review.</p>
             )}
           </>
+        )}
+        {b.protectedApproval && (
+          <Alert tone="info" title="Protected changes approved">
+            By {b.protectedApproval.by}, {formatTime(b.protectedApproval.at)}: {b.protectedApproval.files.join(', ')}. Reason: {b.protectedApproval.reason}
+          </Alert>
+        )}
+        {b.status === 'review' && b.risks?.some((r) => r.kind === 'protected_change') && !protectedCovered(b) && (
+          <div className="field" aria-label="Approve protected changes">
+            <label htmlFor={`${b.id}-protected`}>Why these protected changes are needed</label>
+            <input id={`${b.id}-protected`} className="input" value={reason} maxLength={2000} onChange={(e) => setReason(e.target.value)} />
+            <p className="hint">Changes to approvals, permissions, security, release gates, configuration or stored data need your separate approval. A dialog shows the exact files.</p>
+            <div className="btn-row">
+              <button type="button" className="btn btn-sm" disabled={busy !== null || reason.trim().length < 10} onClick={() => void act('protect', () => call(iap().approveProtectedChange({ buildId: b.id, reason })))}>
+                Approve protected changes…
+              </button>
+            </div>
+          </div>
         )}
         {b.note && <p className="subtle">Note: {b.note}</p>}
         {diff && <pre className="agent-output build-diff">{diff.patch || 'No changes.'}</pre>}
@@ -475,7 +506,8 @@ export function BuildPanel({ project, onProjectChanged, onChanged }: { project: 
       </h2>
       <RepoSetup project={project} onChanged={onProjectChanged} />
       {builds.error && <Alert tone="danger">{builds.error}</Alert>}
-      {project.repoPath && !adding && (
+      {project.kind === 'maintenance' && <p className="subtle">Platform work starts from an approved improvement or update, in Improvements, Updates or Platform.</p>}
+      {project.repoPath && !adding && project.kind !== 'maintenance' && (
         <div className="btn-row">
           <button type="button" className="btn btn-sm btn-primary" onClick={() => setAdding(true)}>
             New feature, bug fix or UI polish

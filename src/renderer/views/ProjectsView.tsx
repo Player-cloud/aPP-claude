@@ -150,7 +150,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
         </span>
         <span className="project-card-name">
           {project.name}
-          {project.origin === 'imported' && <span className="pill">Imported</span>}
+          {project.kind === 'maintenance' ? <span className="pill">Platform maintenance</span> : project.origin === 'imported' && <span className="pill">Imported</span>}
         </span>
         <span className="project-card-idea">{project.idea ?? 'No idea recorded yet.'}</span>
         <span className="project-card-foot">

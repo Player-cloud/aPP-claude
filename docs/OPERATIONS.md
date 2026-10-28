@@ -152,8 +152,22 @@ The main agent, the planning drafts and the build agent all use this. A build ag
 
 The app's budget is a safety stop inside this app only. Also set a spend limit in the Anthropic Console, which covers every use of the key.
 
+## Platform maintenance (M13, DEC-029)
+- **Set up once:** Platform → *Set up* with the folder of the app's source code (a git clone of this repository), or `npm run iap -- platform setup <folder>`. The running version is recorded as known-good. Nothing in the folder changes.
+- **Build an approved item:** *Build as platform work* on an approved improvement (Improvements) or an approved app library, runtime or model update (Updates), or `iap platform start IMP-n|UPD-n`. Start it in the platform-maintenance project; the mandatory checks (`npm ci`, `npm run typecheck`, `npm test`, `npm run test:e2e`) run in a worktree under `<data>/worktrees/`. `npm ci` installs the exact dependencies in the lockfile, including Electron's download step; you approve it with the other commands.
+- **Protected changes** (approval and permission rules, security policies, release gates, production configuration, stored data) are reported by verification and need *Approve protected changes…* (or `iap platform approve <buildId> --reason <why> --confirm`) before the build can be marked done.
+- **Ship it yourself:** merge the build's branch in the source repository, create a release in the platform-maintenance project and run its ship-check (it adds `npm audit`; it needs the network and takes no exceptions), prepare it, then build the installer (`npm run dist:win`) and install it.
+- **Before installing:** Platform → *Take a backup* (or `iap platform backup`), then *Test recovery* (or `iap platform test-recovery <file>`). Backups are `<data>/backups/iap-v<version>-<time>.db`.
+- **After installing:** check the app opens and your projects load, then mark the release known-good on the Platform page (`iap platform known-good <releaseId> --note <what you checked>`). It only works from the version that is running.
+- **Measure:** after using the new version for a week, run a self-assessment and *Measure from the records* on each released item (`iap iter measure IMP-n`, exit code 4 when not improved), or record your own judgement (`iap iter outcome IMP-n --verdict improved|not_improved --note <text>`). *Not improved* proposes a follow-up item.
+
+## Rolling back a platform update
+1. Uninstall the new version and reinstall the known-good version's installer (listed under Known-good versions).
+2. If the older version shows "This workspace needs a newer version", choose *Restore…* next to a backup it can read; or close the app and run `npm run iap -- recover --from <backup file> --confirm`. The current database is renamed `iap.db.replaced-<time>` and kept.
+3. Open the app and check your projects load.
+
 ## Backup
-Close the app, then copy the whole data directory. SQLite WAL files must be copied together with `iap.db`.
+Close the app, then copy the whole data directory. SQLite WAL files must be copied together with `iap.db`. Platform → *Take a backup* makes a consistent copy of the database while the app runs (M13).
 
 ## Recovery
 - **Corrupt database (desktop app):** the app opens a recovery screen instead of the workspace and changes nothing until you confirm *Move it aside and start fresh*.
@@ -161,4 +175,4 @@ Close the app, then copy the whole data directory. SQLite WAL files must be copi
 - **Database from a newer version:** refused with exit code 2; upgrade the app. The file is not downgraded.
 
 ## Exit codes
-`0` success · `1` usage/validation error · `2` state unreadable (corrupt/too new) · `3` unexpected error · `4` (`release check` only) a gate blocks the release.
+`0` success · `1` usage/validation error · `2` state unreadable (corrupt/too new) · `3` unexpected error · `4` a gate blocks the release (`release check`), verification failed (`updates verify`), a recovery test failed (`platform test-recovery`) or the item did not improve (`iter measure`).

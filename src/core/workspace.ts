@@ -29,7 +29,7 @@ import type { CleanupPlan } from './cleanup/cleanup.ts';
 import type { SourceResult, UpdateCheck, UpdateItem } from './updates/updates.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -51,6 +51,8 @@ export interface Project {
   docsPath: string;
   /** The git repository that build work happens in (M6). Null until the person chooses one. */
   repoPath: string | null;
+  /** "maintenance" is the one project for the app's own repository (M13); its work starts only from approved platform items. */
+  kind: 'product' | 'maintenance';
   createdAt: string;
   updatedAt: string;
 }
@@ -545,6 +547,50 @@ const MIGRATIONS: Record<number, string> = {
         OR NEW.first_check_id IS NOT OLD.first_check_id OR NEW.detected_at IS NOT OLD.detected_at
       BEGIN SELECT RAISE(ABORT, 'a finished update cannot change'); END;
   `,
+  14: `
+    -- M13 controlled self-improvement. One platform-maintenance project for the app's own
+    -- repository; its builds name the approved item they implement and any approval for
+    -- protected areas. Known-good versions and outcome measurements are append-only.
+    ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'product' CHECK (kind IN ('product','maintenance'));
+    CREATE UNIQUE INDEX projects_one_maintenance ON projects(kind) WHERE kind = 'maintenance';
+    ALTER TABLE builds ADD COLUMN source TEXT;
+    ALTER TABLE builds ADD COLUMN protected_approval TEXT;
+    CREATE TRIGGER builds_source_fixed BEFORE UPDATE ON builds
+      WHEN NEW.source IS NOT OLD.source
+      BEGIN SELECT RAISE(ABORT, 'the item a build implements cannot change'); END;
+    ALTER TABLE improvements ADD COLUMN reopens TEXT REFERENCES improvements(id);
+    CREATE TABLE known_good (
+      id TEXT PRIMARY KEY,
+      version TEXT NOT NULL,
+      commit_sha TEXT,
+      release_id TEXT REFERENCES releases(id),
+      backup_path TEXT,
+      note TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      at TEXT NOT NULL
+    );
+    CREATE TRIGGER known_good_frozen BEFORE UPDATE ON known_good
+      BEGIN SELECT RAISE(ABORT, 'a known-good record cannot change'); END;
+    CREATE TRIGGER known_good_no_delete BEFORE DELETE ON known_good
+      BEGIN SELECT RAISE(ABORT, 'known-good records are never deleted'); END;
+    CREATE TABLE improvement_measurements (
+      id TEXT PRIMARY KEY,
+      improvement_id TEXT NOT NULL REFERENCES improvements(id),
+      at TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      method TEXT NOT NULL CHECK (method IN ('recurrence','person')),
+      verdict TEXT NOT NULL CHECK (verdict IN ('improved','not_improved','too_early')),
+      recurrences INTEGER,
+      assessment_id TEXT,
+      detail TEXT NOT NULL,
+      followup_id TEXT REFERENCES improvements(id)
+    );
+    CREATE INDEX improvement_measurements_item ON improvement_measurements(improvement_id, at);
+    CREATE TRIGGER improvement_measurements_frozen BEFORE UPDATE ON improvement_measurements
+      BEGIN SELECT RAISE(ABORT, 'a measurement cannot change'); END;
+    CREATE TRIGGER improvement_measurements_no_delete BEFORE DELETE ON improvement_measurements
+      BEGIN SELECT RAISE(ABORT, 'measurements are never deleted'); END;
+  `,
 };
 
 export type ReleaseStatus = 'draft' | 'checked' | 'prepared' | 'abandoned';
@@ -629,9 +675,56 @@ export interface Build {
   referenceIds: string[];
   motion: boolean;
   uiAudit: UiAudit | null;
+  /** Platform work (M13): the approved improvement or update this build implements. Fixed at creation. */
+  source: BuildSource | null;
+  /** Platform work (M13): the person's separate approval for changes to protected areas. */
+  protectedApproval: ProtectedApproval | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+}
+
+export interface BuildSource {
+  type: 'improvement' | 'update';
+  id: string;
+  /** IMP-<n> or UPD-<n>. */
+  ref: string;
+  title: string;
+}
+
+export interface ProtectedApproval {
+  at: string;
+  by: string;
+  reason: string;
+  /** The protected files the approval covers. A later verification that touches others needs a new approval. */
+  files: string[];
+  areas: string[];
+}
+
+/** A version of the app the person confirmed works, to go back to (M13). */
+export interface KnownGood {
+  id: string;
+  version: string;
+  commit: string | null;
+  releaseId: string | null;
+  backupPath: string | null;
+  note: string;
+  actor: string;
+  at: string;
+}
+
+/** Whether a released improvement had the intended effect (M13). */
+export interface Measurement {
+  id: string;
+  improvementId: string;
+  at: string;
+  actor: string;
+  method: 'recurrence' | 'person';
+  verdict: 'improved' | 'not_improved' | 'too_early';
+  recurrences: number | null;
+  assessmentId: string | null;
+  detail: string;
+  followupId: string | null;
 }
 
 export interface CheckRun extends CheckResult {
@@ -886,7 +979,24 @@ export class Workspace {
     return this.insertProject(input, 'imported', input.repoPath);
   }
 
-  private insertProject(input: { name: string; idea?: string; facts?: Fact[] }, origin: Project['origin'], repoPath: string | null): Project {
+  /**
+   * The one platform-maintenance project, for the app's own repository (M13).
+   * The caller checks the folder is the app's repository. Work in it starts
+   * only from an approved improvement or update.
+   */
+  createMaintenanceProject(input: { name: string; repoPath: string; idea: string }): Project {
+    if (this.maintenanceProject()) throw new ValidationError('The platform-maintenance project already exists.');
+    const taken = this.listProjects().find((p) => p.repoPath === input.repoPath && p.status === 'active');
+    if (taken) throw new ValidationError(`This repository is already the project "${taken.name}".`);
+    return this.insertProject(input, 'imported', input.repoPath, 'maintenance');
+  }
+
+  maintenanceProject(): Project | null {
+    const row = this.db.prepare("SELECT * FROM projects WHERE kind = 'maintenance'").get() as Record<string, unknown> | undefined;
+    return row ? toProject(row) : null;
+  }
+
+  private insertProject(input: { name: string; idea?: string; facts?: Fact[] }, origin: Project['origin'], repoPath: string | null, kind: Project['kind'] = 'product'): Project {
     const name = requireText('Project name', input.name, 120);
     const idea = optionalText('Idea', input.idea, 10_000);
     const facts = (input.facts ?? []).map((fact) => {
@@ -905,11 +1015,11 @@ export class Workspace {
     this.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO projects (id, name, origin, status, idea, facts, workspace_path, docs_path, repo_path, created_at, updated_at)
-           VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO projects (id, name, origin, status, idea, facts, workspace_path, docs_path, repo_path, kind, created_at, updated_at)
+           VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, name, origin, idea, JSON.stringify(facts), workspacePath, docsPath, repoPath, at, at);
-      this.record(origin === 'new' ? 'project.created' : 'project.imported', id, null, { name, origin, facts: facts.length, ...(repoPath ? { repoPath } : {}) });
+        .run(id, name, origin, idea, JSON.stringify(facts), workspacePath, docsPath, repoPath, kind, at, at);
+      this.record(kind === 'maintenance' ? 'project.maintenance_created' : origin === 'new' ? 'project.created' : 'project.imported', id, null, { name, origin, facts: facts.length, ...(repoPath ? { repoPath } : {}) });
     });
     return this.getProject(id);
   }
@@ -1170,6 +1280,7 @@ export class Workspace {
     repro: string | null;
     referenceIds?: string[];
     motion?: boolean;
+    source?: BuildSource | null;
   }): Build {
     const project = this.getProject(input.projectId);
     const id = `build_${randomUUID()}`;
@@ -1178,8 +1289,8 @@ export class Workspace {
     this.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO builds (id, project_id, kind, title, goal, requirement_ids, components, checks, repro, reference_ids, motion, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+          `INSERT INTO builds (id, project_id, kind, title, goal, requirement_ids, components, checks, repro, reference_ids, motion, source, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
         )
         .run(
           id,
@@ -1193,10 +1304,11 @@ export class Workspace {
           input.repro === null ? null : redactString(input.repro),
           JSON.stringify(input.referenceIds ?? []),
           input.motion ? 1 : 0,
+          input.source ? JSON.stringify(redact(input.source)) : null,
           at,
           at,
         );
-      this.record('build.created', project.id, null, { buildId: id, kind: input.kind, title, requirementIds: input.requirementIds, checks: input.checks.map((c) => c.command) });
+      this.record('build.created', project.id, null, { buildId: id, kind: input.kind, title, requirementIds: input.requirementIds, checks: input.checks.map((c) => c.command), ...(input.source ? { source: input.source.ref } : {}) });
     });
     return this.getBuild(id);
   }
@@ -1212,10 +1324,15 @@ export class Workspace {
     return (this.db.prepare('SELECT * FROM builds WHERE project_id = ? ORDER BY created_at DESC, id').all(projectId) as Record<string, unknown>[]).map(toBuild);
   }
 
+  /** Platform builds that implement an improvement or update (M13), newest first. */
+  listBuildsForSource(sourceId: string): Build[] {
+    return (this.db.prepare("SELECT * FROM builds WHERE json_extract(source, '$.id') = ? ORDER BY created_at DESC, id").all(sourceId) as Record<string, unknown>[]).map(toBuild);
+  }
+
   /** Updates a build. Its definition (goal, checks, components) can only change while it is a draft. */
   updateBuild(
     id: string,
-    patch: Partial<Pick<Build, 'title' | 'goal' | 'requirementIds' | 'components' | 'checks' | 'repro' | 'status' | 'repoPath' | 'branch' | 'worktree' | 'baseCommit' | 'agent' | 'changedFiles' | 'risks' | 'note' | 'reportPath' | 'completedAt' | 'resultCommit' | 'referenceIds' | 'motion' | 'uiAudit'>>,
+    patch: Partial<Pick<Build, 'title' | 'goal' | 'requirementIds' | 'components' | 'checks' | 'repro' | 'status' | 'repoPath' | 'branch' | 'worktree' | 'baseCommit' | 'agent' | 'changedFiles' | 'risks' | 'note' | 'reportPath' | 'completedAt' | 'resultCommit' | 'referenceIds' | 'motion' | 'uiAudit' | 'protectedApproval'>>,
     event?: { type: string; payload: Record<string, unknown> },
   ): Build {
     const build = this.getBuild(id);
@@ -1227,7 +1344,7 @@ export class Workspace {
         .prepare(
           `UPDATE builds SET title = ?, goal = ?, requirement_ids = ?, components = ?, checks = ?, repro = ?, status = ?, repo_path = ?, branch = ?, worktree = ?,
              base_commit = ?, agent = ?, changed_files = ?, risks = ?, note = ?, report_path = ?, completed_at = ?, result_commit = ?,
-             reference_ids = ?, motion = ?, ui_audit = ?, updated_at = ? WHERE id = ?`,
+             reference_ids = ?, motion = ?, ui_audit = ?, protected_approval = ?, updated_at = ? WHERE id = ?`,
         )
         .run(
           redactString(n.title),
@@ -1251,6 +1368,7 @@ export class Workspace {
           JSON.stringify(n.referenceIds),
           n.motion ? 1 : 0,
           n.uiAudit ? JSON.stringify(n.uiAudit) : null,
+          n.protectedApproval ? JSON.stringify(redact(n.protectedApproval)) : null,
           this.timestamp(),
           id,
         );
@@ -1481,18 +1599,18 @@ export class Workspace {
 
   // ---- Improvement backlog (M10) ---------------------------------------------
 
-  createImprovement(i: Pick<Improvement, 'title' | 'problem' | 'expectedOutcome' | 'successCriteria' | 'priority' | 'risk' | 'status' | 'source' | 'signature' | 'evidence'>): Improvement {
+  createImprovement(i: Pick<Improvement, 'title' | 'problem' | 'expectedOutcome' | 'successCriteria' | 'priority' | 'risk' | 'status' | 'source' | 'signature' | 'evidence'> & { reopens?: string | null }): Improvement {
     const id = `imp_${randomUUID()}`;
     const at = this.timestamp();
     this.transaction(() => {
       const number = Number((this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM improvements').get() as { n: number }).n);
       this.db
         .prepare(
-          `INSERT INTO improvements (id, number, title, problem, evidence, expected_outcome, success_criteria, priority, risk, status, source, signature, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO improvements (id, number, title, problem, evidence, expected_outcome, success_criteria, priority, risk, status, source, signature, reopens, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, number, redactString(i.title), redactString(i.problem), JSON.stringify(redact(i.evidence)), redactString(i.expectedOutcome), redactString(i.successCriteria), i.priority, i.risk, i.status, i.source, i.signature, at, at);
-      this.record('improvement.created', null, null, { improvementId: id, number, source: i.source, signature: i.signature, status: i.status });
+        .run(id, number, redactString(i.title), redactString(i.problem), JSON.stringify(redact(i.evidence)), redactString(i.expectedOutcome), redactString(i.successCriteria), i.priority, i.risk, i.status, i.source, i.signature, i.reopens ?? null, at, at);
+      this.record('improvement.created', null, null, { improvementId: id, number, source: i.source, signature: i.signature, status: i.status, ...(i.reopens ? { reopens: i.reopens } : {}) });
     });
     return this.getImprovement(id);
   }
@@ -1521,8 +1639,87 @@ export class Workspace {
     const row = this.db.prepare('SELECT id FROM improvements WHERE signature = ? ORDER BY number LIMIT 1').get(signature) as { id: string } | undefined;
     if (!row) return null;
     let item = this.getImprovement(row.id);
-    for (let hops = 0; item.mergedInto && hops < 100; hops++) item = this.getImprovement(item.mergedInto);
+    // A merged item leads to the item it was merged into; a released item that was reopened leads to its follow-up (M13).
+    for (let hops = 0; hops < 100; hops++) {
+      if (item.mergedInto) item = this.getImprovement(item.mergedInto);
+      else {
+        const next = this.db.prepare('SELECT id FROM improvements WHERE reopens = ? ORDER BY number LIMIT 1').get(item.id) as { id: string } | undefined;
+        if (!next) break;
+        item = this.getImprovement(next.id);
+      }
+    }
     return item;
+  }
+
+  /** The follow-up item that reopened a released one (M13). */
+  reopenedBy(id: string): Improvement | null {
+    const row = this.db.prepare('SELECT id FROM improvements WHERE reopens = ? ORDER BY number LIMIT 1').get(id) as { id: string } | undefined;
+    return row ? this.getImprovement(row.id) : null;
+  }
+
+  recordMeasurement(m: Omit<Measurement, 'id' | 'at' | 'actor'>): Measurement {
+    const id = `msr_${randomUUID()}`;
+    const at = this.timestamp();
+    this.transaction(() => {
+      this.db
+        .prepare('INSERT INTO improvement_measurements (id, improvement_id, at, actor, method, verdict, recurrences, assessment_id, detail, followup_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, m.improvementId, at, this.actor, m.method, m.verdict, m.recurrences, m.assessmentId, redactString(m.detail), m.followupId);
+      this.record('improvement.measured', null, null, { improvementId: m.improvementId, method: m.method, verdict: m.verdict, recurrences: m.recurrences, ...(m.followupId ? { followupId: m.followupId } : {}) });
+    });
+    return this.listMeasurements(m.improvementId).at(-1)!;
+  }
+
+  /** Oldest first. */
+  listMeasurements(improvementId: string): Measurement[] {
+    return (this.db.prepare('SELECT * FROM improvement_measurements WHERE improvement_id = ? ORDER BY at, rowid').all(improvementId) as Record<string, unknown>[]).map((r) => ({
+      id: String(r.id),
+      improvementId: String(r.improvement_id),
+      at: String(r.at),
+      actor: String(r.actor),
+      method: r.method as Measurement['method'],
+      verdict: r.verdict as Measurement['verdict'],
+      recurrences: r.recurrences === null ? null : Number(r.recurrences),
+      assessmentId: (r.assessment_id as string | null) ?? null,
+      detail: String(r.detail),
+      followupId: (r.followup_id as string | null) ?? null,
+    }));
+  }
+
+  // ---- Known-good versions (M13) ---------------------------------------------
+
+  recordKnownGood(k: Omit<KnownGood, 'id' | 'at' | 'actor'>): KnownGood {
+    const id = `kg_${randomUUID()}`;
+    this.transaction(() => {
+      this.db
+        .prepare('INSERT INTO known_good (id, version, commit_sha, release_id, backup_path, note, actor, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, k.version, k.commit, k.releaseId, k.backupPath, redactString(k.note), this.actor, this.timestamp());
+      this.record('platform.known_good', this.maintenanceProject()?.id ?? null, null, { version: k.version, commit: k.commit, releaseId: k.releaseId, backup: k.backupPath });
+    });
+    return this.listKnownGood()[0]!;
+  }
+
+  /** Newest first. */
+  listKnownGood(): KnownGood[] {
+    return (this.db.prepare('SELECT * FROM known_good ORDER BY at DESC, rowid DESC').all() as Record<string, unknown>[]).map((r) => ({
+      id: String(r.id),
+      version: String(r.version),
+      commit: (r.commit_sha as string | null) ?? null,
+      releaseId: (r.release_id as string | null) ?? null,
+      backupPath: (r.backup_path as string | null) ?? null,
+      note: String(r.note),
+      actor: String(r.actor),
+      at: String(r.at),
+    }));
+  }
+
+  /** Records an event for the platform-maintenance flow that is not tied to one table (M13). */
+  recordPlatformEvent(type: string, payload: Record<string, unknown>): void {
+    this.transaction(() => this.record(type, this.maintenanceProject()?.id ?? null, null, payload));
+  }
+
+  /** A consistent copy of the database, taken with VACUUM INTO (M13). The target must not exist. */
+  backupTo(path: string): void {
+    this.db.prepare('VACUUM INTO ?').run(path);
   }
 
   updateImprovement(id: string, patch: Partial<Omit<Improvement, 'id' | 'number' | 'evidence' | 'source' | 'signature' | 'createdAt' | 'updatedAt'>>, event: { type: string; payload: Record<string, unknown> }): Improvement {
@@ -1946,6 +2143,8 @@ function toBuild(row: Record<string, unknown>): Build {
     referenceIds: json<string[]>(row.reference_ids) ?? [],
     motion: row.motion === 1 || row.motion === 1n,
     uiAudit: json<UiAudit>(row.ui_audit),
+    source: json<BuildSource>(row.source),
+    protectedApproval: json<ProtectedApproval>(row.protected_approval),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     completedAt: (row.completed_at as string | null) ?? null,
@@ -2066,6 +2265,7 @@ function toImprovement(row: Record<string, unknown>): Improvement {
     result: opt('result'),
     measuredOutcome: opt('measured_outcome'),
     mergedInto: opt('merged_into'),
+    reopens: opt('reopens'),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     releasedAt: opt('released_at'),
@@ -2133,6 +2333,7 @@ function toProject(row: Record<string, unknown>): Project {
     workspacePath: String(row.workspace_path),
     docsPath: String(row.docs_path),
     repoPath: (row.repo_path as string | null) ?? null,
+    kind: (row.kind as Project['kind'] | undefined) ?? 'product',
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
