@@ -2,19 +2,27 @@
 // filesystem and database access. The renderer talks to it through the narrow,
 // validated IPC surface in service.ts (FR-SEC-001, FR-SEC-005).
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveAppHome } from '../core/paths.ts';
 import { channel, IAP_METHODS } from '../shared/api.ts';
 import { EncryptedFileKeyStore } from './keystore.ts';
+import { serveReference } from './references.ts';
 import { AppService } from './service.ts';
 
 const RENDERER_HTML = join(__dirname, 'renderer', 'index.html');
 const RENDERER_URL = pathToFileURL(RENDERER_HTML).href;
 
 const home = resolveAppHome();
+
+// M9: the Learning Studio shows its copies of reference files through this
+// scheme (iap-ref://ref/<id>). Only ids the workspace knows are served, and only
+// from the app's own references folder, so a page cannot read arbitrary files.
+const REF_SCHEME = 'iap-ref';
+protocol.registerSchemesAsPrivileged([{ scheme: REF_SCHEME, privileges: { standard: true, secure: true, stream: true } }]);
+
 const smokeTest = process.argv.includes('--smoke-test');
 
 // `--smoke-test`: open the workspace, report health, exit. Used by CI to prove
@@ -113,6 +121,32 @@ if (smokeTest) {
         const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
         return response === 0;
       },
+      // M9: reference files come only from a native picker, never from a path the page supplies.
+      pickFiles: async () => {
+        const options = {
+          title: 'Add design references',
+          buttonLabel: 'Add to Learning Studio',
+          properties: ['openFile' as const, 'multiSelections' as const],
+          filters: [
+            { name: 'Images and videos', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'mov', 'webm'] },
+            { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+            { name: 'Videos', extensions: ['mp4', 'mov', 'webm'] },
+          ],
+        };
+        const parent = BrowserWindow.getFocusedWindow();
+        const { canceled, filePaths } = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+        return canceled ? [] : filePaths;
+      },
+    });
+    protocol.handle(REF_SCHEME, (request) => {
+      const url = new URL(request.url);
+      const file = url.host === 'ref' ? service.referenceFile(url.pathname.slice(1)) : null;
+      if (!file) return new Response('Not found', { status: 404 });
+      try {
+        return serveReference(file, request.headers.get('Range'));
+      } catch {
+        return new Response('Not found', { status: 404 });
+      }
     });
     for (const method of IAP_METHODS) {
       ipcMain.handle(channel(method), (event, ...args: unknown[]) => {

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { ElectronApplication, Page } from 'playwright-core';
 import { launch, SHOTS, tempHome } from './helpers.ts';
 import { buildClaudeFixture, CANARIES } from '../test/claude-fixture.ts';
+import { solidPng } from '../test/helpers.ts';
 
 mkdirSync(SHOTS, { recursive: true });
 
@@ -571,4 +572,104 @@ test('M8: import an existing repository and assess it read-only, in full and foc
   }
   const after = [git('rev-parse', 'HEAD'), git('for-each-ref'), git('--no-optional-locks', 'status', '--porcelain'), readFileSync(join(repo, '.git', 'index')).toString('base64')];
   assert.deepEqual(after, before, 'the imported repository was not changed');
+});
+
+test('M9: collect design references in the Learning Studio, with a suggestion that is only applied when accepted', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const incoming = join(home, 'Downloads');
+  mkdirSync(incoming);
+  const files = {
+    'onboarding-welcome.png': solidPng(480, 300, [124, 92, 255], [32, 22, 74]),
+    'pricing_cards.png': solidPng(480, 300, [83, 222, 216], [10, 60, 70]),
+    'settings-dark.png': solidPng(300, 480, [40, 46, 70], [12, 14, 24]),
+    'logo.svg': Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'),
+  };
+  for (const [name, data] of Object.entries(files)) writeFileSync(join(incoming, name), data);
+  const picked = Object.keys(files).map((n) => join(incoming, n));
+
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 900);
+    await page.evaluate(() => window.iap.createProject({ name: 'Club HR' }));
+    await page.reload();
+    await page.waitForSelector('#main');
+    await page.getByRole('button', { name: 'Learning Studio' }).click();
+    await page.getByRole('heading', { name: 'No references yet' }).waitFor();
+
+    // The page never supplies a path: files come from the native picker, stubbed here.
+    await app.evaluate(({ dialog }, paths) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: paths })) as typeof dialog.showOpenDialog;
+    }, picked);
+    await page.getByRole('button', { name: 'Add files' }).first().click();
+    await page.getByText('Added 3 files, skipped 1').waitFor();
+    await page.getByText(/logo\.svg.*SVG is not accepted/).waitFor();
+    const grid = page.getByRole('list', { name: 'References' });
+    assert.equal(await grid.getByRole('listitem').count(), 3);
+    // Previews are served from the app's own copies through the iap-ref: scheme.
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('.ref-grid img')].every((i) => i.complete && i.naturalWidth > 0));
+    const unknown = await page.evaluate(
+      () =>
+        new Promise<number>((done) => {
+          const img = new Image();
+          img.onload = () => done(img.naturalWidth);
+          img.onerror = () => done(-1);
+          img.src = 'iap-ref://ref/ref_00000000-0000-0000-0000-000000000000';
+        }),
+    );
+    assert.equal(unknown, -1, 'an unknown id is not served');
+
+    await grid.getByRole('button', { name: /onboarding welcome/ }).click();
+    const inspector = page.getByRole('region', { name: 'onboarding welcome' });
+    await inspector.getByRole('button', { name: 'Suggest (simulated)' }).click();
+    await inspector.getByText('Waiting for you').waitFor();
+    await inspector.getByText('Simulated: no AI looked at this file.').waitFor();
+    assert.equal(await inspector.getByLabel('Kind').inputValue(), 'other', 'nothing is applied before accepting');
+    await inspector.getByRole('button', { name: 'Accept suggestion' }).click();
+    await inspector.getByText('Accepted', { exact: true }).waitFor();
+    assert.match(await inspector.getByLabel('Tags').inputValue(), /onboarding/);
+
+    await inspector.getByLabel('Title').fill('Onboarding welcome');
+    await inspector.getByLabel('Kind').selectOption('ui_design');
+    await inspector.getByLabel('Tags').fill('onboarding, empty-state, illustration');
+    await inspector.getByLabel('Project').selectOption({ label: 'Club HR' });
+    await inspector.getByLabel('Your notes').fill('Borrow the warm welcome and single clear action. Not the colours.');
+    await inspector.getByRole('button', { name: 'Save' }).click();
+    await page.getByRole('region', { name: 'Onboarding welcome' }).getByText('You corrected it').waitFor();
+
+    await grid.getByRole('button', { name: /pricing cards/ }).click();
+    const pricing = page.getByRole('region', { name: 'pricing cards' });
+    await pricing.getByLabel('Tags').fill('pricing, cards');
+    await pricing.getByRole('button', { name: 'Save' }).click();
+    await pricing.getByText('Saved.').waitFor();
+    await pricing.getByRole('button', { name: 'Close the reference' }).click();
+
+    await page.getByRole('group', { name: 'Group by' }).getByRole('button', { name: 'Project' }).click();
+    await page.getByRole('heading', { name: /Club HR/ }).waitFor();
+    await page.getByRole('heading', { name: /Not linked to a project/ }).waitFor();
+    await page.getByRole('group', { name: 'Group by' }).getByRole('button', { name: 'Tag' }).click();
+    await page.getByRole('heading', { name: /#onboarding/ }).waitFor();
+    await shot(page, '20-learning-studio-library-dark-1280');
+
+    await page.getByLabel('Search references').fill('warm welcome');
+    await page.getByRole('group', { name: 'Group by' }).getByRole('button', { name: 'No groups' }).click();
+    await grid.getByRole('button', { name: /pricing cards/ }).waitFor({ state: 'detached' });
+    assert.equal(await grid.getByRole('listitem').count(), 1);
+    await grid.getByRole('button', { name: /Onboarding welcome/ }).click();
+    await page.getByRole('region', { name: 'Onboarding welcome' }).waitFor();
+    await shot(page, '21-learning-studio-reference-dark-1280');
+
+    // Archive hides it; it is never deleted and can be restored.
+    await page.getByRole('region', { name: 'Onboarding welcome' }).getByRole('button', { name: 'Archive' }).click();
+    await page.getByRole('heading', { name: 'Nothing matches' }).waitFor();
+    await page.getByLabel('Search references').fill('');
+    await page.getByRole('navigation', { name: 'Reference filters' }).getByRole('button', { name: 'Archived' }).click();
+    await page.getByRole('heading', { name: 'Nothing matches' }).waitFor({ state: 'detached' });
+    await grid.getByRole('button', { name: /pricing cards/ }).waitFor({ state: 'detached' });
+    assert.equal(await grid.getByRole('listitem').count(), 1);
+
+  } finally {
+    await app.close();
+  }
+  for (const [name, data] of Object.entries(files)) assert.deepEqual(readFileSync(join(incoming, name)), data, `${name} was left as it was`);
 });

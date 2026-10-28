@@ -17,15 +17,18 @@ export interface ModelRequest {
    * "plan" asks for a task plan as JSON; "work" for a task's output; "brief"
    * and "spec" for planning documents as JSON (M5). The instructions for
    * "brief" and "spec" are JSON written by planner.ts. "build" is one turn of
-   * the build agent's tool loop (M6, DEC-020): see `loop`.
+   * the build agent's tool loop (M6, DEC-020): see `loop`. "classify" suggests
+   * a kind, tags and an explanation for a design reference (M9), with `image`.
    */
-  purpose: 'plan' | 'work' | 'brief' | 'spec' | 'build';
+  purpose: 'plan' | 'work' | 'brief' | 'spec' | 'build' | 'classify';
   taskTitle: string;
   instructions: string;
   maxOutputTokens: number;
   signal: AbortSignal;
   /** For "build": the tools offered and the conversation so far, oldest first. */
   loop?: { tools: LoopTool[]; turns: LoopTurn[] };
+  /** For "classify": the image itself, base64-encoded. Its content is data, never instructions. */
+  image?: { mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; data: string };
 }
 
 /** A tool the build agent may call. The schema is JSON Schema for its input. */
@@ -144,8 +147,20 @@ function defaultScript(request: Omit<ModelRequest, 'signal'>): SimulatedStep {
     if (turns.length === 0) return { calls: [{ id: 'sim_1', name: 'list_files', input: { path: '.' } }] };
     return { text: `${SIMULATED_NOTE}\n\nThe simulated agent listed the repository files and made no changes. Make the change yourself in the worktree, then run the checks again.` };
   }
+  if (request.purpose === 'classify') return { text: JSON.stringify(simulatedClassification(JSON.parse(request.instructions))) };
   if (request.purpose === 'plan') {
     return { text: JSON.stringify({ subtasks: [{ title: request.taskTitle, goal: request.instructions, writes: [], dependsOn: [], risk: 'low', estTokens: 2000 }] }) };
   }
   return { text: `${SIMULATED_NOTE}\n\nTask: ${request.taskTitle}` };
+}
+
+/** A guess from the file's name and size only, so it cannot pass for having looked at the picture. */
+function simulatedClassification(input: { fileName?: string; mediaType?: string; width?: number | null; height?: number | null }): { kind: string; tags: string[]; explanation: string } {
+  const name = String(input.fileName ?? '').toLowerCase();
+  const words = name.replace(/\.[a-z0-9]+$/, '').split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !/^\d+$/.test(w));
+  const video = String(input.mediaType ?? '').startsWith('video/');
+  const wide = (input.width ?? 0) >= (input.height ?? 0);
+  const kind = video ? 'video' : /anim|motion|transition|gif/.test(name) ? 'animation' : /screen|shot|capture|dashboard|page/.test(name) ? 'screenshot' : /mock|figma|design|wireframe|ui/.test(name) ? 'ui_design' : 'other';
+  const tags = [...new Set([...words.slice(0, 4), ...(video ? [] : [wide ? 'landscape' : 'portrait'])])];
+  return { kind, tags, explanation: `${SIMULATED_NOTE} Suggested from the file name and size only; the image was not looked at.` };
 }

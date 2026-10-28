@@ -24,8 +24,10 @@ export interface AppPaths {
   projects: string;
   /** One git worktree per build (M6). */
   worktrees: string;
+  /** Copies of Learning Studio references (M9). */
+  references: string;
 }
 
 export function appPaths(home: string): AppPaths {
-  return { home, db: join(home, 'iap.db'), projects: join(home, 'projects'), worktrees: join(home, 'worktrees') };
+  return { home, db: join(home, 'iap.db'), projects: join(home, 'projects'), worktrees: join(home, 'worktrees'), references: join(home, 'references') };
 }

@@ -5,6 +5,7 @@ import { useState } from 'react';
 import type { Project, ToolKind, ToolScan } from '../shared/api.ts';
 import type { Section } from './App.tsx';
 import { Icon } from './icons.tsx';
+import { KIND_LABEL as REF_KIND_LABEL, type StudioFilter } from './views/LearningStudioView.tsx';
 import { KIND_LABEL, type ToolFilter } from './views/ToolsView.tsx';
 
 const PLANNED = [
@@ -33,6 +34,31 @@ function ToolFilters({ scan, filter, onFilter }: { scan: ToolScan | null; filter
       </ul>
       <ul className="tree-children">{KIND_ORDER.map((k) => item(k, KIND_LABEL[k], scan ? scan.summary.entries[k] ?? 0 : null))}</ul>
       <p className="side-note">Read-only. The app never changes or removes these tools.</p>
+    </nav>
+  );
+}
+
+function StudioFilters({ filter, onFilter }: { filter: StudioFilter; onFilter: (f: StudioFilter) => void }) {
+  return (
+    <nav aria-label="Reference filters" className="tree">
+      <button type="button" className="tree-root" aria-current={filter === 'all' ? 'page' : undefined} onClick={() => onFilter('all')}>
+        <Icon name="studio" size={18} />
+        <span className="tree-label">All references</span>
+      </button>
+      <ul className="tree-children">
+        {Object.entries(REF_KIND_LABEL).map(([id, label]) => (
+          <li key={id}>
+            <button type="button" className="tree-item" aria-current={filter === id ? 'page' : undefined} onClick={() => onFilter(id)}>
+              <span className="tree-label">{label}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="tree-root" aria-current={filter === 'archived' ? 'page' : undefined} onClick={() => onFilter('archived')}>
+        <Icon name="archive" size={18} />
+        <span className="tree-label">Archived</span>
+      </button>
+      <p className="side-note">A reference never changes a project's specification.</p>
     </nav>
   );
 }
@@ -95,6 +121,8 @@ export function SidePanel({
   toolScan,
   toolFilter,
   onToolFilter,
+  studioFilter,
+  onStudioFilter,
 }: {
   section: Section;
   projects: Project[] | null;
@@ -104,8 +132,10 @@ export function SidePanel({
   toolScan: ToolScan | null;
   toolFilter: ToolFilter;
   onToolFilter: (f: ToolFilter) => void;
+  studioFilter: StudioFilter;
+  onStudioFilter: (f: StudioFilter) => void;
 }) {
-  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', tools: 'Tools', iterative: 'Improvements', settings: 'Settings' }[section];
+  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', studio: 'Learning Studio', tools: 'Tools', iterative: 'Improvements', settings: 'Settings' }[section];
   return (
     <aside className="side" aria-label={`${title} panel`}>
       <div className="side-head">
@@ -117,6 +147,7 @@ export function SidePanel({
         )}
       </div>
       {(section === 'projects' || section === 'activity') && <ProjectTree section={section} projects={projects} selected={selected} onSelect={onSelect} />}
+      {section === 'studio' && <StudioFilters filter={studioFilter} onFilter={onStudioFilter} />}
       {section === 'tools' && <ToolFilters scan={toolScan} filter={toolFilter} onFilter={onToolFilter} />}
       {section === 'iterative' && (
         <ul className="side-list" aria-label="Planned modules">

@@ -33,6 +33,7 @@ Set `IAP_HOME` to use another directory. Contents:
 
 - `iap.db` (+ `-wal`, `-shm`) — projects, workflow runs, append-only audit log.
 - `projects/<projectId>/` — project workspace; `docs/designs/` holds design documents.
+- `references/` — the Learning Studio's copies of design references (`<refId>.<ext>`). Archived references stay here.
 
 No credentials are stored here. Secret-looking values are redacted before anything is written.
 
@@ -91,6 +92,16 @@ The database is the source of truth: editing these files does not change the app
 | Unchanged check | HEAD, every branch and tag, and `git status` are compared before and after; the report says whether they matched |
 | Scope | Full, codebase only, one category or one capability, plus capabilities you mark not applicable. The scope is stored (`assessment.scoped` event) before anything is read |
 | Reports | `<project folder>/docs/assessments/<assessmentId>.md`, never inside the repository. Finished assessments cannot change or be deleted |
+
+## Learning Studio (M9, DEC-024)
+
+| What | Where / how |
+|---|---|
+| Adding files | Desktop: *Add files* opens a file picker. CLI: `iap ref import <file>...`. PNG, JPEG, GIF, WebP, MP4, MOV and WebM, checked by their content; SVG is refused because it can contain scripts. Images up to 25 MB, videos up to 150 MB, 50 files at a time |
+| Storage | A copy in `<data dir>/references/`. The original file is not moved or changed. The same file twice is skipped |
+| Suggestions | Simulated: a guess from the file name, labelled as such. With real calls on: Claude looks at the image (5 MB or less, not videos), about 1 to 3 cents, inside the monthly budget. Nothing is applied until you accept it |
+| Removing | References are archived (`iap ref archive`), never deleted, and can be restored |
+| Specs | Nothing in the Learning Studio changes a project's plan documents |
 
 ## Real model calls (M3, DEC-018)
 

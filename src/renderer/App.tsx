@@ -8,15 +8,16 @@ import { needsPerson } from './ui.tsx';
 import { ActivityView } from './views/ActivityView.tsx';
 import { HomeView } from './views/HomeView.tsx';
 import { IterativeView } from './views/IterativeView.tsx';
+import { LearningStudioView, type StudioFilter } from './views/LearningStudioView.tsx';
 import { ProjectDetail } from './views/ProjectDetail.tsx';
 import { ProjectsView } from './views/ProjectsView.tsx';
 import { RecoveryView } from './views/RecoveryView.tsx';
 import { SettingsView } from './views/SettingsView.tsx';
 import { ToolsView, type ToolFilter } from './views/ToolsView.tsx';
 
-export type Section = 'home' | 'projects' | 'activity' | 'tools' | 'iterative' | 'settings';
+export type Section = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'iterative' | 'settings';
 
-type NavIcon = 'home' | 'projects' | 'activity' | 'tools' | 'iterate' | 'settings';
+type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'iterate' | 'settings';
 
 // Groups are separated by a divider in the rail: Project Layer, then Iterative Layer.
 const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
@@ -24,6 +25,7 @@ const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
     { id: 'home', label: 'Home', icon: 'home' },
     { id: 'projects', label: 'Projects', icon: 'projects' },
     { id: 'activity', label: 'Activity', icon: 'activity' },
+    { id: 'studio', label: 'Learning Studio', icon: 'studio' },
   ],
   [
     { id: 'tools', label: 'Tools', icon: 'tools' },
@@ -35,6 +37,7 @@ export const SECTION_LABEL: Record<Section, string> = {
   home: 'Home',
   projects: 'Projects',
   activity: 'Activity',
+  studio: 'Learning Studio',
   tools: 'Tools',
   iterative: 'Improvements',
   settings: 'Settings',
@@ -73,6 +76,7 @@ export function App() {
   const [toolScan, setToolScan] = useState<ToolScan | null | undefined>(undefined);
   const [toolError, setToolError] = useState<string | null>(null);
   const [toolFilter, setToolFilter] = useState<ToolFilter>('all');
+  const [studioFilter, setStudioFilter] = useState<StudioFilter>('all');
   // Runs of every project, for the top bar's run status and the Command Centre.
   const [runs, setRuns] = useState<Record<string, RunWithNext[]> | null>(null);
   const [agent, setAgent] = useState<AgentStatus | null>(null);
@@ -177,6 +181,7 @@ export function App() {
     setCreating(null);
     setActivityProject(null);
     setToolFilter('all');
+    setStudioFilter('all');
   };
   const openProject = (id: string, name: string) => {
     setSection('projects');
@@ -226,6 +231,8 @@ export function App() {
         toolScan={toolScan ?? null}
         toolFilter={toolFilter}
         onToolFilter={setToolFilter}
+        studioFilter={studioFilter}
+        onStudioFilter={setStudioFilter}
       />
 
       <div className="main">
@@ -294,6 +301,7 @@ export function App() {
           {section === 'activity' && (
             <ActivityView projectId={activityProject} projectName={projects?.find((p) => p.id === activityProject)?.name ?? null} />
           )}
+          {section === 'studio' && <LearningStudioView projects={projects ?? []} filter={studioFilter} onFilter={setStudioFilter} />}
           {section === 'tools' && <ToolsView scan={toolScan} error={toolError} filter={toolFilter} onScan={scanTools} />}
           {section === 'iterative' && <IterativeView />}
           {section === 'settings' && settings && <SettingsView status={status} settings={settings} onSettings={setSettings} />}

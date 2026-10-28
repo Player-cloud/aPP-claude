@@ -289,6 +289,7 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
   const builds = useAsync(() => call(iap().listBuilds(projectId)), [projectId]);
   const releases = useAsync(() => call(iap().listReleases(projectId)), [projectId]);
   const assessments = useAsync(() => call(iap().listAssessments(projectId)), [projectId]);
+  const references = useAsync(() => call(iap().listReferences({ projectId })), [projectId]);
   const [workflow, setWorkflow] = useState<Workflow>('plan');
   const [title, setTitle] = useState('');
   const [startError, setStartError] = useState<string | null>(null);
@@ -405,6 +406,21 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
               </button>
             </form>
           </section>
+          {references.data && references.data.length > 0 && (
+            <section className="card" aria-labelledby="refs-title">
+              <h2 className="card-title" id="refs-title">
+                Design references <span className="count-pill">{references.data.length}</span>
+              </h2>
+              <ul className="ref-strip" aria-label="Linked design references">
+                {references.data.slice(0, 6).map((r) => (
+                  <li key={r.id} title={r.title}>
+                    {r.mediaType.startsWith('image/') ? <img src={`iap-ref://ref/${r.id}`} alt={r.title} loading="lazy" /> : <span className="ref-strip-video">{r.title}</span>}
+                  </li>
+                ))}
+              </ul>
+              <p className="subtle">Linked in the Learning Studio. References inform design work; they never change this project's specification.</p>
+            </section>
+          )}
           <section className="card card-glass" aria-labelledby="ws-title">
             <h2 className="card-title" id="ws-title">
               Workspace
