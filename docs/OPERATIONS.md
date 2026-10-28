@@ -60,9 +60,19 @@ Each project's `docs/designs/` folder holds its planning documents as Markdown, 
 
 The database is the source of truth: editing these files does not change the app's copy, and the next save rewrites them. Approved versions cannot be changed or deleted (database triggers); revise them instead.
 
+## Build work (M6, DEC-020)
+
+| What | Where / how |
+|---|---|
+| Repository | Each project points at one git repository with at least one commit (*Build work* card, or `iap build repo`). *Start a repository in the project folder* runs `git init` in the app's own project folder only |
+| Worktrees | `<data directory>/worktrees/<buildId>`, each on a branch `iap/feature-…` or `iap/fix-…` created from the repository's current commit. Git also records each worktree in the repository's `.git/worktrees`. Repository hooks are not run |
+| Check commands | Typed by you, approved in a dialog (desktop) or with `--confirm` (CLI), then run through the system shell in the worktree **with your permissions**. They are not sandboxed. Variables that look like secrets (`ANTHROPIC_*`, `*_TOKEN`, `*_API_KEY`, `*_SECRET`, `AWS_*`, `GH_*`, …) are removed from their environment; each run has a 10-minute limit |
+| Reports | `<project folder>/docs/builds/<buildId>.md`: checks before and after, agent summary, changed files and unresolved risks |
+| Merging and clean-up | Never done by the app. Merge the branch yourself; remove a finished worktree with `git worktree remove <path>` and its branch with `git branch -d <branch>` |
+
 ## Real model calls (M3, DEC-018)
 
-The main agent and the planning drafts both use this. Real Claude calls need **both** a monthly budget and an Anthropic API key, set in *Settings → AI usage*. Without either, the agent uses the free simulated model.
+The main agent, the planning drafts and the build agent all use this. A build agent run is also capped at $3 and 40 turns. Real Claude calls need **both** a monthly budget and an Anthropic API key, set in *Settings → AI usage*. Without either, the agent uses the free simulated model.
 
 | What | Where / how |
 |---|---|

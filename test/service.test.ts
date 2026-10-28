@@ -150,3 +150,47 @@ test('M5: the planning handlers validate input and walk brief → spec → revis
   assert.equal(overview.value.egm.state, 'not_scanned');
   assert.ok(h.discardPlanDraft(spec.value.id).ok);
 });
+
+test('M6: build commands run only after the approval outside the renderer', async (t) => {
+  const { home, cleanup } = tempHome();
+  let approve = false;
+  const asked: string[][] = [];
+  const s = new AppService(home, '0.0.0-test', {
+    confirmChecks: async ({ commands }) => {
+      asked.push(commands);
+      return approve;
+    },
+  });
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
+  const h = s.handlers;
+  const p = h.createProject({ name: 'Builds' });
+  assert.ok(p.ok);
+  for (const bad of [undefined, 'x', { projectId: p.value.id }, { projectId: p.value.id, kind: 'bugfix', title: 't', goal: 'g', repro: 'r', checks: 'npm test' }, { projectId: p.value.id, kind: 'bugfix', title: 't', goal: 'g', repro: 'r', checks: [], components: 'src' }]) {
+    assert.equal(h.createBuild(bad).ok, false, JSON.stringify(bad));
+  }
+  assert.equal((await h.setProjectRepo({ projectId: p.value.id, path: home })).ok, false, 'not a repository');
+  const repo = await h.initProjectRepo(p.value.id);
+  assert.ok(repo.ok && repo.value.repoPath);
+  const b = h.createBuild({ projectId: p.value.id, kind: 'bugfix', title: 'Crash', goal: 'It crashes', repro: 'Open it', checks: [{ id: 'unit', command: 'node -e "process.exit(0)"' }] });
+  assert.ok(b.ok);
+  const refused = await h.startBuild(b.value.id);
+  assert.ok(!refused.ok && /not approved, so nothing ran/.test(refused.error.message));
+  assert.deepEqual(asked, [['node -e "process.exit(0)"']]);
+  assert.ok(h.getBuild(b.value.id).ok && (h.getBuild(b.value.id) as { ok: true; value: { checkRuns: unknown[] } }).value.checkRuns.length === 0);
+  approve = true;
+  const started = await h.startBuild(b.value.id);
+  assert.ok(started.ok && started.value.checkRuns[0]!.status === 'passed');
+  const agent = await h.runBuildAgent(b.value.id);
+  assert.ok(agent.ok && agent.value.build.agent?.model === 'simulated');
+  const verified = await h.verifyBuild(b.value.id);
+  assert.ok(verified.ok && verified.value.build.status === 'review');
+  const diff = await h.buildDiff(b.value.id);
+  assert.ok(diff.ok && diff.value.files.length === 0);
+  assert.equal(h.completeBuild({ buildId: b.value.id }).ok, false, 'risks need a note');
+  assert.ok(h.completeBuild({ buildId: b.value.id, note: 'Could not reproduce; closing.' }).ok);
+  const listed = h.listBuilds(p.value.id);
+  assert.ok(listed.ok && listed.value[0]!.status === 'completed');
+});

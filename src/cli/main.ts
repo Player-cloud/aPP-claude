@@ -17,6 +17,7 @@ import { ClaudeModel } from '../core/agents/claude.ts';
 import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
 import { Planner } from '../core/planner.ts';
+import { Builder, type BuildDetail } from '../core/build/builder.ts';
 import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
 
@@ -50,6 +51,17 @@ Planning (concept brief → specification, versioned under the project's docs/de
   plan revise <docId>                         Start the next version of an approved document
   plan discard <docId>                        Discard a draft (kept in the history)
   plan diff <earlierDocId> <laterDocId>       What changed between two versions
+
+Build work (each feature or bug fix gets its own git worktree and branch; nothing is merged for you)
+  build repo <projectId> <folder> | --init    Use a git repository for this project (--init: the app's own project folder)
+  build new <projectId> --kind <feature|bugfix> --title <t> --goal <text> --check <id=command>...
+            [--req <REQ-ID>]... [--component <path>]... [--repro <steps>]
+  build start <buildId> --confirm             Create the worktree and run the checks once (--confirm approves the commands)
+  build agent <buildId>                       Let the agent change the worktree (simulated unless real calls are on)
+  build verify <buildId>                      Run the checks again and review the diff
+  build done <buildId> [--note <why the remaining risks are acceptable>]
+  build abandon <buildId> [--note <why>]
+  build list <projectId> | build show <buildId> | build diff <buildId>
 
 Audit and health
   events [--project <id>] [--run <id>] [--limit <n>]
@@ -86,6 +98,12 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       goal: { type: 'string' },
       file: { type: 'string' },
       note: { type: 'string' },
+      kind: { type: 'string' },
+      check: { type: 'string', multiple: true },
+      req: { type: 'string', multiple: true },
+      component: { type: 'string', multiple: true },
+      repro: { type: 'string' },
+      init: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -291,6 +309,75 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
         });
         return 0;
       }
+      case 'build repo': {
+        const builder = new Builder(ws, new SimulatedModel());
+        const projectId = need(rest[0], 'projectId');
+        const p = values.init ? await builder.initProjectRepo(projectId) : await builder.setRepo(projectId, resolve(need(rest[1], 'folder')));
+        print(p, () => out(`Build work for ${p.name} happens in ${p.repoPath}`));
+        return 0;
+      }
+      case 'build new': {
+        const checks = (values.check ?? []).map((c) => {
+          const at = c.indexOf('=');
+          if (at < 1) throw new ValidationError(`--check "${c}" must look like id=command, for example unit="npm test".`);
+          return { id: c.slice(0, at).trim(), command: c.slice(at + 1).trim() };
+        });
+        const b = new Builder(ws, new SimulatedModel()).create(need(rest[0], 'projectId'), {
+          kind: (values.kind ?? '') as 'feature',
+          title: values.title ?? '',
+          goal: values.goal ?? '',
+          requirementIds: values.req,
+          components: values.component,
+          checks,
+          repro: values.repro ?? null,
+        });
+        print(b, () => out(`${b.id}  ${b.kind} draft: ${b.title}. Start it with: iap build start ${b.id} --confirm`));
+        return 0;
+      }
+      case 'build start': {
+        const id = need(rest[0], 'buildId');
+        const b = ws.getBuild(id);
+        if (!values.confirm) {
+          err(`These commands will run on this computer with your permissions:\n${b.checks.map((c) => `  ${c.id}: ${c.command}`).join('\n')}\nRe-run with --confirm to approve them.`);
+          return 1;
+        }
+        const d = await new Builder(ws, new SimulatedModel()).start(id);
+        print(d, () => describeBuild(d, out));
+        return 0;
+      }
+      case 'build agent':
+      case 'build verify': {
+        const id = need(rest[0], 'buildId');
+        const d = sub === 'agent' ? await new Builder(ws, agentModel(ws)).runAgent(id) : await new Builder(ws, new SimulatedModel()).verify(id);
+        print(d, () => describeBuild(d, out));
+        return 0;
+      }
+      case 'build done':
+      case 'build abandon': {
+        const builder = new Builder(ws, new SimulatedModel());
+        const id = need(rest[0], 'buildId');
+        const d = sub === 'done' ? builder.complete(id, values.note ?? null) : builder.abandon(id, values.note ?? null);
+        print(d, () => describeBuild(d, out));
+        return 0;
+      }
+      case 'build list': {
+        const builds = ws.listBuilds(need(rest[0], 'projectId'));
+        print(builds, () => {
+          if (!builds.length) out('No build work yet.');
+          for (const b of builds) out(`${b.id}  ${b.kind.padEnd(8)} ${b.status.padEnd(12)} ${b.title}`);
+        });
+        return 0;
+      }
+      case 'build show': {
+        const d = new Builder(ws, new SimulatedModel()).detail(need(rest[0], 'buildId'));
+        print(d, () => describeBuild(d, out));
+        return 0;
+      }
+      case 'build diff': {
+        const diff = await new Builder(ws, new SimulatedModel()).diff(need(rest[0], 'buildId'));
+        print(diff, () => out(diff.patch || 'No changes.'));
+        return 0;
+      }
       case 'doctor': {
         const health = ws.health();
         print({ home, db: ws.paths.db, ...health }, () => {
@@ -331,6 +418,17 @@ function agentModel(ws: Workspace): ModelAdapter {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new ValidationError('A monthly budget is set, so real calls are on, but ANTHROPIC_API_KEY is not set.');
   return new ClaudeModel(new Anthropic({ apiKey, maxRetries: 1 }));
+}
+
+function describeBuild({ build: b, checkRuns }: BuildDetail, out: Out): void {
+  out(`${b.id}  ${b.kind} ${b.status}: ${b.title}`);
+  if (b.branch) out(`  branch ${b.branch} in ${b.worktree}`);
+  for (const r of checkRuns) out(`  ${r.phase.padEnd(8)} ${r.checkId.padEnd(12)} ${r.status.padEnd(9)} exit ${r.exitCode ?? '-'}  ${r.command}`);
+  if (b.agent) out(`  agent (${b.agent.model}): ${b.agent.status}, ${b.agent.steps.length} tool calls, files written: ${b.agent.filesWritten.join(', ') || 'none'}`);
+  if (b.changedFiles) out(`  changed: ${b.changedFiles.map((f) => `${f.path} (+${f.added} -${f.removed})`).join(', ') || 'nothing'}`);
+  if (b.risks) for (const r of b.risks) out(`  risk ${r.kind}: ${r.detail}`);
+  if (b.risks && !b.risks.length) out('  No risks found by the review.');
+  if (b.reportPath) out(`  report: ${b.reportPath}`);
 }
 
 function describeTask(t: AgentTask): string {

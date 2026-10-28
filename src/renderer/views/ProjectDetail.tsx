@@ -4,6 +4,7 @@ import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { AgentPanel } from './AgentPanel.tsx';
 import { PlanningPanel } from './PlanningPanel.tsx';
+import { BuildPanel } from './BuildPanel.tsx';
 import { Alert, Empty, formatDate, formatTime, StateBadge, stateLabel } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
@@ -196,6 +197,7 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
       <div className="content-grid">
         <div>
           <PlanningPanel projectId={p.id} />
+          <BuildPanel project={p} onProjectChanged={async () => void (await project.reload())} />
           <section className="card" aria-labelledby="runs-title">
             <h2 className="card-title" id="runs-title">
               Workflow runs {runs.data && <span className="count-pill">{runs.data.length}</span>}

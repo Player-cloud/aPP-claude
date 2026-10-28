@@ -362,3 +362,65 @@ test('M5: plan a project from brief to specification, with versions and a record
     await app.close();
   }
 });
+
+test('M6: fix a bug in a worktree, with commands approved in a native dialog and real check results', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByLabel('Name').fill('Fix demo');
+    await page.getByRole('button', { name: 'Create project' }).click();
+
+    const panel = page.getByRole('region', { name: /Build work/ });
+    await panel.getByRole('button', { name: 'Start a repository in the project folder' }).click();
+    await panel.getByText(/^Repository:/).waitFor();
+    await panel.getByRole('button', { name: 'New feature or bug fix' }).click();
+    const form = panel.getByRole('form', { name: 'New build work' });
+    await form.getByLabel('Title').fill('Missing marker file');
+    await form.getByLabel('What is wrong').fill('The check fails because fixed.txt does not exist');
+    await form.getByLabel('How to reproduce it').fill('Run the marker check');
+    await form.getByLabel(/Check commands/).fill(`marker = node -e "process.exit(require('fs').existsSync('fixed.txt') ? 0 : 1)"`);
+    await form.getByRole('button', { name: 'Add' }).click();
+
+    const card = panel.locator('.build-card').first();
+    await card.getByText('Not started', { exact: true }).waitFor();
+    // Declining the native dialog runs nothing.
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 1, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+    await card.getByRole('button', { name: 'Start and run checks' }).click();
+    await card.getByText(/not approved, so nothing ran/).waitFor();
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+    await card.getByRole('button', { name: 'Start and run checks' }).click();
+    await card.getByText('In progress', { exact: true }).waitFor();
+    const checks = card.getByRole('list', { name: 'Check results' });
+    await checks.getByText('Failed', { exact: true }).waitFor();
+
+    await card.getByRole('button', { name: 'Run the agent' }).click();
+    await card.getByText('Simulated', { exact: true }).waitFor();
+    await card.getByText(/files written: none/).waitFor();
+
+    // The person makes the fix by hand in the worktree, then verifies.
+    const worktree = await card.locator('p:has-text("Branch") .mono').nth(1).innerText();
+    writeFileSync(join(worktree, 'fixed.txt'), 'fixed\n');
+    await card.getByRole('button', { name: 'Verify', exact: true }).click();
+    await card.getByText('Ready for review', { exact: true }).waitFor();
+    await checks.getByText('Passed', { exact: true }).waitFor();
+    await card.getByRole('list', { name: 'Risks' }).getByText(/No regression test/).waitFor();
+    await card.getByRole('button', { name: 'Show diff' }).click();
+    await card.getByText(/\+fixed/).waitFor();
+    await shot(page, '15-build-review-dark-1280');
+
+    await card.getByRole('button', { name: 'Mark done' }).click();
+    await card.getByText(/Explain why the remaining risks/).waitFor();
+    await card.getByLabel(/Why the remaining risks are acceptable/).fill('A marker file needs no test.');
+    await card.getByRole('button', { name: 'Mark done' }).click();
+    await panel.getByText('Done', { exact: true }).waitFor();
+  } finally {
+    await app.close();
+  }
+});

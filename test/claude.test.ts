@@ -216,3 +216,52 @@ test('M5 with Claude: brief and spec drafts use their schemas, are billed, and t
   // 2 calls of 1,000 input and 500 output tokens at $4 / $20 per million.
   assert.equal(ws.spentThisMonth().toFixed(3), '0.028', 'both drafts are billed');
 });
+
+test('M6 with Claude: the tool loop offers strict tools, sends turns back unchanged and returns tool calls', async () => {
+  const replies: Anthropic.ContentBlock[][] = [
+    [
+      { type: 'thinking', thinking: '', signature: 'sig' } as unknown as Anthropic.ContentBlock,
+      { type: 'tool_use', id: 'tu_1', name: 'read_file', input: { path: 'a.ts' }, caller: undefined } as unknown as Anthropic.ContentBlock,
+    ],
+    [{ type: 'text', text: 'Done.', citations: null } as unknown as Anthropic.ContentBlock],
+  ];
+  const calls: Anthropic.MessageCreateParamsNonStreaming[] = [];
+  const client: ClaudeClient = {
+    messages: {
+      async create(body) {
+        calls.push(structuredClone(body));
+        const content = replies[calls.length - 1]!;
+        return { content, stop_reason: content.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn', usage: { input_tokens: 100, output_tokens: 10 } } as unknown as Anthropic.Message;
+      },
+    },
+  };
+  const model = new ClaudeModel(client);
+  const tools = [{ name: 'read_file', description: 'Read', schema: { type: 'object', additionalProperties: false, required: ['path'], properties: { path: { type: 'string' } } } }];
+  const signal = new AbortController().signal;
+  const first = await model.call({ purpose: 'build', taskTitle: 'T', instructions: 'Fix it', maxOutputTokens: 16_000, signal, loop: { tools, turns: [] } });
+  assert.equal(first.problem, undefined, 'stopping to use a tool is not a problem');
+  assert.deepEqual(first.calls, [{ id: 'tu_1', name: 'read_file', input: { path: 'a.ts' } }]);
+  assert.equal(calls[0]!.tools?.[0] && (calls[0]!.tools[0] as Anthropic.Tool).strict, true);
+  assert.deepEqual(calls[0]!.tool_choice, { type: 'auto' });
+
+  const second = await model.call({
+    purpose: 'build',
+    taskTitle: 'T',
+    instructions: 'Fix it',
+    maxOutputTokens: 16_000,
+    signal,
+    loop: {
+      tools,
+      turns: [
+        { kind: 'assistant', text: first.text, calls: first.calls!, raw: first.raw },
+        { kind: 'results', results: [{ id: 'tu_1', content: 'file text', isError: false }] },
+      ],
+    },
+  });
+  assert.deepEqual(second.calls, []);
+  assert.equal(second.text, 'Done.');
+  const msgs = calls[1]!.messages;
+  assert.equal(msgs.length, 3);
+  assert.deepEqual(msgs[1], { role: 'assistant', content: replies[0] }, 'the assistant turn, thinking included, goes back unchanged');
+  assert.deepEqual(msgs[2], { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'file text', is_error: false }] });
+});

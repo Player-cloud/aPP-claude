@@ -8,6 +8,7 @@ import { CLAUDE_MODEL, ClaudeModel, type ClaudeClient } from '../core/agents/cla
 import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
 import { Planner } from '../core/planner.ts';
+import { Builder, type BuildInput } from '../core/build/builder.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -18,7 +19,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec';
+type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'buildDiff';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -52,6 +53,32 @@ export interface ServiceOptions {
   keyStore?: KeyStore;
   /** Builds the API client from the stored key. Tests pass a fake so no real call is ever made. */
   claudeClient?: (apiKey: string) => ClaudeClient;
+  /**
+   * Asks the person, outside the renderer, before a build's check commands
+   * first run (M6). The desktop app shows a native dialog; a renderer cannot
+   * approve commands by itself.
+   */
+  confirmChecks?: (request: { title: string; commands: string[]; folder: string }) => Promise<boolean>;
+  checkTimeoutMs?: number;
+}
+
+/** A build definition from the renderer. Contents are validated in builder.ts. */
+function buildInput(value: unknown): BuildInput {
+  const i = obj(value, 'Build');
+  const strings = (v: unknown, label: string) => {
+    if (v === undefined) return undefined;
+    if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) throw new ValidationError(`${label} must be a list of text items.`);
+    return v as string[];
+  };
+  return {
+    kind: str(i.kind, 'Kind') as BuildInput['kind'],
+    title: str(i.title, 'Title')!,
+    goal: str(i.goal, 'Goal')!,
+    requirementIds: strings(i.requirementIds, 'Requirement IDs'),
+    components: strings(i.components, 'Components'),
+    checks: i.checks as BuildInput['checks'],
+    repro: str(i.repro, 'Reproduction steps', true) ?? null,
+  };
 }
 
 const withNext = (run: WorkflowRun): RunWithNext => ({ ...run, next: allowedTransitions(run.state, run.blockedFrom) });
@@ -64,6 +91,8 @@ export class AppService {
   private readonly scanRoots: () => ScanRoots;
   private readonly keys: KeyStore;
   private readonly claudeClient: (apiKey: string) => ClaudeClient;
+  private readonly confirmChecks: NonNullable<ServiceOptions['confirmChecks']>;
+  private readonly checkTimeoutMs: number | undefined;
 
   constructor(home: string, version: string, options: ServiceOptions = {}) {
     this.home = home;
@@ -71,6 +100,9 @@ export class AppService {
     this.scanRoots = options.scanRoots ?? (() => defaultScanRoots());
     this.keys = options.keyStore ?? new MemoryKeyStore();
     this.claudeClient = options.claudeClient ?? ((apiKey) => new Anthropic({ apiKey, maxRetries: 1 }));
+    // Without a way to ask (plain Node, tests), commands never run unless a caller supplies one.
+    this.confirmChecks = options.confirmChecks ?? (async () => false);
+    this.checkTimeoutMs = options.checkTimeoutMs;
     this.tryOpen();
   }
 
@@ -97,6 +129,21 @@ export class AppService {
   /** For drafting: the same model choice as the agent. */
   private agentPlanner(): Planner {
     return new Planner(this.workspace(), this.agentModel());
+  }
+
+  private builder(model: ModelAdapter = new SimulatedModel()): Builder {
+    return new Builder(this.workspace(), model, { checkTimeoutMs: this.checkTimeoutMs });
+  }
+
+  /** Starts a build after the person approves its commands in a dialog the renderer cannot answer. */
+  private async startBuild(buildId: string) {
+    const ws = this.workspace();
+    const build = ws.getBuild(buildId);
+    if (build.status !== 'draft') throw new ValidationError('This work has already started.');
+    const project = ws.getProject(build.projectId);
+    const approved = await this.confirmChecks({ title: build.title, commands: build.checks.map((c) => c.command), folder: project.repoPath ?? project.workspacePath });
+    if (!approved) throw new ValidationError('The check commands were not approved, so nothing ran.');
+    return this.builder().start(buildId);
   }
 
   /** Real calls need both a budget and a key; otherwise the simulated model runs and says so. */
@@ -216,6 +263,39 @@ export class AppService {
         return new Orchestrator(this.workspace(), this.agentModel()).run({ runId: str(i.runId, 'Run id')!, title, goal });
       }),
     agentStatus: () => wrap(() => this.agentStatus()),
+    // Build work (M6). Definitions are validated in builder.ts; commands only run after the native approval dialog.
+    setProjectRepo: (input) =>
+      wrapAsync(() => {
+        const i = obj(input, 'Repository');
+        return this.builder().setRepo(str(i.projectId, 'Project id')!, str(i.path, 'Folder')!);
+      }),
+    initProjectRepo: (projectId) => wrapAsync(() => this.builder().initProjectRepo(str(projectId, 'Project id')!)),
+    listBuilds: (projectId) => wrap(() => this.workspace().listBuilds(str(projectId, 'Project id')!)),
+    getBuild: (buildId) => wrap(() => this.builder().detail(str(buildId, 'Build id')!)),
+    createBuild: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Build');
+        return this.builder().create(str(i.projectId, 'Project id')!, buildInput(input));
+      }),
+    editBuild: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Build');
+        return this.builder().edit(str(i.buildId, 'Build id')!, buildInput(input));
+      }),
+    startBuild: (buildId) => wrapAsync(() => this.startBuild(str(buildId, 'Build id')!)),
+    runBuildAgent: (buildId) => wrapAsync(() => this.builder(this.agentModel()).runAgent(str(buildId, 'Build id')!)),
+    verifyBuild: (buildId) => wrapAsync(() => this.builder().verify(str(buildId, 'Build id')!)),
+    completeBuild: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Completion');
+        return this.builder().complete(str(i.buildId, 'Build id')!, str(i.note, 'Note', true) ?? null);
+      }),
+    abandonBuild: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Abandon');
+        return this.builder().abandon(str(i.buildId, 'Build id')!, str(i.reason, 'Reason', true) ?? null);
+      }),
+    buildDiff: (buildId) => wrapAsync(() => this.builder().diff(str(buildId, 'Build id')!)),
     // Planning (M5). Content is validated in planner.ts; ids are checked to exist.
     getPlanning: (projectId) => wrap(() => this.planner().overview(str(projectId, 'Project id')!)),
     draftBrief: (projectId) => wrapAsync(() => this.agentPlanner().draftBrief(str(projectId, 'Project id')!)),

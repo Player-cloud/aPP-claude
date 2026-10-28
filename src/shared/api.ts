@@ -10,6 +10,14 @@ import type { RunState, Workflow } from '../core/workflow.ts';
 export type { AgentTask, AuditEvent, Fact, Project, RunState, Settings, ToolScan, Workflow, WorkflowRun };
 export type { Finding, Severity } from '../core/conflicts.ts';
 export type { PlanningOverview, EgmStatus } from '../core/planner.ts';
+import type { BuildDetail, BuildInput } from '../core/build/builder.ts';
+import type { Diff } from '../core/build/git.ts';
+import type { Build } from '../core/workspace.ts';
+export type { BuildDetail, BuildInput } from '../core/build/builder.ts';
+export type { Diff, ChangedFile } from '../core/build/git.ts';
+export type { Build, BuildAgentRun, CheckRun } from '../core/workspace.ts';
+export type { Risk } from '../core/build/review.ts';
+export type { Check } from '../core/build/checks.ts';
 export type { Brief, BriefField, PlanChange, PlanDoc, Priority, Requirement, Spec } from '../core/planning.ts';
 export type { ToolEntry, ToolKind } from '../core/inventory.ts';
 
@@ -75,6 +83,19 @@ export interface IapApi {
   /** Stores the key encrypted by the OS. No method ever returns it. */
   setApiKey(input: { key: string }): Promise<Result<AgentStatus>>;
   clearApiKey(): Promise<Result<AgentStatus>>;
+  /** Build work (M6): features and bug fixes in their own git worktrees. */
+  setProjectRepo(input: { projectId: string; path: string }): Promise<Result<Project>>;
+  initProjectRepo(projectId: string): Promise<Result<Project>>;
+  listBuilds(projectId: string): Promise<Result<Build[]>>;
+  getBuild(buildId: string): Promise<Result<BuildDetail>>;
+  createBuild(input: BuildInput & { projectId: string }): Promise<Result<Build>>;
+  editBuild(input: BuildInput & { buildId: string }): Promise<Result<Build>>;
+  startBuild(buildId: string): Promise<Result<BuildDetail>>;
+  runBuildAgent(buildId: string): Promise<Result<BuildDetail>>;
+  verifyBuild(buildId: string): Promise<Result<BuildDetail>>;
+  completeBuild(input: { buildId: string; note?: string | null }): Promise<Result<BuildDetail>>;
+  abandonBuild(input: { buildId: string; reason?: string | null }): Promise<Result<BuildDetail>>;
+  buildDiff(buildId: string): Promise<Result<Diff>>;
   /** Planning (M5): concept brief and specification, versioned. */
   getPlanning(projectId: string): Promise<Result<PlanningOverview>>;
   draftBrief(projectId: string): Promise<Result<PlanDoc>>;
@@ -108,6 +129,18 @@ export const IAP_METHODS = [
   'agentStatus',
   'setApiKey',
   'clearApiKey',
+  'setProjectRepo',
+  'initProjectRepo',
+  'listBuilds',
+  'getBuild',
+  'createBuild',
+  'editBuild',
+  'startBuild',
+  'runBuildAgent',
+  'verifyBuild',
+  'completeBuild',
+  'abandonBuild',
+  'buildDiff',
   'getPlanning',
   'draftBrief',
   'draftSpec',

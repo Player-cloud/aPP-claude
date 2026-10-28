@@ -15,9 +15,13 @@ import { redact, redactString } from './redact.ts';
 import { NotFoundError, StateCorruptError, StateTooNewError, ValidationError } from './errors.ts';
 import type { ToolScan } from './tools.ts';
 import { renderMarkdown, type PlanChange, type PlanDoc, type PlanKind, type PlanStatus } from './planning.ts';
+import type { Check, CheckResult } from './build/checks.ts';
+import type { ChangedFile } from './build/git.ts';
+import type { Risk } from './build/review.ts';
+import type { AgentStep } from './build/agent.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -37,6 +41,8 @@ export interface Project {
   facts: Fact[];
   workspacePath: string;
   docsPath: string;
+  /** The git repository that build work happens in (M6). Null until the person chooses one. */
+  repoPath: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -182,7 +188,104 @@ const MIGRATIONS: Record<number, string> = {
     CREATE TRIGGER plan_docs_no_delete BEFORE DELETE ON plan_docs
       BEGIN SELECT RAISE(ABORT, 'planning documents are never deleted'); END;
   `,
+  6: `
+    ALTER TABLE projects ADD COLUMN repo_path TEXT;
+    CREATE TABLE builds (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      kind TEXT NOT NULL CHECK (kind IN ('feature','bugfix')),
+      title TEXT NOT NULL,
+      goal TEXT NOT NULL,
+      requirement_ids TEXT NOT NULL,
+      components TEXT NOT NULL,
+      checks TEXT NOT NULL,
+      repro TEXT,
+      status TEXT NOT NULL CHECK (status IN ('draft','in_progress','review','completed','abandoned')),
+      repo_path TEXT,
+      branch TEXT,
+      worktree TEXT,
+      base_commit TEXT,
+      agent TEXT,
+      changed_files TEXT,
+      risks TEXT,
+      note TEXT,
+      report_path TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX builds_project ON builds(project_id, created_at);
+    -- Check results are evidence (FR-BUILD-002): recorded once, never changed or removed.
+    CREATE TABLE check_runs (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      build_id TEXT NOT NULL REFERENCES builds(id),
+      phase TEXT NOT NULL CHECK (phase IN ('baseline','agent','verify')),
+      check_id TEXT NOT NULL,
+      command TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('passed','failed','timed_out','error','not_run')),
+      exit_code INTEGER,
+      duration_ms INTEGER NOT NULL,
+      output TEXT NOT NULL,
+      started_at TEXT NOT NULL
+    );
+    CREATE TRIGGER check_runs_no_update BEFORE UPDATE ON check_runs
+      BEGIN SELECT RAISE(ABORT, 'check results are append-only'); END;
+    CREATE TRIGGER check_runs_no_delete BEFORE DELETE ON check_runs
+      BEGIN SELECT RAISE(ABORT, 'check results are append-only'); END;
+  `,
 };
+
+export type BuildKind = 'feature' | 'bugfix';
+export type BuildStatus = 'draft' | 'in_progress' | 'review' | 'completed' | 'abandoned';
+export type CheckPhase = 'baseline' | 'agent' | 'verify';
+
+/** What the last agent run on a build did (M6). Its check results are stored as check runs. */
+export interface BuildAgentRun {
+  model: string;
+  status: 'done' | 'blocked' | 'timed_out' | 'failed' | 'turn_limit';
+  summary: string;
+  steps: AgentStep[];
+  filesWritten: string[];
+  resolution: string | null;
+  costUsd: number;
+  at: string;
+}
+
+/** One feature or bug fix, worked on in its own git worktree (M6: FR-BUILD-001/003). */
+export interface Build {
+  id: string;
+  projectId: string;
+  kind: BuildKind;
+  title: string;
+  goal: string;
+  requirementIds: string[];
+  /** Files or folders the change is expected to touch. */
+  components: string[];
+  /** The commands the person approved. Fixed once work starts. */
+  checks: Check[];
+  /** For a bug fix: how to reproduce it. */
+  repro: string | null;
+  status: BuildStatus;
+  repoPath: string | null;
+  branch: string | null;
+  worktree: string | null;
+  baseCommit: string | null;
+  agent: BuildAgentRun | null;
+  changedFiles: ChangedFile[] | null;
+  risks: Risk[] | null;
+  /** The person's explanation for the risks that remain. */
+  note: string | null;
+  reportPath: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface CheckRun extends CheckResult {
+  seq: number;
+  buildId: string;
+  phase: CheckPhase;
+}
 
 export type AgentTaskKind = 'request' | 'subtask' | 'reconcile';
 export type AgentTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'blocked' | 'permission_denied' | 'cancelled';
@@ -649,6 +752,130 @@ export class Workspace {
     return doc;
   }
 
+  // ---- Build work (M6) -----------------------------------------------------
+
+  setProjectRepo(projectId: string, repoPath: string | null): Project {
+    const project = this.getProject(projectId);
+    this.transaction(() => {
+      this.db.prepare('UPDATE projects SET repo_path = ?, updated_at = ? WHERE id = ?').run(repoPath, this.timestamp(), project.id);
+      this.record('project.repo.set', project.id, null, { repoPath });
+    });
+    return this.getProject(project.id);
+  }
+
+  createBuild(input: { projectId: string; kind: BuildKind; title: string; goal: string; requirementIds: string[]; components: string[]; checks: Check[]; repro: string | null }): Build {
+    const project = this.getProject(input.projectId);
+    const id = `build_${randomUUID()}`;
+    const at = this.timestamp();
+    const title = redactString(requireText('Title', input.title, 200));
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO builds (id, project_id, kind, title, goal, requirement_ids, components, checks, repro, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+        )
+        .run(
+          id,
+          project.id,
+          input.kind,
+          title,
+          redactString(input.goal),
+          JSON.stringify(input.requirementIds),
+          JSON.stringify(input.components),
+          JSON.stringify(input.checks.map((c) => ({ id: c.id, command: redactString(c.command) }))),
+          input.repro === null ? null : redactString(input.repro),
+          at,
+          at,
+        );
+      this.record('build.created', project.id, null, { buildId: id, kind: input.kind, title, requirementIds: input.requirementIds, checks: input.checks.map((c) => c.command) });
+    });
+    return this.getBuild(id);
+  }
+
+  getBuild(id: string): Build {
+    const row = this.db.prepare('SELECT * FROM builds WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Build', id);
+    return toBuild(row);
+  }
+
+  listBuilds(projectId: string): Build[] {
+    this.getProject(projectId);
+    return (this.db.prepare('SELECT * FROM builds WHERE project_id = ? ORDER BY created_at DESC, id').all(projectId) as Record<string, unknown>[]).map(toBuild);
+  }
+
+  /** Updates a build. Its definition (goal, checks, components) can only change while it is a draft. */
+  updateBuild(
+    id: string,
+    patch: Partial<Pick<Build, 'title' | 'goal' | 'requirementIds' | 'components' | 'checks' | 'repro' | 'status' | 'repoPath' | 'branch' | 'worktree' | 'baseCommit' | 'agent' | 'changedFiles' | 'risks' | 'note' | 'reportPath' | 'completedAt'>>,
+    event?: { type: string; payload: Record<string, unknown> },
+  ): Build {
+    const build = this.getBuild(id);
+    const definition = ['title', 'goal', 'requirementIds', 'components', 'checks', 'repro'] as const;
+    if (build.status !== 'draft' && definition.some((k) => k in patch)) throw new ValidationError('The task and its checks are fixed once work has started.');
+    const n = { ...build, ...patch };
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE builds SET title = ?, goal = ?, requirement_ids = ?, components = ?, checks = ?, repro = ?, status = ?, repo_path = ?, branch = ?, worktree = ?,
+             base_commit = ?, agent = ?, changed_files = ?, risks = ?, note = ?, report_path = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          redactString(n.title),
+          redactString(n.goal),
+          JSON.stringify(n.requirementIds),
+          JSON.stringify(n.components),
+          JSON.stringify(n.checks.map((c) => ({ id: c.id, command: redactString(c.command) }))),
+          n.repro === null ? null : redactString(n.repro),
+          n.status,
+          n.repoPath,
+          n.branch,
+          n.worktree,
+          n.baseCommit,
+          n.agent ? JSON.stringify(redact(n.agent)) : null,
+          n.changedFiles ? JSON.stringify(n.changedFiles) : null,
+          n.risks ? JSON.stringify(redact(n.risks)) : null,
+          n.note === null ? null : redactString(n.note),
+          n.reportPath,
+          n.completedAt,
+          this.timestamp(),
+          id,
+        );
+      if (event) this.record(event.type, build.projectId, null, { buildId: id, ...event.payload });
+    });
+    return this.getBuild(id);
+  }
+
+  recordCheckRun(buildId: string, phase: CheckPhase, r: CheckResult): CheckRun {
+    const build = this.getBuild(buildId);
+    let seq = 0;
+    this.transaction(() => {
+      const res = this.db
+        .prepare(
+          `INSERT INTO check_runs (build_id, phase, check_id, command, status, exit_code, duration_ms, output, started_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(buildId, phase, r.checkId, redactString(r.command), r.status, r.exitCode, r.durationMs, redactString(r.output), r.startedAt);
+      seq = Number(res.lastInsertRowid);
+      this.record('build.check', build.projectId, null, { buildId, phase, checkId: r.checkId, status: r.status, exitCode: r.exitCode });
+    });
+    return this.listCheckRuns(buildId).find((c) => c.seq === seq)!;
+  }
+
+  listCheckRuns(buildId: string): CheckRun[] {
+    return (this.db.prepare('SELECT * FROM check_runs WHERE build_id = ? ORDER BY seq').all(buildId) as Record<string, unknown>[]).map((row) => ({
+      seq: Number(row.seq),
+      buildId: String(row.build_id),
+      phase: row.phase as CheckPhase,
+      checkId: String(row.check_id),
+      command: String(row.command),
+      status: row.status as CheckResult['status'],
+      exitCode: row.exit_code === null ? null : Number(row.exit_code),
+      durationMs: Number(row.duration_ms),
+      output: String(row.output),
+      startedAt: String(row.started_at),
+    }));
+  }
+
   // ---- Agent tasks and spend (M3) ----------------------------------------
 
   createAgentTask(input: { runId: string | null; parentId: string | null; kind: AgentTaskKind; title: string; spec: AgentTaskSpec }): AgentTask {
@@ -813,6 +1040,34 @@ export function moveCorruptStateAside(home: string, now: Date = new Date()): str
   return db + suffix;
 }
 
+function toBuild(row: Record<string, unknown>): Build {
+  const json = <T>(v: unknown): T | null => (v === null || v === undefined ? null : (JSON.parse(String(v)) as T));
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    kind: row.kind as BuildKind,
+    title: String(row.title),
+    goal: String(row.goal),
+    requirementIds: json<string[]>(row.requirement_ids) ?? [],
+    components: json<string[]>(row.components) ?? [],
+    checks: json<Check[]>(row.checks) ?? [],
+    repro: (row.repro as string | null) ?? null,
+    status: row.status as BuildStatus,
+    repoPath: (row.repo_path as string | null) ?? null,
+    branch: (row.branch as string | null) ?? null,
+    worktree: (row.worktree as string | null) ?? null,
+    baseCommit: (row.base_commit as string | null) ?? null,
+    agent: json<BuildAgentRun>(row.agent),
+    changedFiles: json<ChangedFile[]>(row.changed_files),
+    risks: json<Risk[]>(row.risks),
+    note: (row.note as string | null) ?? null,
+    reportPath: (row.report_path as string | null) ?? null,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    completedAt: (row.completed_at as string | null) ?? null,
+  };
+}
+
 function toProject(row: Record<string, unknown>): Project {
   return {
     id: String(row.id),
@@ -823,6 +1078,7 @@ function toProject(row: Record<string, unknown>): Project {
     facts: JSON.parse(String(row.facts)) as Fact[],
     workspacePath: String(row.workspace_path),
     docsPath: String(row.docs_path),
+    repoPath: (row.repo_path as string | null) ?? null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

@@ -22,8 +22,10 @@ export interface AppPaths {
   home: string;
   db: string;
   projects: string;
+  /** One git worktree per build (M6). */
+  worktrees: string;
 }
 
 export function appPaths(home: string): AppPaths {
-  return { home, db: join(home, 'iap.db'), projects: join(home, 'projects') };
+  return { home, db: join(home, 'iap.db'), projects: join(home, 'projects'), worktrees: join(home, 'worktrees') };
 }

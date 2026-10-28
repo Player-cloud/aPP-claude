@@ -16,14 +16,39 @@ export interface ModelRequest {
   /**
    * "plan" asks for a task plan as JSON; "work" for a task's output; "brief"
    * and "spec" for planning documents as JSON (M5). The instructions for
-   * "brief" and "spec" are JSON written by planner.ts.
+   * "brief" and "spec" are JSON written by planner.ts. "build" is one turn of
+   * the build agent's tool loop (M6, DEC-020): see `loop`.
    */
-  purpose: 'plan' | 'work' | 'brief' | 'spec';
+  purpose: 'plan' | 'work' | 'brief' | 'spec' | 'build';
   taskTitle: string;
   instructions: string;
   maxOutputTokens: number;
   signal: AbortSignal;
+  /** For "build": the tools offered and the conversation so far, oldest first. */
+  loop?: { tools: LoopTool[]; turns: LoopTurn[] };
 }
+
+/** A tool the build agent may call. The schema is JSON Schema for its input. */
+export interface LoopTool {
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+}
+
+export interface LoopToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+}
+
+/**
+ * One turn of the tool loop. An assistant turn keeps the adapter's own
+ * content (`raw`) so it can be sent back unchanged, as the API requires for
+ * thinking blocks; results answer every call of the turn before.
+ */
+export type LoopTurn =
+  | { kind: 'assistant'; text: string; calls: LoopToolCall[]; raw: unknown }
+  | { kind: 'results'; results: { id: string; content: string; isError: boolean }[] };
 
 export interface ModelResponse {
   text: string;
@@ -33,6 +58,9 @@ export interface ModelResponse {
   costUsd: number;
   /** Set when the model answered but did not finish properly (cut off, declined). The call is still paid for. */
   problem?: string;
+  /** For "build": the tools the model wants to call next (empty when it is done), and its content to send back. */
+  calls?: LoopToolCall[];
+  raw?: unknown;
 }
 
 export interface ModelAdapter {
@@ -48,6 +76,8 @@ export interface ModelAdapter {
 export interface SimulatedStep {
   text?: string;
   toolRequests?: ToolRequest[];
+  /** For "build": tool calls to make this turn. */
+  calls?: LoopToolCall[];
   /** Throw this message instead of answering (simulates an agent or API failure). */
   fail?: string;
   /** Answer after this many milliseconds (or never, if it exceeds the timeout). */
@@ -97,6 +127,7 @@ export class SimulatedModel implements ModelAdapter {
       toolRequests: step.toolRequests ?? [],
       usage: { inputTokens: Math.ceil(rest.instructions.length / 4), outputTokens: Math.ceil(text.length / 4) },
       costUsd: step.costUsd ?? 0,
+      ...(rest.purpose === 'build' ? { calls: step.calls ?? [], raw: { text, calls: step.calls ?? [] } } : {}),
     };
   }
 }
@@ -107,6 +138,12 @@ function defaultScript(request: Omit<ModelRequest, 'signal'>): SimulatedStep {
   // Planning drafts are templates built from the person's own words, with TODO placeholders.
   if (request.purpose === 'brief') return { text: JSON.stringify(simulatedBrief(JSON.parse(request.instructions))) };
   if (request.purpose === 'spec') return { text: JSON.stringify(simulatedSpec(JSON.parse(request.instructions))) };
+  if (request.purpose === 'build') {
+    // Looks at the repository once with a real tool call, then stops without changing anything.
+    const turns = request.loop?.turns ?? [];
+    if (turns.length === 0) return { calls: [{ id: 'sim_1', name: 'list_files', input: { path: '.' } }] };
+    return { text: `${SIMULATED_NOTE}\n\nThe simulated agent listed the repository files and made no changes. Make the change yourself in the worktree, then run the checks again.` };
+  }
   if (request.purpose === 'plan') {
     return { text: JSON.stringify({ subtasks: [{ title: request.taskTitle, goal: request.instructions, writes: [], dependsOn: [], risk: 'low', estTokens: 2000 }] }) };
   }
