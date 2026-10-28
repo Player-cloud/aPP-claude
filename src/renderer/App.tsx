@@ -7,7 +7,7 @@ import { SidePanel } from './SidePanel.tsx';
 import { needsPerson } from './ui.tsx';
 import { ActivityView } from './views/ActivityView.tsx';
 import { HomeView } from './views/HomeView.tsx';
-import { IterativeView } from './views/IterativeView.tsx';
+import { IterativeView, type ImprovementFilter } from './views/IterativeView.tsx';
 import { LearningStudioView, type StudioFilter } from './views/LearningStudioView.tsx';
 import { ProjectDetail } from './views/ProjectDetail.tsx';
 import { ProjectsView } from './views/ProjectsView.tsx';
@@ -29,7 +29,7 @@ const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
   ],
   [
     { id: 'tools', label: 'Tools', icon: 'tools' },
-    { id: 'iterative', label: 'Improvements', icon: 'iterate', tag: 'Planned' },
+    { id: 'iterative', label: 'Improvements', icon: 'iterate' },
   ],
 ];
 
@@ -77,6 +77,7 @@ export function App() {
   const [toolError, setToolError] = useState<string | null>(null);
   const [toolFilter, setToolFilter] = useState<ToolFilter>('all');
   const [studioFilter, setStudioFilter] = useState<StudioFilter>('all');
+  const [improvementFilter, setImprovementFilter] = useState<ImprovementFilter>('all');
   // Runs of every project, for the top bar's run status and the Command Centre.
   const [runs, setRuns] = useState<Record<string, RunWithNext[]> | null>(null);
   const [agent, setAgent] = useState<AgentStatus | null>(null);
@@ -233,6 +234,8 @@ export function App() {
         onToolFilter={setToolFilter}
         studioFilter={studioFilter}
         onStudioFilter={setStudioFilter}
+        improvementFilter={improvementFilter}
+        onImprovementFilter={setImprovementFilter}
       />
 
       <div className="main">
@@ -303,7 +306,7 @@ export function App() {
           )}
           {section === 'studio' && <LearningStudioView projects={projects ?? []} filter={studioFilter} onFilter={setStudioFilter} />}
           {section === 'tools' && <ToolsView scan={toolScan} error={toolError} filter={toolFilter} onScan={scanTools} />}
-          {section === 'iterative' && <IterativeView />}
+          {section === 'iterative' && <IterativeView filter={improvementFilter} onFilter={setImprovementFilter} />}
           {section === 'settings' && settings && <SettingsView status={status} settings={settings} onSettings={setSettings} />}
         </main>
       </div>

@@ -6,7 +6,7 @@ import type { AgentStatus, Project, RunWithNext, ToolScan, Workflow } from '../.
 import type { Section } from '../App.tsx';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
-import { Alert, Badge, Empty, formatTime, relativeTime, RUN_GROUPS, runStep, StateBadge, needsPerson, type Tone } from '../ui.tsx';
+import { Alert, Badge, Empty, formatDate, formatTime, relativeTime, RUN_GROUPS, runStep, StateBadge, needsPerson, type Tone } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 import { describe } from './ActivityView.tsx';
 
@@ -182,29 +182,27 @@ function AgentCard({ agent, onGo }: { agent: AgentStatus | null; onGo: (s: Secti
   );
 }
 
-const ITERATIVE_CHECKS = ['Tool conflicts', 'Workflow failures', 'Slow or costly steps'];
-
 function IterativeCard({ onGo }: { onGo: (s: Section) => void }) {
+  const overview = useAsync(() => call(iap().improvementsOverview()), []);
+  const o = overview.data;
+  const latest = o?.latest ?? null;
+  const open = o ? o.counts.idea + o.counts.proposed + o.counts.approved + o.counts.in_progress + o.counts.blocked : 0;
   return (
     <section className="card card-glass" aria-labelledby="iter-title">
       <div className="card-head">
         <h2 className="card-title" id="iter-title">
           Iterative Layer
         </h2>
-        <Badge tone="neutral">Planned</Badge>
+        {o && <Badge tone={o.counts.proposed ? 'info' : 'neutral'}>{o.counts.proposed ? `${o.counts.proposed} to review` : latest ? 'Assessed' : 'Not assessed'}</Badge>}
       </div>
-      <p className="muted">Will observe how the platform works and propose improvements for your approval. Nothing has been analysed yet.</p>
-      <ul className="check-list" aria-label="Iterative checks">
-        {ITERATIVE_CHECKS.map((c) => (
-          <li key={c}>
-            <span className="check-ring" aria-hidden="true" />
-            <span>{c}</span>
-            <span className="subtle">Not checked</span>
-          </li>
-        ))}
-      </ul>
+      {overview.error && <Alert tone="danger">{overview.error}</Alert>}
+      <p className="muted">
+        {latest
+          ? `Last self-assessment ${formatDate(latest.at)}: ${latest.report.findings.length} ${latest.report.findings.length === 1 ? 'finding' : 'findings'}. ${open} open ${open === 1 ? 'improvement' : 'improvements'}.`
+          : 'The app can read its own records and propose improvements for your approval. Nothing has been assessed yet.'}
+      </p>
       <button type="button" className="link-btn" onClick={() => onGo('iterative')}>
-        What is planned
+        Open improvements
       </button>
     </section>
   );
@@ -302,8 +300,8 @@ export function HomeView({
         <button type="button" className="btn" onClick={() => onGo('activity')}>
           <Icon name="activity" size={16} /> Activity log
         </button>
-        <button type="button" className="btn" disabled title="The Iterative Layer is not built yet">
-          <Icon name="iterate" size={16} /> Iterative analysis · Planned
+        <button type="button" className="btn" onClick={() => onGo('iterative')}>
+          <Icon name="iterate" size={16} /> Improvements
         </button>
       </div>
 

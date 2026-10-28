@@ -104,6 +104,17 @@ The database is the source of truth: editing these files does not change the app
 | Removing | References are archived (`iap ref archive`), never deleted, and can be restored |
 | Specs | Nothing in the Learning Studio changes a project's plan documents |
 
+## Improvements (M10, DEC-026)
+
+| What | Where / how |
+|---|---|
+| Self-assessment | Desktop: Improvements → *Run self-assessment*. CLI: `iap iter assess`. Reads the app's own records only; nothing is changed and no AI is called. Each run is stored and cannot change |
+| Backlog | `iap iter list [--status <s>]`, `iap iter show IMP-<n>`. A finding that comes back adds evidence to its item instead of a new item |
+| Feedback | Desktop: *Add an idea*. CLI: `iap iter feedback <text>` |
+| Moving items | `iap iter move IMP-<n> <status>`. Proposing needs an expected outcome and success criteria (`iap iter edit`); blocking and rejecting need `--reason`; verified needs `--result`; released needs `--outcome` (a measured outcome, not just passing tests). Approval records your OS user name and fixes the item's definition |
+| Duplicates | `iap iter merge IMP-<dup> --into IMP-<kept>`. Nothing is deleted |
+| What approval does | Nothing in the app changes. Building an improvement is separate Project Layer work |
+
 ## Real model calls (M3, DEC-018)
 
 The main agent, the planning drafts and the build agent all use this. A build agent run is also capped at $3 and 40 turns. Real Claude calls need **both** a monthly budget and an Anthropic API key, set in *Settings → AI usage*. Without either, the agent uses the free simulated model.

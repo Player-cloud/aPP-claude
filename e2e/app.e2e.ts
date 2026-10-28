@@ -756,3 +756,72 @@ test('M9: polish the UI with an audit of the design system, a chosen reference a
   }
   assert.equal(readFileSync(join(repo, 'src', 'styles', 'app.css'), 'utf8'), files['src/styles/app.css'], 'the checkout is untouched');
 });
+
+test('M10: the app assesses its own records in three layers, and the person moves backlog items through approval to release', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 900);
+    // Two plan runs blocked for the same reason: the kind of trouble a self-assessment should find.
+    await page.evaluate(async () => {
+      const p = await window.iap.createProject({ name: 'Club HR' });
+      if (!p.ok) throw new Error(p.error.message);
+      for (const title of ['Plan payroll', 'Plan rota']) {
+        const r = await window.iap.startRun({ projectId: p.value.id, workflow: 'plan', title });
+        if (!r.ok) throw new Error(r.error.message);
+        await window.iap.moveRun({ runId: r.value.id, to: 'planned' });
+        await window.iap.moveRun({ runId: r.value.id, to: 'blocked', reason: 'Waiting on the club secretary', resolution: 'Ask the secretary' });
+      }
+    });
+    await page.reload();
+    await page.waitForSelector('#main');
+    await page.getByRole('button', { name: 'Improvements', exact: true }).first().click();
+    await page.getByRole('heading', { name: 'The backlog is empty' }).waitFor();
+
+    await page.getByRole('button', { name: 'Run self-assessment' }).click();
+    const findings = page.getByRole('table', { name: 'Findings' });
+    await findings.getByText('2 plan runs are blocked.').waitFor();
+    await findings.getByText(/They share one reason: “Waiting on the club secretary”/).waitFor();
+    await findings.getByText('high confidence').waitFor();
+    await findings.getByText('Fewer blocked plan runs').waitFor();
+    await page.getByText('App crashes and unexpected errors are not logged, so they cannot be counted.').waitFor();
+    const list = page.getByRole('list', { name: 'Improvements' });
+    assert.equal(await list.getByRole('listitem').count(), 1);
+
+    // Running it again with nothing new adds nothing.
+    await page.getByRole('button', { name: 'Run self-assessment' }).click();
+    await page.getByText('0 new items, 0 with new evidence.').waitFor();
+    assert.equal(await list.getByRole('listitem').count(), 1);
+
+    // Typed feedback becomes an idea.
+    await page.getByLabel('What should work better?').fill('Show how long checks usually take on the build screen');
+    await page.getByRole('button', { name: 'Add idea' }).click();
+    await list.getByText('Show how long checks usually take on the build screen').waitFor();
+    await page.getByRole('button', { name: 'Close the item' }).click();
+    await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
+    await shot(page, '23-improvements-self-assessment-dark-1280');
+
+    // Approve the finding's item, then take it to release with a result and a measured outcome.
+    await list.getByRole('button', { name: /Fewer blocked plan runs/ }).click();
+    const inspector = page.getByRole('region', { name: /IMP-1 Fewer blocked plan runs/ });
+    await inspector.getByText('Approving records your decision. It does not change the app.').waitFor();
+    await inspector.getByRole('button', { name: 'Approve' }).click();
+    await inspector.getByText(/^by .+ on /).waitFor();
+    await inspector.getByRole('button', { name: 'Start work' }).click();
+    await inspector.getByRole('button', { name: 'Mark verified' }).click();
+    await inspector.getByLabel('Result').fill('Plans now name who to ask; checked on Club HR');
+    await inspector.getByRole('button', { name: 'Mark verified' }).last().click();
+    await inspector.getByText('Verified', { exact: true }).waitFor();
+    await inspector.getByRole('button', { name: 'Mark released' }).click();
+    await inspector.getByLabel('Measured outcome').fill('No blocked plan runs in the two weeks after release');
+    await inspector.getByRole('button', { name: 'Mark released' }).last().click();
+    await inspector.getByText('Released', { exact: true }).waitFor();
+    await inspector.getByTestId('recurrence').getByText(/Run a self-assessment after approval/).waitFor();
+    await page.getByRole('button', { name: 'Run self-assessment' }).click();
+    await inspector.getByTestId('recurrence').getByText(/0 since approval/).waitFor();
+    await shot(page, '24-improvements-released-dark-1280');
+  } finally {
+    await app.close();
+  }
+});
