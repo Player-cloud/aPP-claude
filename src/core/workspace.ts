@@ -19,9 +19,10 @@ import type { Check, CheckResult } from './build/checks.ts';
 import type { ChangedFile } from './build/git.ts';
 import type { Risk } from './build/review.ts';
 import type { AgentStep } from './build/agent.ts';
+import type { DriftKind, Gate, GateException, ReleaseEvidence, ReleasePlan } from './release/gates.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -233,7 +234,98 @@ const MIGRATIONS: Record<number, string> = {
     CREATE TRIGGER check_runs_no_delete BEFORE DELETE ON check_runs
       BEGIN SELECT RAISE(ABORT, 'check results are append-only'); END;
   `,
+  7: `
+    ALTER TABLE builds ADD COLUMN result_commit TEXT;
+    CREATE TABLE releases (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      version TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('draft','checked','prepared','abandoned')),
+      plan TEXT NOT NULL,
+      checks TEXT NOT NULL,
+      build_ids TEXT NOT NULL,
+      classifications TEXT NOT NULL,
+      commit_hash TEXT,
+      worktree TEXT,
+      evidence TEXT,
+      gates TEXT,
+      ready INTEGER,
+      checks_approved_at TEXT,
+      report_path TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      checked_at TEXT,
+      prepared_at TEXT
+    );
+    CREATE INDEX releases_project ON releases(project_id, created_at);
+    CREATE TABLE release_check_runs (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      release_id TEXT NOT NULL REFERENCES releases(id),
+      commit_hash TEXT NOT NULL,
+      check_id TEXT NOT NULL,
+      command TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('passed','failed','timed_out','error','not_run')),
+      exit_code INTEGER,
+      duration_ms INTEGER NOT NULL,
+      output TEXT NOT NULL,
+      started_at TEXT NOT NULL
+    );
+    CREATE TRIGGER release_check_runs_no_update BEFORE UPDATE ON release_check_runs
+      BEGIN SELECT RAISE(ABORT, 'check results are append-only'); END;
+    CREATE TRIGGER release_check_runs_no_delete BEFORE DELETE ON release_check_runs
+      BEGIN SELECT RAISE(ABORT, 'check results are append-only'); END;
+    -- FR-QA-004: an exception to a gate is an authorisation; it is kept for good.
+    CREATE TABLE release_exceptions (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      release_id TEXT NOT NULL REFERENCES releases(id),
+      gate_id TEXT NOT NULL,
+      commit_hash TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      mitigation TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      at TEXT NOT NULL
+    );
+    CREATE TRIGGER release_exceptions_no_update BEFORE UPDATE ON release_exceptions
+      BEGIN SELECT RAISE(ABORT, 'exceptions are append-only'); END;
+    CREATE TRIGGER release_exceptions_no_delete BEFORE DELETE ON release_exceptions
+      BEGIN SELECT RAISE(ABORT, 'exceptions are append-only'); END;
+  `,
 };
+
+export type ReleaseStatus = 'draft' | 'checked' | 'prepared' | 'abandoned';
+
+/** A release candidate for one project (M7). Preparing it never deploys anything. */
+export interface Release {
+  id: string;
+  projectId: string;
+  version: string;
+  status: ReleaseStatus;
+  plan: ReleasePlan;
+  checks: Check[];
+  buildIds: string[];
+  /** The person's classification of drift findings, by requirement ID. */
+  classifications: Record<string, { kind: Extract<DriftKind, 'intentional_deviation' | 'spec_change'>; note: string }>;
+  /** The commit the last ship-check ran on. */
+  commit: string | null;
+  worktree: string | null;
+  /** What the last ship-check found, so classifications and exceptions can be re-evaluated without running the checks again. */
+  evidence: ReleaseEvidence | null;
+  gates: Gate[] | null;
+  /** True when the last ship-check found no blocking gate. */
+  ready: boolean | null;
+  checksApprovedAt: string | null;
+  reportPath: string | null;
+  createdAt: string;
+  updatedAt: string;
+  checkedAt: string | null;
+  preparedAt: string | null;
+}
+
+export interface ReleaseCheckRun extends CheckResult {
+  seq: number;
+  releaseId: string;
+  commit: string;
+}
 
 export type BuildKind = 'feature' | 'bugfix';
 export type BuildStatus = 'draft' | 'in_progress' | 'review' | 'completed' | 'abandoned';
@@ -276,6 +368,8 @@ export interface Build {
   /** The person's explanation for the risks that remain. */
   note: string | null;
   reportPath: string | null;
+  /** The commit on the build's branch that holds the finished change (M7). */
+  resultCommit: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -806,7 +900,7 @@ export class Workspace {
   /** Updates a build. Its definition (goal, checks, components) can only change while it is a draft. */
   updateBuild(
     id: string,
-    patch: Partial<Pick<Build, 'title' | 'goal' | 'requirementIds' | 'components' | 'checks' | 'repro' | 'status' | 'repoPath' | 'branch' | 'worktree' | 'baseCommit' | 'agent' | 'changedFiles' | 'risks' | 'note' | 'reportPath' | 'completedAt'>>,
+    patch: Partial<Pick<Build, 'title' | 'goal' | 'requirementIds' | 'components' | 'checks' | 'repro' | 'status' | 'repoPath' | 'branch' | 'worktree' | 'baseCommit' | 'agent' | 'changedFiles' | 'risks' | 'note' | 'reportPath' | 'completedAt' | 'resultCommit'>>,
     event?: { type: string; payload: Record<string, unknown> },
   ): Build {
     const build = this.getBuild(id);
@@ -817,7 +911,7 @@ export class Workspace {
       this.db
         .prepare(
           `UPDATE builds SET title = ?, goal = ?, requirement_ids = ?, components = ?, checks = ?, repro = ?, status = ?, repo_path = ?, branch = ?, worktree = ?,
-             base_commit = ?, agent = ?, changed_files = ?, risks = ?, note = ?, report_path = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
+             base_commit = ?, agent = ?, changed_files = ?, risks = ?, note = ?, report_path = ?, completed_at = ?, result_commit = ?, updated_at = ? WHERE id = ?`,
         )
         .run(
           redactString(n.title),
@@ -837,6 +931,7 @@ export class Workspace {
           n.note === null ? null : redactString(n.note),
           n.reportPath,
           n.completedAt,
+          n.resultCommit,
           this.timestamp(),
           id,
         );
@@ -873,6 +968,126 @@ export class Workspace {
       durationMs: Number(row.duration_ms),
       output: String(row.output),
       startedAt: String(row.started_at),
+    }));
+  }
+
+  // ---- Releases (M7) --------------------------------------------------------
+
+  createRelease(input: { projectId: string; version: string; plan: ReleasePlan; checks: Check[]; buildIds: string[] }): Release {
+    const project = this.getProject(input.projectId);
+    const id = `rel_${randomUUID()}`;
+    const at = this.timestamp();
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO releases (id, project_id, version, status, plan, checks, build_ids, classifications, created_at, updated_at)
+           VALUES (?, ?, ?, 'draft', ?, ?, ?, '{}', ?, ?)`,
+        )
+        .run(id, project.id, redactString(input.version), JSON.stringify(redact(input.plan)), JSON.stringify(input.checks.map((c) => ({ id: c.id, command: redactString(c.command) }))), JSON.stringify(input.buildIds), at, at);
+      this.record('release.created', project.id, null, { releaseId: id, version: input.version, builds: input.buildIds, checks: input.checks.map((c) => c.command) });
+    });
+    return this.getRelease(id);
+  }
+
+  getRelease(id: string): Release {
+    const row = this.db.prepare('SELECT * FROM releases WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Release', id);
+    return toRelease(row);
+  }
+
+  listReleases(projectId: string): Release[] {
+    this.getProject(projectId);
+    return (this.db.prepare('SELECT * FROM releases WHERE project_id = ? ORDER BY created_at DESC, id').all(projectId) as Record<string, unknown>[]).map(toRelease);
+  }
+
+  updateRelease(
+    id: string,
+    patch: Partial<Pick<Release, 'plan' | 'buildIds' | 'classifications' | 'status' | 'commit' | 'worktree' | 'evidence' | 'gates' | 'ready' | 'checksApprovedAt' | 'reportPath' | 'checkedAt' | 'preparedAt'>>,
+    event?: { type: string; payload: Record<string, unknown> },
+  ): Release {
+    const r = this.getRelease(id);
+    if (r.status === 'prepared' || r.status === 'abandoned') {
+      if (!(Object.keys(patch).length === 1 && 'reportPath' in patch)) throw new ValidationError(`This release is ${r.status} and cannot change.`);
+    }
+    const n = { ...r, ...patch };
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE releases SET plan = ?, build_ids = ?, classifications = ?, status = ?, commit_hash = ?, worktree = ?, evidence = ?, gates = ?, ready = ?,
+             checks_approved_at = ?, report_path = ?, checked_at = ?, prepared_at = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          JSON.stringify(redact(n.plan)),
+          JSON.stringify(n.buildIds),
+          JSON.stringify(redact(n.classifications)),
+          n.status,
+          n.commit,
+          n.worktree,
+          n.evidence ? JSON.stringify(redact(n.evidence)) : null,
+          n.gates ? JSON.stringify(redact(n.gates)) : null,
+          n.ready === null ? null : n.ready ? 1 : 0,
+          n.checksApprovedAt,
+          n.reportPath,
+          n.checkedAt,
+          n.preparedAt,
+          this.timestamp(),
+          id,
+        );
+      if (event) this.record(event.type, r.projectId, null, { releaseId: id, ...event.payload });
+    });
+    return this.getRelease(id);
+  }
+
+  recordReleaseCheckRun(releaseId: string, commit: string, r: CheckResult): void {
+    const release = this.getRelease(releaseId);
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO release_check_runs (release_id, commit_hash, check_id, command, status, exit_code, duration_ms, output, started_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(releaseId, commit, r.checkId, redactString(r.command), r.status, r.exitCode, r.durationMs, redactString(r.output), r.startedAt);
+      this.record('release.check', release.projectId, null, { releaseId, commit, checkId: r.checkId, status: r.status, exitCode: r.exitCode });
+    });
+  }
+
+  listReleaseCheckRuns(releaseId: string): ReleaseCheckRun[] {
+    return (this.db.prepare('SELECT * FROM release_check_runs WHERE release_id = ? ORDER BY seq').all(releaseId) as Record<string, unknown>[]).map((row) => ({
+      seq: Number(row.seq),
+      releaseId: String(row.release_id),
+      commit: String(row.commit_hash),
+      checkId: String(row.check_id),
+      command: String(row.command),
+      status: row.status as CheckResult['status'],
+      exitCode: row.exit_code === null ? null : Number(row.exit_code),
+      durationMs: Number(row.duration_ms),
+      output: String(row.output),
+      startedAt: String(row.started_at),
+    }));
+  }
+
+  /** Records a person's authorisation to release despite a failed gate (FR-QA-004). Kept for good. */
+  recordGateException(releaseId: string, gateId: string, commit: string, reason: string, mitigation: string): GateException {
+    const release = this.getRelease(releaseId);
+    const at = this.timestamp();
+    const actor = this.actor;
+    this.transaction(() => {
+      this.db
+        .prepare('INSERT INTO release_exceptions (release_id, gate_id, commit_hash, reason, mitigation, actor, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(releaseId, gateId, commit, redactString(reason), redactString(mitigation), actor, at);
+      this.record('release.exception', release.projectId, null, { releaseId, gateId, commit, reason: redactString(reason), mitigation: redactString(mitigation) });
+    });
+    return { gateId, commit, reason: redactString(reason), mitigation: redactString(mitigation), actor, at };
+  }
+
+  listGateExceptions(releaseId: string): GateException[] {
+    return (this.db.prepare('SELECT * FROM release_exceptions WHERE release_id = ? ORDER BY seq').all(releaseId) as Record<string, unknown>[]).map((row) => ({
+      gateId: String(row.gate_id),
+      commit: String(row.commit_hash),
+      reason: String(row.reason),
+      mitigation: String(row.mitigation),
+      actor: String(row.actor),
+      at: String(row.at),
     }));
   }
 
@@ -1062,9 +1277,35 @@ function toBuild(row: Record<string, unknown>): Build {
     risks: json<Risk[]>(row.risks),
     note: (row.note as string | null) ?? null,
     reportPath: (row.report_path as string | null) ?? null,
+    resultCommit: (row.result_commit as string | null) ?? null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     completedAt: (row.completed_at as string | null) ?? null,
+  };
+}
+
+function toRelease(row: Record<string, unknown>): Release {
+  const json = <T>(v: unknown, d: T): T => (v === null || v === undefined ? d : (JSON.parse(String(v)) as T));
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    version: String(row.version),
+    status: row.status as ReleaseStatus,
+    plan: json<ReleasePlan>(row.plan, { target: '', healthCheck: '', rollback: '', monitoring: '', migrations: '', envVars: [] }),
+    checks: json<Check[]>(row.checks, []),
+    buildIds: json<string[]>(row.build_ids, []),
+    classifications: json<Release['classifications']>(row.classifications, {}),
+    commit: (row.commit_hash as string | null) ?? null,
+    worktree: (row.worktree as string | null) ?? null,
+    evidence: json<ReleaseEvidence | null>(row.evidence, null),
+    gates: json<Gate[] | null>(row.gates, null),
+    ready: row.ready === null || row.ready === undefined ? null : Number(row.ready) === 1,
+    checksApprovedAt: (row.checks_approved_at as string | null) ?? null,
+    reportPath: (row.report_path as string | null) ?? null,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    checkedAt: (row.checked_at as string | null) ?? null,
+    preparedAt: (row.prepared_at as string | null) ?? null,
   };
 }
 

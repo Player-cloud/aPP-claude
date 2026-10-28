@@ -18,6 +18,12 @@ export type { Diff, ChangedFile } from '../core/build/git.ts';
 export type { Build, BuildAgentRun, CheckRun } from '../core/workspace.ts';
 export type { Risk } from '../core/build/review.ts';
 export type { Check } from '../core/build/checks.ts';
+import type { ReleaseDetail, ReleaseInput } from '../core/release/releaser.ts';
+import type { Release } from '../core/workspace.ts';
+import type { ReleasePlan } from '../core/release/gates.ts';
+export type { ReleaseDetail, ReleaseInput } from '../core/release/releaser.ts';
+export type { Release, ReleaseCheckRun, ReleaseStatus } from '../core/workspace.ts';
+export type { DriftFinding, DriftKind, Gate, GateException, GateId, GateStatus, ReleasePlan } from '../core/release/gates.ts';
 export type { Brief, BriefField, PlanChange, PlanDoc, Priority, Requirement, Spec } from '../core/planning.ts';
 export type { ToolEntry, ToolKind } from '../core/inventory.ts';
 
@@ -96,6 +102,17 @@ export interface IapApi {
   completeBuild(input: { buildId: string; note?: string | null }): Promise<Result<BuildDetail>>;
   abandonBuild(input: { buildId: string; reason?: string | null }): Promise<Result<BuildDetail>>;
   buildDiff(buildId: string): Promise<Result<Diff>>;
+  /** Releases (M7): quality gate and ship-check. Preparing a release never deploys it. */
+  listReleases(projectId: string): Promise<Result<Release[]>>;
+  getRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
+  createRelease(input: ReleaseInput & { projectId: string }): Promise<Result<Release>>;
+  editRelease(input: { releaseId: string; plan?: Partial<ReleasePlan>; buildIds?: string[] }): Promise<Result<Release>>;
+  /** Asks the person to approve the check commands, then runs the ship-check on the repository's current commit. */
+  checkRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
+  classifyDrift(input: { releaseId: string; requirementId: string; kind: 'intentional_deviation' | 'spec_change'; note: string }): Promise<Result<ReleaseDetail>>;
+  addGateException(input: { releaseId: string; gateId: string; reason: string; mitigation: string }): Promise<Result<ReleaseDetail>>;
+  prepareRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
+  abandonRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
   /** Planning (M5): concept brief and specification, versioned. */
   getPlanning(projectId: string): Promise<Result<PlanningOverview>>;
   draftBrief(projectId: string): Promise<Result<PlanDoc>>;
@@ -141,6 +158,15 @@ export const IAP_METHODS = [
   'completeBuild',
   'abandonBuild',
   'buildDiff',
+  'listReleases',
+  'getRelease',
+  'createRelease',
+  'editRelease',
+  'checkRelease',
+  'classifyDrift',
+  'addGateException',
+  'prepareRelease',
+  'abandonRelease',
   'getPlanning',
   'draftBrief',
   'draftSpec',

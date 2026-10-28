@@ -68,7 +68,18 @@ The database is the source of truth: editing these files does not change the app
 | Worktrees | `<data directory>/worktrees/<buildId>`, each on a branch `iap/feature-…` or `iap/fix-…` created from the repository's current commit. Git also records each worktree in the repository's `.git/worktrees`. Repository hooks are not run |
 | Check commands | Typed by you, approved in a dialog (desktop) or with `--confirm` (CLI), then run through the system shell in the worktree **with your permissions**. They are not sandboxed. Variables that look like secrets (`ANTHROPIC_*`, `*_TOKEN`, `*_API_KEY`, `*_SECRET`, `AWS_*`, `GH_*`, …) are removed from their environment; each run has a 10-minute limit |
 | Reports | `<project folder>/docs/builds/<buildId>.md`: checks before and after, agent summary, changed files and unresolved risks |
+| Finished work | *Mark done* commits the change on the build's branch inside the worktree (hooks off; your git identity, or "Iterative Platform" if none is set). Your checkout is not touched |
 | Merging and clean-up | Never done by the app. Merge the branch yourself; remove a finished worktree with `git worktree remove <path>` and its branch with `git branch -d <branch>` |
+
+## Releases (M7, DEC-022)
+
+| What | Where / how |
+|---|---|
+| Ship-check | Runs the release's check commands on the repository's current commit in `<data directory>/worktrees/<releaseId>` (detached, no branch), after approval in a dialog or with `--confirm`, with the same environment scrubbing and time limit as build checks. The worktree is reset afterwards and tracked files are scanned for credentials; only `path:line` is reported |
+| Gates | Approved spec, spec drift, included work (finished, verified, merged into the checked commit), review findings, release checks, credentials, review tools (optional, always Skipped for now), release plan |
+| Exceptions | Recorded with your name, a reason, a mitigation and the checked commit; they cannot be changed or deleted, and they apply only to that commit (a ship-check on a newer commit needs a new decision) |
+| Reports | `<project folder>/docs/releases/<releaseId>.md` |
+| Preparing | Needs every required gate passed or excepted and the repository still at the checked commit. Nothing is deployed, tagged or pushed: deploy yourself using the plan |
 
 ## Real model calls (M3, DEC-018)
 
@@ -92,4 +103,4 @@ Close the app, then copy the whole data directory. SQLite WAL files must be copi
 - **Database from a newer version:** refused with exit code 2; upgrade the app. The file is not downgraded.
 
 ## Exit codes
-`0` success · `1` usage/validation error · `2` state unreadable (corrupt/too new) · `3` unexpected error.
+`0` success · `1` usage/validation error · `2` state unreadable (corrupt/too new) · `3` unexpected error · `4` (`release check` only) a gate blocks the release.

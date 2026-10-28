@@ -17,7 +17,7 @@ import { redactString } from '../redact.ts';
 import type { Build, BuildKind, CheckRun, Workspace } from '../workspace.ts';
 import { runBuildAgent } from './agent.ts';
 import { normalizeChecks, runCheck, type Check, type CheckResult } from './checks.ts';
-import { addWorktree, diffWorktree, git, inspectRepo, type Diff } from './git.ts';
+import { addWorktree, commitWorktree, diffWorktree, git, inspectRepo, type Diff } from './git.ts';
 import { reviewChange } from './review.ts';
 
 export interface BuildInput {
@@ -152,16 +152,26 @@ export class Builder {
     });
   }
 
-  /** Marks reviewed work done. Remaining risks need the person's explanation. The branch is left for them to merge. */
-  complete(buildId: string, note: string | null): BuildDetail {
+  /**
+   * Marks reviewed work done. Remaining risks need the person's explanation.
+   * The change is committed on the build's own branch (in the app's worktree) so
+   * it can be merged; nothing is merged or pushed.
+   */
+  async complete(buildId: string, note: string | null): Promise<BuildDetail> {
     const build = this.ws.getBuild(buildId);
-    if (busy.has(buildId)) throw new ValidationError('Wait for the current step to finish.');
     if (build.status !== 'review') throw new ValidationError('Verify the change before marking it done.');
     const text = note?.trim().slice(0, 4_000) || null;
     if (build.risks?.length && (!text || text.length < 10)) throw new ValidationError('Explain why the remaining risks are acceptable before marking this done.');
-    this.ws.updateBuild(buildId, { status: 'completed', note: text, completedAt: new Date().toISOString() }, { type: 'build.completed', payload: { risks: build.risks?.map((r) => r.kind) ?? [] } });
-    this.writeReport(buildId);
-    return this.detail(buildId);
+    return await this.exclusive(buildId, async () => {
+      const resultCommit = await commitWorktree(build.worktree!, `${build.kind === 'bugfix' ? 'Fix' : 'Add'}: ${build.title}\n\nIterative Platform build ${build.id}`);
+      this.ws.updateBuild(
+        buildId,
+        { status: 'completed', note: text, completedAt: new Date().toISOString(), resultCommit },
+        { type: 'build.completed', payload: { risks: build.risks?.map((r) => r.kind) ?? [], commit: resultCommit } },
+      );
+      this.writeReport(buildId);
+      return this.detail(buildId);
+    });
   }
 
   /** Stops the work. The worktree and branch stay on disk for the person to inspect or remove. */
@@ -321,7 +331,7 @@ export function renderReport(build: Build, runs: CheckRun[]): string {
     '## Next step',
     '',
     build.status === 'completed'
-      ? `The change is on branch \`${build.branch}\` in \`${build.worktree}\`. Review it and merge it yourself, for example \`git merge ${build.branch}\` in the repository.`
+      ? `The change is committed${build.resultCommit ? ` as \`${build.resultCommit.slice(0, 12)}\`` : ''} on branch \`${build.branch}\` in \`${build.worktree}\`. Review it and merge it yourself, for example \`git merge ${build.branch}\` in the repository.`
       : build.status === 'abandoned'
         ? `Abandoned. The worktree is still at \`${build.worktree ?? '-'}\`; remove it with \`git worktree remove\` when you no longer need it.`
         : 'Not finished.',

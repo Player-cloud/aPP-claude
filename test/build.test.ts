@@ -157,8 +157,12 @@ test('M6-AC1 (bug fix): reproduce → regression test → fix → checks, in a w
   assert.equal(verified.build.status, 'review');
   assert.deepEqual(verified.build.risks, []);
   assert.deepEqual(verified.build.changedFiles?.map((f) => f.path).sort(), ['src/sum.mjs', 'test/sum.test.mjs']);
-  const done = builder.complete(build.id, null);
+  const done = await builder.complete(build.id, null);
   assert.equal(done.build.status, 'completed');
+  // The change is committed on the build's branch, so the person can merge it; their checkout's branch is untouched.
+  assert.equal(gitIn(repo, 'rev-parse', done.build.branch!).trim(), done.build.resultCommit);
+  assert.equal(gitIn(repo, 'rev-parse', `${done.build.resultCommit}^`).trim(), verified.build.baseCommit);
+  assert.equal(gitIn(repo, 'show', `${done.build.resultCommit}:src/sum.mjs`), FIXED);
 
   // The person's checkout is untouched: same commit, same buggy file, nothing modified.
   assert.equal(readFileSync(join(repo, 'src', 'sum.mjs'), 'utf8'), BUGGY);
@@ -197,8 +201,8 @@ test('M6: the simulated agent changes nothing, and remaining risks need an expla
   assert.match(ran.build.agent!.summary, /Simulated model/);
   const verified = await builder.verify(build.id);
   assert.deepEqual(verified.build.risks?.map((r) => r.kind), ['no_change', 'still_failing']);
-  assert.throws(() => builder.complete(build.id, ''), /Explain why/);
-  assert.equal(builder.complete(build.id, 'Will fix by hand in the next build.').build.status, 'completed');
+  await assert.rejects(builder.complete(build.id, ''), /Explain why/);
+  assert.equal((await builder.complete(build.id, 'Will fix by hand in the next build.')).build.status, 'completed');
   assert.match(readFileSync(verified.build.reportPath!, 'utf8'), /Simulated agent \(no AI was called\)/);
 });
 

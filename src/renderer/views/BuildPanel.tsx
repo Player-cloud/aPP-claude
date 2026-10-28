@@ -76,7 +76,7 @@ function RepoSetup({ project, onChanged }: { project: Project; onChanged: () => 
   );
 }
 
-function parseChecks(text: string) {
+export function parseChecks(text: string) {
   return text
     .split('\n')
     .map((l) => l.trim())

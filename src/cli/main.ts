@@ -18,6 +18,8 @@ import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
 import { Planner } from '../core/planner.ts';
 import { Builder, type BuildDetail } from '../core/build/builder.ts';
+import { Releaser, type ReleaseDetail } from '../core/release/releaser.ts';
+import type { ReleasePlan } from '../core/release/gates.ts';
 import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
 
@@ -63,6 +65,17 @@ Build work (each feature or bug fix gets its own git worktree and branch; nothin
   build abandon <buildId> [--note <why>]
   build list <projectId> | build show <buildId> | build diff <buildId>
 
+Releases (quality gate and ship-check; preparing a release never deploys, tags or pushes)
+  release new <projectId> --version <x.y.z> --check <id=command>... [--build <buildId>]...
+            [--target <t>] [--health <t>] [--rollback <t>] [--monitoring <t>] [--migrations <t>] [--env <NAME>]...
+  release plan <releaseId> [--build <buildId>]... [plan options as above]   Change the plan or included work
+  release check <releaseId> --confirm         Run the ship-check on the repository's current commit (exit 4 if a gate blocks)
+  release classify <releaseId> <REQ-ID> --kind <intentional_deviation|spec_change> --note <why>
+  release except <releaseId> <gateId> --reason <why> --mitigation <how>      Accept a failed gate (kept for good)
+  release prepare <releaseId>                 Mark it prepared (needs every required gate passed or excepted)
+  release abandon <releaseId>
+  release list <projectId> | release show <releaseId>
+
 Audit and health
   events [--project <id>] [--run <id>] [--limit <n>]
   doctor
@@ -104,12 +117,31 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       component: { type: 'string', multiple: true },
       repro: { type: 'string' },
       init: { type: 'boolean', default: false },
+      version: { type: 'string' },
+      build: { type: 'string', multiple: true },
+      target: { type: 'string' },
+      health: { type: 'string' },
+      rollback: { type: 'string' },
+      monitoring: { type: 'string' },
+      migrations: { type: 'string' },
+      env: { type: 'string', multiple: true },
+      mitigation: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
   const [command, sub, ...rest] = positionals;
   const home = resolveAppHome();
   const print = (data: unknown, human: () => void) => (values.json ? out(JSON.stringify(data, null, 2)) : human());
+  const planOptions = () => {
+    const p: Partial<ReleasePlan> = {};
+    if (values.target !== undefined) p.target = values.target;
+    if (values.health !== undefined) p.healthCheck = values.health;
+    if (values.rollback !== undefined) p.rollback = values.rollback;
+    if (values.monitoring !== undefined) p.monitoring = values.monitoring;
+    if (values.migrations !== undefined) p.migrations = values.migrations;
+    if (values.env !== undefined) p.envVars = values.env;
+    return p;
+  };
 
   if (!command || values.help) {
     out(USAGE);
@@ -317,11 +349,7 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
         return 0;
       }
       case 'build new': {
-        const checks = (values.check ?? []).map((c) => {
-          const at = c.indexOf('=');
-          if (at < 1) throw new ValidationError(`--check "${c}" must look like id=command, for example unit="npm test".`);
-          return { id: c.slice(0, at).trim(), command: c.slice(at + 1).trim() };
-        });
+        const checks = parseChecks(values.check);
         const b = new Builder(ws, new SimulatedModel()).create(need(rest[0], 'projectId'), {
           kind: (values.kind ?? '') as 'feature',
           title: values.title ?? '',
@@ -356,7 +384,7 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       case 'build abandon': {
         const builder = new Builder(ws, new SimulatedModel());
         const id = need(rest[0], 'buildId');
-        const d = sub === 'done' ? builder.complete(id, values.note ?? null) : builder.abandon(id, values.note ?? null);
+        const d = sub === 'done' ? await builder.complete(id, values.note ?? null) : builder.abandon(id, values.note ?? null);
         print(d, () => describeBuild(d, out));
         return 0;
       }
@@ -376,6 +404,60 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       case 'build diff': {
         const diff = await new Builder(ws, new SimulatedModel()).diff(need(rest[0], 'buildId'));
         print(diff, () => out(diff.patch || 'No changes.'));
+        return 0;
+      }
+      case 'release new': {
+        const r = new Releaser(ws).create(need(rest[0], 'projectId'), { version: values.version ?? '', plan: planOptions(), checks: parseChecks(values.check), buildIds: values.build ?? [] });
+        print(r, () => out(`${r.id}  release ${r.version} draft. Run the ship-check with: iap release check ${r.id} --confirm`));
+        return 0;
+      }
+      case 'release plan': {
+        const id = need(rest[0], 'releaseId');
+        const current = ws.getRelease(id);
+        const r = new Releaser(ws).edit(id, { plan: { ...current.plan, ...planOptions() }, buildIds: values.build });
+        print(r, () => out(`${r.id}  release ${r.version} ${r.status}. Run the ship-check again.`));
+        return 0;
+      }
+      case 'release check': {
+        const id = need(rest[0], 'releaseId');
+        const r = ws.getRelease(id);
+        if (!values.confirm) {
+          err(`These commands will run on this computer with your permissions:\n${r.checks.map((c) => `  ${c.id}: ${c.command}`).join('\n')}\nRe-run with --confirm to approve them.`);
+          return 1;
+        }
+        const d = await new Releaser(ws).check(id);
+        print(d, () => describeRelease(d, out));
+        return d.blocking.length ? 4 : 0;
+      }
+      case 'release classify': {
+        const d = new Releaser(ws).classify(need(rest[0], 'releaseId'), need(rest[1], 'REQ-ID'), values.kind ?? '', values.note ?? '');
+        print(d, () => describeRelease(d, out));
+        return 0;
+      }
+      case 'release except': {
+        const d = new Releaser(ws).addException(need(rest[0], 'releaseId'), need(rest[1], 'gateId'), values.reason ?? '', values.mitigation ?? '');
+        print(d, () => describeRelease(d, out));
+        return 0;
+      }
+      case 'release prepare':
+      case 'release abandon': {
+        const releaser = new Releaser(ws);
+        const id = need(rest[0], 'releaseId');
+        const d = sub === 'prepare' ? await releaser.prepare(id) : releaser.abandon(id);
+        print(d, () => describeRelease(d, out));
+        return 0;
+      }
+      case 'release list': {
+        const releases = ws.listReleases(need(rest[0], 'projectId'));
+        print(releases, () => {
+          if (!releases.length) out('No releases yet.');
+          for (const r of releases) out(`${r.id}  ${r.version.padEnd(10)} ${r.status.padEnd(10)} ${r.ready === null ? 'not checked' : r.ready ? 'ready' : 'blocked'}`);
+        });
+        return 0;
+      }
+      case 'release show': {
+        const d = new Releaser(ws).detail(need(rest[0], 'releaseId'));
+        print(d, () => describeRelease(d, out));
         return 0;
       }
       case 'doctor': {
@@ -418,6 +500,28 @@ function agentModel(ws: Workspace): ModelAdapter {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new ValidationError('A monthly budget is set, so real calls are on, but ANTHROPIC_API_KEY is not set.');
   return new ClaudeModel(new Anthropic({ apiKey, maxRetries: 1 }));
+}
+
+function parseChecks(values: string[] | undefined) {
+  return (values ?? []).map((c) => {
+    const at = c.indexOf('=');
+    if (at < 1) throw new ValidationError(`--check "${c}" must look like id=command, for example unit="npm test".`);
+    return { id: c.slice(0, at).trim(), command: c.slice(at + 1).trim() };
+  });
+}
+
+function describeRelease({ release: r, checkRuns, exceptions, blocking }: ReleaseDetail, out: Out): void {
+  out(`${r.id}  release ${r.version} ${r.status}${r.commit ? ` on ${r.commit.slice(0, 12)}` : ''}`);
+  for (const g of r.gates ?? []) {
+    out(`  ${g.status.toUpperCase().padEnd(8)} ${g.required ? 'required' : 'optional'} ${g.id.padEnd(8)} ${g.summary}${g.exception ? ' [exception recorded]' : ''}`);
+    for (const e of g.evidence.slice(0, 10)) out(`      ${e}`);
+    for (const f of g.findings ?? []) out(`      ${f.requirementId} ${f.kind}: ${f.observed}${f.note ? ` (${f.note})` : ''}`);
+  }
+  for (const c of checkRuns.slice(-r.checks.length)) out(`  check ${c.checkId.padEnd(12)} ${c.status.padEnd(9)} exit ${c.exitCode ?? '-'}  ${c.command}`);
+  for (const e of exceptions) out(`  exception ${e.gateId} by ${e.actor}: ${e.reason} / mitigation: ${e.mitigation}`);
+  if (r.status === 'prepared') out('  Prepared. Nothing was deployed, tagged or pushed.');
+  else if (r.gates) out(blocking.length ? `  Blocked by: ${blocking.join(', ')}` : '  Ready to prepare: iap release prepare ' + r.id);
+  if (r.reportPath) out(`  report: ${r.reportPath}`);
 }
 
 function describeBuild({ build: b, checkRuns }: BuildDetail, out: Out): void {

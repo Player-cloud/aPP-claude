@@ -2102,3 +2102,39 @@ button.status-pill {
 .next-step .card-title {
   margin-bottom: var(--space-2);
 }
+
+/* Releases (M7) */
+.release-gates {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-1);
+}
+.release-gates summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+.release-gates details > p,
+.release-gates details > ul {
+  margin: var(--space-1) 0 var(--space-2) var(--space-4);
+}
+.release-exception {
+  margin: var(--space-2) 0 var(--space-2) var(--space-4);
+}
+.release-exception > summary {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.release-classify {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-2);
+}
+.release-classify .input {
+  flex: 1 1 14rem;
+}
