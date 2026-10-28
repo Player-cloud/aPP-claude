@@ -41,6 +41,8 @@ export type { Occurrence, SelfAssessmentReport, SelfFinding } from '../core/iter
 
 import type { CleanupOption, CleanupPlan } from '../core/cleanup/cleanup.ts';
 export type { CleanupAction, CleanupOption, CleanupPlan, CleanupResult, CleanupStatus, DryRun, Mechanism } from '../core/cleanup/cleanup.ts';
+import type { UpdateCheck, UpdateItem, UpdatesOverview } from '../core/updates/updates.ts';
+export type { Confidence, SourceResult, SourceStatus, UpdateCheck, UpdateImpact, UpdateItem, UpdateKind, UpdatePriority, UpdatesOverview, UpdateStage } from '../core/updates/updates.ts';
 
 /** Kinds a reference can have, and the tags in use (M9). */
 export interface ReferenceCatalog {
@@ -164,6 +166,13 @@ export interface IapApi {
   restoreCleanup(planId: string): Promise<Result<CleanupPlan>>;
   cancelCleanup(planId: string): Promise<Result<CleanupPlan>>;
   listCleanups(): Promise<Result<CleanupPlan[]>>;
+  // External change monitor (M12). Checking only reads trusted sources; nothing is installed.
+  checkUpdates(): Promise<Result<UpdateCheck>>;
+  getUpdates(): Promise<Result<UpdatesOverview>>;
+  approveUpdate(input: { id: string; note?: string }): Promise<Result<UpdateItem>>;
+  dismissUpdate(input: { id: string; reason: string }): Promise<Result<UpdateItem>>;
+  reopenUpdate(id: string): Promise<Result<UpdateItem>>;
+  verifyUpdate(id: string): Promise<Result<UpdateItem>>;
   /** Iterative Layer (M10): self-assessment and the improvement backlog. Approving an item changes nothing in the app. */
   improvementsOverview(filter?: { status?: string }): Promise<Result<ImprovementsOverview>>;
   getImprovement(id: string): Promise<Result<ImprovementDetail>>;
@@ -206,6 +215,12 @@ export const IAP_METHODS = [
   'restoreCleanup',
   'cancelCleanup',
   'listCleanups',
+  'checkUpdates',
+  'getUpdates',
+  'approveUpdate',
+  'dismissUpdate',
+  'reopenUpdate',
+  'verifyUpdate',
   'runAgent',
   'listAgentTasks',
   'agentStatus',

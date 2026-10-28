@@ -3,6 +3,7 @@
 // treated as untrusted and validated here, the security boundary (ARCH §3.2):
 // UI controls are not relied on for authorization or validation.
 
+import { homedir } from 'node:os';
 import Anthropic from '@anthropic-ai/sdk';
 import { CLAUDE_MODEL, ClaudeModel, type ClaudeClient } from '../core/agents/claude.ts';
 import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
@@ -16,6 +17,7 @@ import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
 import { REFERENCE_KINDS, Studio, type ReferenceEdit } from '../core/studio/library.ts';
 import { Backlog, type ImprovementStatus } from '../core/iterate/backlog.ts';
 import { Cleanup, claudeRunner, type CleanupPlan } from '../core/cleanup/cleanup.ts';
+import { bundledVersions, claudeVersionReader, httpFetcher, UpdateMonitor, type Fetcher, type ModelInfo } from '../core/updates/updates.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -26,7 +28,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference';
+type AsyncMethod = 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -80,6 +82,12 @@ export interface ServiceOptions {
   confirmCleanup?: (request: { title: string; lines: string[] }) => Promise<boolean>;
   /** Replaces the `claude` executable. Tests pass a stand-in; the app finds claude on PATH. */
   claudeCommand?: string[];
+  /** Reaches the trusted update sources (M12). Tests pass a fake so nothing goes to the network. */
+  fetcher?: Fetcher;
+  /** Lists the models the stored key can use. Tests pass a fake. */
+  listModels?: (apiKey: string) => Promise<ModelInfo[]>;
+  /** Exact versions of the built-in libraries; read from the build when omitted. */
+  bundled?: Record<string, string | null>;
 }
 
 /** What the native approval dialog shows: the exact command or move, and what else changes. */
@@ -146,6 +154,9 @@ export class AppService {
   private readonly claudeCommand: string[] | undefined;
   private readonly checkTimeoutMs: number | undefined;
   private readonly pickFiles: () => Promise<string[]>;
+  private readonly fetcher: Fetcher;
+  private readonly listModels: (apiKey: string) => Promise<ModelInfo[]>;
+  private readonly bundled: Record<string, string | null> | undefined;
 
   constructor(home: string, version: string, options: ServiceOptions = {}) {
     this.home = home;
@@ -157,6 +168,14 @@ export class AppService {
     this.confirmChecks = options.confirmChecks ?? (async () => false);
     this.confirmCleanup = options.confirmCleanup ?? (async () => false);
     this.claudeCommand = options.claudeCommand;
+    this.fetcher = options.fetcher ?? httpFetcher();
+    this.bundled = options.bundled;
+    this.listModels =
+      options.listModels ??
+      (async (apiKey) => {
+        const page = await new Anthropic({ apiKey, maxRetries: 1 }).models.list({ limit: 100 });
+        return page.data.map((m) => ({ id: m.id, createdAt: m.created_at ?? null, name: m.display_name ?? null }));
+      });
     this.checkTimeoutMs = options.checkTimeoutMs;
     this.pickFiles = options.pickFiles ?? (async () => []);
     this.tryOpen();
@@ -260,6 +279,18 @@ export class AppService {
 
   private cleanup(): Cleanup {
     return new Cleanup(this.workspace(), this.scanRoots(), claudeRunner(this.claudeCommand));
+  }
+
+  private updates(): UpdateMonitor {
+    const key = this.keys.get();
+    return new UpdateMonitor(this.workspace(), {
+      fetcher: this.fetcher,
+      bundled: this.bundled ?? bundledVersions(),
+      claudeVersion: claudeVersionReader(claudeRunner(this.claudeCommand), homedir()),
+      listModels: key ? () => this.listModels(key) : null,
+      currentModel: CLAUDE_MODEL,
+      rescan: () => runToolScan(this.scanRoots()),
+    });
   }
 
   close(): void {
@@ -371,6 +402,21 @@ export class AppService {
       }),
     cancelCleanup: (planId) => wrap(() => this.cleanup().cancel(str(planId, 'Plan id')!)),
     listCleanups: () => wrap(() => this.workspace().listCleanupPlans()),
+    // Update monitor (M12). The renderer cannot name a source: the list is fixed in core.
+    checkUpdates: () => wrapAsync(() => this.updates().check()),
+    getUpdates: () => wrap(() => this.updates().overview()),
+    approveUpdate: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Update');
+        return this.updates().approve(str(i.id, 'Update id')!, str(i.note, 'Note', true) ?? null);
+      }),
+    dismissUpdate: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Update');
+        return this.updates().dismiss(str(i.id, 'Update id')!, str(i.reason, 'Reason')!);
+      }),
+    reopenUpdate: (id) => wrap(() => this.updates().reopen(str(id, 'Update id')!)),
+    verifyUpdate: (id) => wrapAsync(() => this.updates().verify(str(id, 'Update id')!)),
     // The renderer cannot grant tools: delegated tasks get none (DEC-017).
     runAgent: (input) =>
       wrapAsync(async () => {

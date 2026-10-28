@@ -5,7 +5,7 @@ import type { Project } from '../shared/api.ts';
 import { SECTION_LABEL, type Section } from './App.tsx';
 import { Icon } from './icons.tsx';
 
-type Item = { id: string; label: string; hint: string; icon: 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'iterate' | 'settings' | 'plus'; run: () => void };
+type Item = { id: string; label: string; hint: string; icon: 'home' | 'projects' | 'activity' | 'studio' | 'tools' | 'radar' | 'iterate' | 'settings' | 'plus'; run: () => void };
 
 const DESTINATIONS: { id: Section; icon: Item['icon'] }[] = [
   { id: 'home', icon: 'home' },
@@ -13,6 +13,7 @@ const DESTINATIONS: { id: Section; icon: Item['icon'] }[] = [
   { id: 'activity', icon: 'activity' },
   { id: 'studio', icon: 'studio' },
   { id: 'tools', icon: 'tools' },
+  { id: 'updates', icon: 'radar' },
   { id: 'iterative', icon: 'iterate' },
   { id: 'settings', icon: 'settings' },
 ];

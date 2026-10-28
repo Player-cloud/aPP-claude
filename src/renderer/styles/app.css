@@ -2519,3 +2519,20 @@ button.status-pill {
   padding: 0;
   list-style: none;
 }
+
+/* ---- Updates (M12) ---------------------------------------------------------- */
+.upd-list {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  display: grid;
+  gap: var(--space-1);
+}
+.upd-url {
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+}
+.upd-sources td {
+  vertical-align: top;
+}

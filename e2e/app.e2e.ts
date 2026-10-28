@@ -911,3 +911,84 @@ test('M11: resolve tool conflicts with a dry run, a native approval, a verified 
     await app.close();
   }
 });
+
+test('M12: check trusted sources for updates, approve one, see it installed by the next check, and verify it', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const fixture = buildClaudeFixture(join(home, 'machine'));
+  const versionFile = join(home, 'claude-version.txt');
+  writeFileSync(versionFile, '2.0.0');
+  const sources = join(home, 'sources.json');
+  const npm = 'https://registry.npmjs.org/';
+  writeFileSync(
+    sources,
+    JSON.stringify({
+      [`${npm}@anthropic-ai%2fclaude-code/latest`]: { json: { version: '2.1.0' } },
+      'https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md': { text: '## 2.1.0\n\n- Added plugin update notes\n- Fixed a crash\n\n## 2.0.0\n\n- Old\n' },
+      [`${npm}@anthropic-ai%2fsdk/latest`]: { json: { version: '1.3.0' } },
+      [`${npm}react/latest`]: { json: { version: '18.3.1' } },
+      [`${npm}react-dom/latest`]: { json: { version: '18.3.1' } },
+      [`${npm}-/npm/v1/security/advisories/bulk`]: { json: {} },
+      'https://raw.githubusercontent.com/acme/plugins/HEAD/.claude-plugin/marketplace.json': { json: { plugins: [{ name: 'review-kit', version: '1.3.0' }] } },
+    }),
+  );
+  const { app, page } = await launch(join(home, 'app'), {
+    CLAUDE_CONFIG_DIR: fixture.configDir,
+    IAP_CLAUDE_COMMAND: JSON.stringify([process.execPath, join(ROOT, 'test', 'fake-claude.mjs')]),
+    FAKE_CLAUDE_VERSION_FILE: versionFile,
+    // Every source answers from this file; electron is left out, so it is unreachable.
+    IAP_UPDATE_FIXTURE: sources,
+  });
+  try {
+    await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'Tools', exact: true }).click();
+    await page.getByRole('button', { name: 'Scan now' }).click();
+    await page.locator('details.finding').first().waitFor();
+
+    await page.getByRole('button', { name: 'Updates', exact: true }).first().click();
+    await page.getByRole('heading', { name: 'No check yet' }).waitFor();
+    await page.getByRole('button', { name: 'Check for updates' }).click();
+    const table = page.getByRole('table', { name: 'Sources' });
+    await table.waitFor();
+    await table.locator('tr', { hasText: 'npm registry: electron' }).getByText('Unreachable').waitFor();
+    await table.locator('tr', { hasText: 'Anthropic model list' }).getByText('Not checked').waitFor();
+    await page.getByText(/Some sources have not answered recently/).waitFor();
+    const list = page.getByRole('list', { name: 'Updates' });
+    await list.getByText('review-kit@acme 1.3.0 is available (user install)').waitFor();
+
+    await list.getByRole('button', { name: /Claude Code 2\.1\.0 is available/ }).click();
+    const inspector = page.getByRole('complementary', { name: 'Update details panel' });
+    await inspector.getByText('Added plugin update notes').waitFor();
+    await inspector.getByText(/run claude update in a terminal/).waitFor();
+    await inspector.getByText(/Tool cleanup: runs claude plugin and claude mcp/).waitFor();
+    await page.getByRole('heading', { level: 1, name: /Watch for updates/ }).scrollIntoViewIfNeeded();
+    await shot(page, '27-updates-found-dark-1280');
+
+    await inspector.getByLabel('Note (optional, kept with your approval)').fill('Want the plugin fixes');
+    await inspector.getByRole('button', { name: 'Approve' }).click();
+    await inspector.getByText(/Approved by .*: Want the plugin fixes/).waitFor();
+    assert.equal(readFileSync(versionFile, 'utf8'), '2.0.0', 'approving installs nothing');
+
+    // The person updates Claude Code outside the app; the next check sees it.
+    writeFileSync(versionFile, '2.1.0');
+    await page.getByRole('button', { name: 'Check for updates' }).click();
+    await inspector.getByText(/Installed, seen by the check on/).waitFor();
+    await inspector.getByText('Claude Code 2.1.0 is installed.').waitFor();
+    await inspector.getByRole('button', { name: 'Verify' }).click();
+    await inspector.getByText('Version 2.1.0 is in place (wanted 2.1.0 or later).').waitFor();
+    await inspector.getByText(/fresh tool scan finished/).waitFor();
+    await list.getByRole('button', { name: /Claude Code 2\.1\.0/ }).getByText('Verified').waitFor();
+    await shot(page, '28-updates-verified-dark-1280');
+
+    // Dismissing needs a reason.
+    await list.getByRole('button', { name: /review-kit@acme 1\.3\.0 is available \(user install\)/ }).click();
+    await inspector.getByRole('button', { name: 'Dismiss…' }).click();
+    const dismiss = inspector.getByRole('button', { name: 'Dismiss', exact: true });
+    assert.equal(await dismiss.isDisabled(), true);
+    await inspector.getByLabel('Why you do not want it').fill('Waiting for the team');
+    await dismiss.click();
+    await inspector.getByText('Dismissed by', { exact: false }).waitFor();
+  } finally {
+    await app.close();
+  }
+});

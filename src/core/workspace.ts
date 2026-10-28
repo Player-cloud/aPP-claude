@@ -26,9 +26,10 @@ import type { UiAudit } from './design/audit.ts';
 import type { Evidence, Improvement, SelfAssessmentRecord } from './iterate/backlog.ts';
 import type { SelfAssessmentReport } from './iterate/assess.ts';
 import type { CleanupPlan } from './cleanup/cleanup.ts';
+import type { SourceResult, UpdateCheck, UpdateItem } from './updates/updates.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -485,6 +486,64 @@ const MIGRATIONS: Record<number, string> = {
         OR (OLD.status IN ('done','partial') AND NEW.status NOT IN ('done','partial','restored'))
         OR NEW.dry_run IS NOT OLD.dry_run OR NEW.entry IS NOT OLD.entry
       BEGIN SELECT RAISE(ABORT, 'a finished cleanup plan cannot change'); END;
+  `,
+  13: `
+    -- M12 external change monitor: one row per check (which sources answered) and one per
+    -- update found. Discovery, approval, installation and verification are separate fields.
+    CREATE TABLE update_checks (
+      id TEXT PRIMARY KEY,
+      at TEXT NOT NULL,
+      sources TEXT NOT NULL,
+      not_checked TEXT NOT NULL,
+      created TEXT NOT NULL DEFAULT '[]',
+      updated TEXT NOT NULL DEFAULT '[]',
+      installed TEXT NOT NULL DEFAULT '[]',
+      finished_at TEXT
+    );
+    CREATE INDEX update_checks_at ON update_checks(at);
+    CREATE TRIGGER update_checks_frozen BEFORE UPDATE ON update_checks
+      WHEN OLD.finished_at IS NOT NULL OR NEW.sources IS NOT OLD.sources OR NEW.at IS NOT OLD.at
+      BEGIN SELECT RAISE(ABORT, 'a finished update check cannot change'); END;
+    CREATE TRIGGER update_checks_no_delete BEFORE DELETE ON update_checks
+      BEGIN SELECT RAISE(ABORT, 'update checks are never deleted'); END;
+    CREATE TABLE updates (
+      id TEXT PRIMARY KEY,
+      number INTEGER NOT NULL UNIQUE,
+      signature TEXT NOT NULL UNIQUE,
+      tool_key TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('library','runtime','cli','model','plugin')),
+      priority TEXT NOT NULL CHECK (priority IN ('security','breaking','deprecation','improvement','info')),
+      confidence TEXT NOT NULL CHECK (confidence IN ('high','medium','low')),
+      stage TEXT NOT NULL CHECK (stage IN ('recommended','approved','dismissed','installed','verified','failed','superseded')),
+      title TEXT NOT NULL,
+      installed_version TEXT,
+      observed_version TEXT,
+      summary TEXT NOT NULL,
+      source TEXT NOT NULL,
+      impacts TEXT NOT NULL,
+      recommendation TEXT NOT NULL,
+      install_steps TEXT NOT NULL,
+      evaluation TEXT NOT NULL,
+      first_check_id TEXT NOT NULL REFERENCES update_checks(id),
+      last_check_id TEXT NOT NULL REFERENCES update_checks(id),
+      detected_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      approval TEXT,
+      dismissal TEXT,
+      installed TEXT,
+      verification TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX updates_tool ON updates(tool_key);
+    CREATE TRIGGER updates_no_delete BEFORE DELETE ON updates
+      BEGIN SELECT RAISE(ABORT, 'updates are never deleted'); END;
+    CREATE TRIGGER updates_final BEFORE UPDATE ON updates
+      WHEN OLD.stage IN ('verified','superseded')
+        OR NEW.signature IS NOT OLD.signature OR NEW.tool_key IS NOT OLD.tool_key
+        OR NEW.first_check_id IS NOT OLD.first_check_id OR NEW.detected_at IS NOT OLD.detected_at
+      BEGIN SELECT RAISE(ABORT, 'a finished update cannot change'); END;
   `,
 };
 
@@ -1335,6 +1394,91 @@ export class Workspace {
     return this.getCleanupPlan(id);
   }
 
+  // ---- External change monitor (M12) -----------------------------------------
+
+  createUpdateCheck(c: Pick<UpdateCheck, 'id' | 'at' | 'sources' | 'notChecked'>): void {
+    this.transaction(() => {
+      this.db.prepare('INSERT INTO update_checks (id, at, sources, not_checked) VALUES (?, ?, ?, ?)').run(c.id, c.at, JSON.stringify(redact(c.sources)), JSON.stringify(c.notChecked));
+    });
+  }
+
+  finishUpdateCheck(id: string, r: Pick<UpdateCheck, 'created' | 'updated' | 'installed'>): void {
+    this.transaction(() => {
+      this.db.prepare('UPDATE update_checks SET created = ?, updated = ?, installed = ?, finished_at = ? WHERE id = ?').run(JSON.stringify(r.created), JSON.stringify(r.updated), JSON.stringify(r.installed), this.timestamp(), id);
+      const c = this.getUpdateCheck(id);
+      this.record('update.checked', null, null, {
+        checkId: id,
+        sources: c.sources.map((s: SourceResult) => ({ id: s.id, status: s.status })),
+        created: r.created.length,
+        updated: r.updated.length,
+        installed: r.installed.length,
+      });
+    });
+  }
+
+  getUpdateCheck(id: string): UpdateCheck {
+    const row = this.db.prepare('SELECT * FROM update_checks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Update check', id);
+    return toUpdateCheck(row);
+  }
+
+  listUpdateChecks(limit = 20): UpdateCheck[] {
+    return (this.db.prepare('SELECT * FROM update_checks WHERE finished_at IS NOT NULL ORDER BY at DESC, rowid DESC LIMIT ?').all(limit) as Record<string, unknown>[]).map(toUpdateCheck);
+  }
+
+  createUpdate(u: Pick<UpdateItem, 'signature' | 'toolKey' | 'toolName' | 'kind' | 'priority' | 'confidence' | 'title' | 'installedVersion' | 'observedVersion' | 'summary' | 'source' | 'impacts' | 'recommendation' | 'installSteps' | 'evaluation'> & { checkId: string }): UpdateItem {
+    const id = `upd_${randomUUID()}`;
+    const at = this.timestamp();
+    const j = (v: unknown) => JSON.stringify(redact(v));
+    this.transaction(() => {
+      const number = Number((this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM updates').get() as { n: number }).n);
+      this.db
+        .prepare(
+          `INSERT INTO updates (id, number, signature, tool_key, tool_name, kind, priority, confidence, stage, title, installed_version, observed_version, summary, source, impacts,
+             recommendation, install_steps, evaluation, first_check_id, last_check_id, detected_at, last_seen_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'recommended', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, number, u.signature, u.toolKey, redactString(u.toolName), u.kind, u.priority, u.confidence, redactString(u.title), u.installedVersion, u.observedVersion, j(u.summary), j(u.source), j(u.impacts), redactString(u.recommendation), j(u.installSteps), j(u.evaluation), u.checkId, u.checkId, at, at, at, at);
+      this.record('update.discovered', null, null, { updateId: id, checkId: u.checkId, tool: u.toolKey, installed: u.installedVersion, observed: u.observedVersion, priority: u.priority, source: u.source.name });
+    });
+    return this.getUpdate(id);
+  }
+
+  /** A later check saw the same update again. */
+  touchUpdate(id: string, checkId: string, patch: { summary: string[]; installedVersion: string | null }): void {
+    this.transaction(() => {
+      this.db.prepare('UPDATE updates SET last_check_id = ?, last_seen_at = ?, summary = ?, installed_version = ?, updated_at = ? WHERE id = ?').run(checkId, this.timestamp(), JSON.stringify(redact(patch.summary)), patch.installedVersion, this.timestamp(), id);
+    });
+  }
+
+  updateUpdate(id: string, patch: Partial<Pick<UpdateItem, 'stage' | 'approval' | 'dismissal' | 'installed' | 'verification'>>, event: { type: string; payload: Record<string, unknown> }): UpdateItem {
+    const n = { ...this.getUpdate(id), ...patch };
+    const j = (v: unknown) => (v === null ? null : JSON.stringify(redact(v)));
+    this.transaction(() => {
+      this.db.prepare('UPDATE updates SET stage = ?, approval = ?, dismissal = ?, installed = ?, verification = ?, updated_at = ? WHERE id = ?').run(n.stage, j(n.approval), j(n.dismissal), j(n.installed), j(n.verification), this.timestamp(), id);
+      this.record(event.type, null, null, { updateId: id, stage: n.stage, ...event.payload });
+    });
+    return this.getUpdate(id);
+  }
+
+  getUpdate(id: string): UpdateItem {
+    const row = this.db.prepare('SELECT * FROM updates WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Update', id);
+    return toUpdate(row);
+  }
+
+  findUpdateBySignature(signature: string): UpdateItem | null {
+    const row = this.db.prepare('SELECT * FROM updates WHERE signature = ?').get(signature) as Record<string, unknown> | undefined;
+    return row ? toUpdate(row) : null;
+  }
+
+  listUpdates(filter: { toolKey?: string }): UpdateItem[] {
+    const rows = filter.toolKey
+      ? this.db.prepare('SELECT * FROM updates WHERE tool_key = ? ORDER BY number DESC').all(filter.toolKey)
+      : this.db.prepare('SELECT * FROM updates ORDER BY number DESC').all();
+    return (rows as Record<string, unknown>[]).map(toUpdate);
+  }
+
   // ---- Improvement backlog (M10) ---------------------------------------------
 
   createImprovement(i: Pick<Improvement, 'title' | 'problem' | 'expectedOutcome' | 'successCriteria' | 'priority' | 'risk' | 'status' | 'source' | 'signature' | 'evidence'>): Improvement {
@@ -1830,6 +1974,53 @@ function toRelease(row: Record<string, unknown>): Release {
     updatedAt: String(row.updated_at),
     checkedAt: (row.checked_at as string | null) ?? null,
     preparedAt: (row.prepared_at as string | null) ?? null,
+  };
+}
+
+function toUpdateCheck(row: Record<string, unknown>): UpdateCheck {
+  const json = <T,>(k: string) => JSON.parse(String(row[k])) as T;
+  return {
+    id: String(row.id),
+    at: String(row.at),
+    sources: json<SourceResult[]>('sources'),
+    notChecked: json<string[]>('not_checked'),
+    created: json<string[]>('created'),
+    updated: json<string[]>('updated'),
+    installed: json<string[]>('installed'),
+  };
+}
+
+function toUpdate(row: Record<string, unknown>): UpdateItem {
+  const json = <T,>(k: string) => (row[k] === null || row[k] === undefined ? null : (JSON.parse(String(row[k])) as T));
+  return {
+    id: String(row.id),
+    number: Number(row.number),
+    signature: String(row.signature),
+    toolKey: String(row.tool_key),
+    toolName: String(row.tool_name),
+    kind: row.kind as UpdateItem['kind'],
+    priority: row.priority as UpdateItem['priority'],
+    confidence: row.confidence as UpdateItem['confidence'],
+    stage: row.stage as UpdateItem['stage'],
+    title: String(row.title),
+    installedVersion: (row.installed_version as string | null) ?? null,
+    observedVersion: (row.observed_version as string | null) ?? null,
+    summary: json<string[]>('summary') ?? [],
+    source: json<UpdateItem['source']>('source')!,
+    impacts: json<UpdateItem['impacts']>('impacts')!,
+    recommendation: String(row.recommendation),
+    installSteps: json<string[]>('install_steps') ?? [],
+    evaluation: json<string[]>('evaluation') ?? [],
+    firstCheckId: String(row.first_check_id),
+    lastCheckId: String(row.last_check_id),
+    detectedAt: String(row.detected_at),
+    lastSeenAt: String(row.last_seen_at),
+    approval: json<UpdateItem['approval']>('approval'),
+    dismissal: json<UpdateItem['dismissal']>('dismissal'),
+    installed: json<UpdateItem['installed']>('installed'),
+    verification: json<UpdateItem['verification']>('verification'),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 
