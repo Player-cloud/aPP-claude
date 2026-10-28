@@ -66,7 +66,7 @@ export interface ReleasePlan {
 export interface IncludedBuild {
   id: string;
   title: string;
-  kind: 'feature' | 'bugfix';
+  kind: 'feature' | 'bugfix' | 'ui_polish';
   status: string;
   requirementIds: string[];
   /** The latest result of each check in the build's last verification. */

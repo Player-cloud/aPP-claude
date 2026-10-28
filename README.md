@@ -19,6 +19,7 @@ Implemented and tested:
 - **Releases**: a ship-check runs your release checks on the repository's current commit (after you approve them), scans tracked files for credentials, and checks the included work against the approved spec. Eight gates show the evidence they were decided on; a failed required gate blocks the release unless you record an exception with a mitigation. *Prepared* means ready to ship: the app does not deploy, tag or push.
 - **Import and assessment**: register an existing git repository as a project without changing it, then assess it read-only. The app reads the current commit from git's object store (never the working folder, never running its code), summarises structure, stack, dependencies, tests, configuration and documentation, and gives each of 29 capabilities (Product, Operations, Interfaces, Management) a status with evidence, confidence, impact and a next step. Anything that lives with an outside provider is *not verified*, and a focused assessment of one category or capability records its scope first and stays inside it. No AI calls.
 - **Learning Studio**: collect screenshots, designs and short videos you want to learn from. Files are checked by their content and copied into the app (your originals stay where they are). Tag them, add notes, link them to a project, search and group them. The agent can suggest a kind, tags and a description, which you accept or correct; with real calls on, Claude looks at the image for about 1 to 3 cents. A reference never changes a spec.
+- **Polish the UI**: a third kind of build work. It first audits the project's design tokens, components, libraries and breakpoints, gives the agent your chosen references as inspiration, and its review flags new UI libraries, raw colours, accessibility slips and motion problems. One check always asks you to look at the screens yourself.
 - Under both: the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI.
 
 Not yet built: deployment, running code-review and security-review tools, integrations (so external state is never verified), safe cleanup of tools, and the rest of the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
@@ -48,6 +49,7 @@ npm run iap -- release new <projectId> --version 1.0.0 --check unit="npm test" -
 npm run iap -- release check <releaseId> --confirm   # exit 4 if a gate blocks; never deploys
 npm run iap -- plan brief <projectId>            # draft the concept brief; then plan edit / approve / revise / diff
 npm run iap -- plan show <projectId>
+npm run iap -- build new <projectId> --kind ui_polish --title "Calmer cards" --goal "..." --check unit="npm test" --ref <refId> --motion
 npm run iap -- build new <projectId> --kind bugfix --title "..." --goal "..." --repro "..." --check unit="npm test"
 npm run iap -- build start <buildId> --confirm      # then: build agent / build verify / build done
 npm run iap -- doctor

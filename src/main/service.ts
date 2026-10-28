@@ -103,6 +103,8 @@ function buildInput(value: unknown): BuildInput {
     components: strings(i.components, 'Components'),
     checks: i.checks as BuildInput['checks'],
     repro: str(i.repro, 'Reproduction steps', true) ?? null,
+    referenceIds: strings(i.referenceIds, 'References'),
+    motion: i.motion === undefined ? undefined : (i.motion as boolean),
   };
 }
 

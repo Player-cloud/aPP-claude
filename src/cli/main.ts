@@ -23,6 +23,7 @@ import type { ReleasePlan } from '../core/release/gates.ts';
 import { Assessor, scopeLabel, STATUS_LABEL } from '../core/assess/assessor.ts';
 import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
 import { Studio, type DesignReference, type ReferenceEdit } from '../core/studio/library.ts';
+import { describeAudit } from '../core/design/audit.ts';
 import type { Assessment } from '../core/workspace.ts';
 import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
@@ -61,8 +62,9 @@ Planning (concept brief → specification, versioned under the project's docs/de
 
 Build work (each feature or bug fix gets its own git worktree and branch; nothing is merged for you)
   build repo <projectId> <folder> | --init    Use a git repository for this project (--init: the app's own project folder)
-  build new <projectId> --kind <feature|bugfix> --title <t> --goal <text> --check <id=command>...
+  build new <projectId> --kind <feature|bugfix|ui_polish> --title <t> --goal <text> --check <id=command>...
             [--req <REQ-ID>]... [--component <path>]... [--repro <steps>]
+            [--ref <refId>]... [--motion]      ui_polish: Learning Studio references to follow; --motion if animation is asked for
   build start <buildId> --confirm             Create the worktree and run the checks once (--confirm approves the commands)
   build agent <buildId>                       Let the agent change the worktree (simulated unless real calls are on)
   build verify <buildId>                      Run the checks again and review the diff
@@ -155,6 +157,8 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       unlink: { type: 'boolean', default: false },
       archived: { type: 'boolean', default: false },
       restore: { type: 'boolean', default: false },
+      ref: { type: 'string', multiple: true },
+      motion: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -470,6 +474,8 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
           components: values.component,
           checks,
           repro: values.repro ?? null,
+          referenceIds: values.ref,
+          motion: values.motion,
         });
         print(b, () => out(`${b.id}  ${b.kind} draft: ${b.title}. Start it with: iap build start ${b.id} --confirm`));
         return 0;
@@ -667,6 +673,8 @@ function describeRelease({ release: r, checkRuns, exceptions, blocking }: Releas
 function describeBuild({ build: b, checkRuns }: BuildDetail, out: Out): void {
   out(`${b.id}  ${b.kind} ${b.status}: ${b.title}`);
   if (b.branch) out(`  branch ${b.branch} in ${b.worktree}`);
+  if (b.uiAudit) for (const line of describeAudit(b.uiAudit)) out(`  audit: ${line}`);
+  if (b.referenceIds.length) out(`  references: ${b.referenceIds.join(', ')}${b.motion ? '   motion: yes' : ''}`);
   for (const r of checkRuns) out(`  ${r.phase.padEnd(8)} ${r.checkId.padEnd(12)} ${r.status.padEnd(9)} exit ${r.exitCode ?? '-'}  ${r.command}`);
   if (b.agent) out(`  agent (${b.agent.model}): ${b.agent.status}, ${b.agent.steps.length} tool calls, files written: ${b.agent.filesWritten.join(', ') || 'none'}`);
   if (b.changedFiles) out(`  changed: ${b.changedFiles.map((f) => `${f.path} (+${f.added} -${f.removed})`).join(', ') || 'nothing'}`);

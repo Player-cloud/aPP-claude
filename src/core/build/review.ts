@@ -7,7 +7,25 @@ import { ranNoTests, type CheckResult } from './checks.ts';
 import type { ChangedFile } from './git.ts';
 
 export interface Risk {
-  kind: 'regression' | 'still_failing' | 'not_run' | 'not_reproduced' | 'unrelated_file' | 'weakened_test' | 'deleted_test' | 'no_test' | 'no_change' | 'truncated' | 'no_tests_ran';
+  kind:
+    | 'regression'
+    | 'still_failing'
+    | 'not_run'
+    | 'not_reproduced'
+    | 'unrelated_file'
+    | 'weakened_test'
+    | 'deleted_test'
+    | 'no_test'
+    | 'no_change'
+    | 'truncated'
+    | 'no_tests_ran'
+    // UI polish (M9, DEC-025)
+    | 'new_ui_library'
+    | 'off_token_value'
+    | 'accessibility'
+    | 'motion_reduced'
+    | 'motion_performance'
+    | 'manual_check';
   detail: string;
 }
 
@@ -26,7 +44,7 @@ function inComponents(path: string, components: string[]): boolean {
 }
 
 /** Lines added to each file in a unified diff. */
-function addedLines(patch: string): Map<string, string[]> {
+export function addedLines(patch: string): Map<string, string[]> {
   const out = new Map<string, string[]>();
   let file = '';
   for (const line of patch.split('\n')) {
@@ -39,7 +57,7 @@ function addedLines(patch: string): Map<string, string[]> {
 }
 
 export function reviewChange(input: {
-  kind: 'feature' | 'bugfix';
+  kind: 'feature' | 'bugfix' | 'ui_polish';
   files: ChangedFile[];
   patch: string;
   truncated: boolean;
@@ -79,7 +97,12 @@ export function reviewChange(input: {
   if (files.length && !files.some((f) => isTestFile(f.path) && f.status !== 'deleted')) {
     risks.push({
       kind: 'no_test',
-      detail: input.kind === 'bugfix' ? 'No regression test was added or changed. Say why if one is not practical.' : 'No test was added or changed for this feature.',
+      detail:
+        input.kind === 'bugfix'
+          ? 'No regression test was added or changed. Say why if one is not practical.'
+          : input.kind === 'ui_polish'
+            ? 'No test was added or changed. Say how the polished screens were checked.'
+            : 'No test was added or changed for this feature.',
     });
   }
   return risks;

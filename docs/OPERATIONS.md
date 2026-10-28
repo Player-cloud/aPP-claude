@@ -70,6 +70,7 @@ The database is the source of truth: editing these files does not change the app
 | Check commands | Typed by you, approved in a dialog (desktop) or with `--confirm` (CLI), then run through the system shell in the worktree **with your permissions**. They are not sandboxed. Variables that look like secrets (`ANTHROPIC_*`, `*_TOKEN`, `*_API_KEY`, `*_SECRET`, `AWS_*`, `GH_*`, …) are removed from their environment; each run has a 10-minute limit |
 | Reports | `<project folder>/docs/builds/<buildId>.md`: checks before and after, agent summary, changed files and unresolved risks |
 | Finished work | *Mark done* commits the change on the build's branch inside the worktree (hooks off; your git identity, or "Iterative Platform" if none is set). Your checkout is not touched |
+| UI polish (M9, DEC-025) | Branch `iap/polish-…`. At start the app reads the worktree's tracked CSS, component and package files (up to 4,000 files, 256 KB each; nothing runs) and stores the audit on the build and in its report. The review adds design risks and always a *manual check*, so *Mark done* needs a note saying what you checked |
 | Merging and clean-up | Never done by the app. Merge the branch yourself; remove a finished worktree with `git worktree remove <path>` and its branch with `git branch -d <branch>` |
 
 ## Releases (M7, DEC-022)

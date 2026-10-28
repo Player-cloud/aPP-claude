@@ -22,9 +22,10 @@ import type { AgentStep } from './build/agent.ts';
 import type { DriftKind, Gate, GateException, ReleaseEvidence, ReleasePlan } from './release/gates.ts';
 import type { AssessmentReport, AssessmentScope } from './assess/assessor.ts';
 import type { DesignReference, ReferenceKind, ReferenceSuggestion } from './studio/library.ts';
+import type { UiAudit } from './design/audit.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -87,6 +88,13 @@ export interface AuditEvent {
   runId: string | null;
   payload: Record<string, unknown>;
 }
+
+/**
+ * Migrations that rebuild a table other tables point at. SQLite's documented way
+ * is to switch foreign keys off around the transaction and run foreign_key_check
+ * before committing.
+ */
+const REBUILDS = new Set([10]);
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -357,6 +365,47 @@ const MIGRATIONS: Record<number, string> = {
     CREATE TRIGGER design_refs_no_delete BEFORE DELETE ON design_refs
       BEGIN SELECT RAISE(ABORT, 'references are archived, never deleted'); END;
   `,
+  10: `
+    -- M9 "Polish the UI" work: a third kind of build, with the references it uses,
+    -- whether motion was asked for, and the UI audit taken before it started.
+    -- SQLite cannot change a CHECK, so the table is rebuilt (with foreign keys off, see
+    -- REBUILDS); check_runs keep pointing at the same ids, which is checked before commit.
+    CREATE TABLE builds_v10 (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      kind TEXT NOT NULL CHECK (kind IN ('feature','bugfix','ui_polish')),
+      title TEXT NOT NULL,
+      goal TEXT NOT NULL,
+      requirement_ids TEXT NOT NULL,
+      components TEXT NOT NULL,
+      checks TEXT NOT NULL,
+      repro TEXT,
+      status TEXT NOT NULL CHECK (status IN ('draft','in_progress','review','completed','abandoned')),
+      repo_path TEXT,
+      branch TEXT,
+      worktree TEXT,
+      base_commit TEXT,
+      agent TEXT,
+      changed_files TEXT,
+      risks TEXT,
+      note TEXT,
+      report_path TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      result_commit TEXT,
+      reference_ids TEXT NOT NULL DEFAULT '[]',
+      motion INTEGER NOT NULL DEFAULT 0,
+      ui_audit TEXT
+    );
+    INSERT INTO builds_v10 (id, project_id, kind, title, goal, requirement_ids, components, checks, repro, status, repo_path, branch, worktree, base_commit,
+                            agent, changed_files, risks, note, report_path, created_at, updated_at, completed_at, result_commit)
+      SELECT id, project_id, kind, title, goal, requirement_ids, components, checks, repro, status, repo_path, branch, worktree, base_commit,
+             agent, changed_files, risks, note, report_path, created_at, updated_at, completed_at, result_commit FROM builds;
+    DROP TABLE builds;
+    ALTER TABLE builds_v10 RENAME TO builds;
+    CREATE INDEX builds_project ON builds(project_id, created_at);
+  `,
 };
 
 export type ReleaseStatus = 'draft' | 'checked' | 'prepared' | 'abandoned';
@@ -394,7 +443,7 @@ export interface ReleaseCheckRun extends CheckResult {
   commit: string;
 }
 
-export type BuildKind = 'feature' | 'bugfix';
+export type BuildKind = 'feature' | 'bugfix' | 'ui_polish';
 export type BuildStatus = 'draft' | 'in_progress' | 'review' | 'completed' | 'abandoned';
 export type CheckPhase = 'baseline' | 'agent' | 'verify';
 
@@ -437,6 +486,10 @@ export interface Build {
   reportPath: string | null;
   /** The commit on the build's branch that holds the finished change (M7). */
   resultCommit: string | null;
+  /** UI polish (M9): Learning Studio references to follow, whether motion was asked for, and the audit taken at start. */
+  referenceIds: string[];
+  motion: boolean;
+  uiAudit: UiAudit | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -619,11 +672,18 @@ export class Workspace {
       throw new StateTooNewError(this.paths.db, current, SCHEMA_VERSION);
     }
     for (let version = current + 1; version <= SCHEMA_VERSION; version++) {
-      this.transaction(() => {
-        this.db.exec(MIGRATIONS[version]!);
-        this.db.exec(`PRAGMA user_version = ${version}`);
-        this.record('schema.migrated', null, null, { from: version - 1, to: version, firstRun });
-      });
+      const rebuild = REBUILDS.has(version);
+      if (rebuild) this.db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        this.transaction(() => {
+          this.db.exec(MIGRATIONS[version]!);
+          if (rebuild && this.db.prepare('PRAGMA foreign_key_check').all().length) throw new Error(`Migration ${version} would leave broken references.`);
+          this.db.exec(`PRAGMA user_version = ${version}`);
+          this.record('schema.migrated', null, null, { from: version - 1, to: version, firstRun });
+        });
+      } finally {
+        if (rebuild) this.db.exec('PRAGMA foreign_keys = ON');
+      }
     }
   }
 
@@ -939,7 +999,18 @@ export class Workspace {
     return this.getProject(project.id);
   }
 
-  createBuild(input: { projectId: string; kind: BuildKind; title: string; goal: string; requirementIds: string[]; components: string[]; checks: Check[]; repro: string | null }): Build {
+  createBuild(input: {
+    projectId: string;
+    kind: BuildKind;
+    title: string;
+    goal: string;
+    requirementIds: string[];
+    components: string[];
+    checks: Check[];
+    repro: string | null;
+    referenceIds?: string[];
+    motion?: boolean;
+  }): Build {
     const project = this.getProject(input.projectId);
     const id = `build_${randomUUID()}`;
     const at = this.timestamp();
@@ -947,8 +1018,8 @@ export class Workspace {
     this.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO builds (id, project_id, kind, title, goal, requirement_ids, components, checks, repro, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+          `INSERT INTO builds (id, project_id, kind, title, goal, requirement_ids, components, checks, repro, reference_ids, motion, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
         )
         .run(
           id,
@@ -960,6 +1031,8 @@ export class Workspace {
           JSON.stringify(input.components),
           JSON.stringify(input.checks.map((c) => ({ id: c.id, command: redactString(c.command) }))),
           input.repro === null ? null : redactString(input.repro),
+          JSON.stringify(input.referenceIds ?? []),
+          input.motion ? 1 : 0,
           at,
           at,
         );
@@ -982,18 +1055,19 @@ export class Workspace {
   /** Updates a build. Its definition (goal, checks, components) can only change while it is a draft. */
   updateBuild(
     id: string,
-    patch: Partial<Pick<Build, 'title' | 'goal' | 'requirementIds' | 'components' | 'checks' | 'repro' | 'status' | 'repoPath' | 'branch' | 'worktree' | 'baseCommit' | 'agent' | 'changedFiles' | 'risks' | 'note' | 'reportPath' | 'completedAt' | 'resultCommit'>>,
+    patch: Partial<Pick<Build, 'title' | 'goal' | 'requirementIds' | 'components' | 'checks' | 'repro' | 'status' | 'repoPath' | 'branch' | 'worktree' | 'baseCommit' | 'agent' | 'changedFiles' | 'risks' | 'note' | 'reportPath' | 'completedAt' | 'resultCommit' | 'referenceIds' | 'motion' | 'uiAudit'>>,
     event?: { type: string; payload: Record<string, unknown> },
   ): Build {
     const build = this.getBuild(id);
-    const definition = ['title', 'goal', 'requirementIds', 'components', 'checks', 'repro'] as const;
+    const definition = ['title', 'goal', 'requirementIds', 'components', 'checks', 'repro', 'referenceIds', 'motion'] as const;
     if (build.status !== 'draft' && definition.some((k) => k in patch)) throw new ValidationError('The task and its checks are fixed once work has started.');
     const n = { ...build, ...patch };
     this.transaction(() => {
       this.db
         .prepare(
           `UPDATE builds SET title = ?, goal = ?, requirement_ids = ?, components = ?, checks = ?, repro = ?, status = ?, repo_path = ?, branch = ?, worktree = ?,
-             base_commit = ?, agent = ?, changed_files = ?, risks = ?, note = ?, report_path = ?, completed_at = ?, result_commit = ?, updated_at = ? WHERE id = ?`,
+             base_commit = ?, agent = ?, changed_files = ?, risks = ?, note = ?, report_path = ?, completed_at = ?, result_commit = ?,
+             reference_ids = ?, motion = ?, ui_audit = ?, updated_at = ? WHERE id = ?`,
         )
         .run(
           redactString(n.title),
@@ -1014,6 +1088,9 @@ export class Workspace {
           n.reportPath,
           n.completedAt,
           n.resultCommit,
+          JSON.stringify(n.referenceIds),
+          n.motion ? 1 : 0,
+          n.uiAudit ? JSON.stringify(n.uiAudit) : null,
           this.timestamp(),
           id,
         );
@@ -1472,6 +1549,9 @@ function toBuild(row: Record<string, unknown>): Build {
     note: (row.note as string | null) ?? null,
     reportPath: (row.report_path as string | null) ?? null,
     resultCommit: (row.result_commit as string | null) ?? null,
+    referenceIds: json<string[]>(row.reference_ids) ?? [],
+    motion: row.motion === 1 || row.motion === 1n,
+    uiAudit: json<UiAudit>(row.ui_audit),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     completedAt: (row.completed_at as string | null) ?? null,
