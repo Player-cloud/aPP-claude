@@ -11,7 +11,6 @@ import { STATUS_LABEL, type ImprovementFilter } from './views/IterativeView.tsx'
 
 const PLANNED = [
   { icon: 'radar', label: 'Ecosystem monitor', hint: 'Updates to Claude, plugins and MCP servers' },
-  { icon: 'tools', label: 'Safe cleanup', hint: 'Approved disable or uninstall of a conflicting tool' },
 ] as const;
 
 const KIND_ORDER: ToolKind[] = ['plugin', 'skill', 'command', 'agent', 'hook', 'mcp_server', 'marketplace'];
@@ -33,7 +32,7 @@ function ToolFilters({ scan, filter, onFilter }: { scan: ToolScan | null; filter
         {item('findings', 'Findings', scan ? scan.findings.length : null, 'radar')}
       </ul>
       <ul className="tree-children">{KIND_ORDER.map((k) => item(k, KIND_LABEL[k], scan ? scan.summary.entries[k] ?? 0 : null))}</ul>
-      <p className="side-note">Read-only. The app never changes or removes these tools.</p>
+      <p className="side-note">Scanning is read-only. Nothing changes until you approve the exact change.</p>
     </nav>
   );
 }

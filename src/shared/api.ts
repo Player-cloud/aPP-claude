@@ -39,6 +39,9 @@ import type { Improvement, ImprovementDetail, ImprovementsOverview, SelfAssessme
 export type { Evidence, Improvement, ImprovementDetail, ImprovementLink, ImprovementStatus, ImprovementsOverview, Recurrence, SelfAssessmentRecord } from '../core/iterate/backlog.ts';
 export type { Occurrence, SelfAssessmentReport, SelfFinding } from '../core/iterate/assess.ts';
 
+import type { CleanupOption, CleanupPlan } from '../core/cleanup/cleanup.ts';
+export type { CleanupAction, CleanupOption, CleanupPlan, CleanupResult, CleanupStatus, DryRun, Mechanism } from '../core/cleanup/cleanup.ts';
+
 /** Kinds a reference can have, and the tags in use (M9). */
 export interface ReferenceCatalog {
   kinds: string[];
@@ -154,6 +157,13 @@ export interface IapApi {
   suggestReference(id: string): Promise<Result<DesignReference>>;
   acceptReferenceSuggestion(id: string): Promise<Result<DesignReference>>;
   archiveReference(input: { id: string; archived: boolean }): Promise<Result<DesignReference>>;
+  /** Tool cleanup (M11): plan (a dry run, nothing changes), then run or restore after the person approves in a native dialog. */
+  cleanupOptions(input: { entryId: string; findingId?: string }): Promise<Result<CleanupOption[]>>;
+  planCleanup(input: { entryId: string; action: string; findingId?: string }): Promise<Result<CleanupPlan>>;
+  runCleanup(input: { planId: string; acceptDependencies?: boolean; reason?: string }): Promise<Result<CleanupPlan>>;
+  restoreCleanup(planId: string): Promise<Result<CleanupPlan>>;
+  cancelCleanup(planId: string): Promise<Result<CleanupPlan>>;
+  listCleanups(): Promise<Result<CleanupPlan[]>>;
   /** Iterative Layer (M10): self-assessment and the improvement backlog. Approving an item changes nothing in the app. */
   improvementsOverview(filter?: { status?: string }): Promise<Result<ImprovementsOverview>>;
   getImprovement(id: string): Promise<Result<ImprovementDetail>>;
@@ -190,6 +200,12 @@ export const IAP_METHODS = [
   'health',
   'scanTools',
   'getToolScan',
+  'cleanupOptions',
+  'planCleanup',
+  'runCleanup',
+  'restoreCleanup',
+  'cancelCleanup',
+  'listCleanups',
   'runAgent',
   'listAgentTasks',
   'agentStatus',

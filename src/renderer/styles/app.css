@@ -2465,3 +2465,57 @@ button.status-pill {
     grid-template-columns: 1fr;
   }
 }
+
+/* Tool cleanup (M11). The dry run reads like a finding's body; options run least disruptive first. */
+.cleanup-panel {
+  margin-bottom: var(--space-4);
+  border-color: var(--accent);
+}
+.cleanup-options {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: option;
+}
+.cleanup-option {
+  gap: var(--space-1);
+}
+.cleanup-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+.cleanup-plan-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.cleanup-command {
+  margin: 0 0 var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--glass-inset);
+  overflow-wrap: anywhere;
+}
+.cleanup-output {
+  max-height: 160px;
+  margin: var(--space-2) 0;
+  overflow: auto;
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+.cleanup-approve {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.cleanup-history {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

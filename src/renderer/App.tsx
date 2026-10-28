@@ -305,7 +305,7 @@ export function App() {
             <ActivityView projectId={activityProject} projectName={projects?.find((p) => p.id === activityProject)?.name ?? null} />
           )}
           {section === 'studio' && <LearningStudioView projects={projects ?? []} filter={studioFilter} onFilter={setStudioFilter} />}
-          {section === 'tools' && <ToolsView scan={toolScan} error={toolError} filter={toolFilter} onScan={scanTools} />}
+          {section === 'tools' && <ToolsView scan={toolScan} error={toolError} filter={toolFilter} onScan={scanTools} onRefresh={async () => setToolScan(await call(iap().getToolScan()))} />}
           {section === 'iterative' && <IterativeView filter={improvementFilter} onFilter={setImprovementFilter} />}
           {section === 'settings' && settings && <SettingsView status={status} settings={settings} onSettings={setSettings} />}
         </main>

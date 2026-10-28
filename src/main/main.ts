@@ -121,6 +121,24 @@ if (smokeTest) {
         const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
         return response === 0;
       },
+      // Tests replace the claude executable with a stand-in (a JSON array: program and arguments).
+      claudeCommand: process.env.IAP_CLAUDE_COMMAND ? (JSON.parse(process.env.IAP_CLAUDE_COMMAND) as string[]) : undefined,
+      // M11: changes to the person's Claude Code setup are approved in a native dialog the page cannot click.
+      confirmCleanup: async ({ title, lines }) => {
+        const options = {
+          type: 'warning' as const,
+          title: 'Change your Claude Code setup?',
+          message: title,
+          detail: `${lines.join('\n')}\n\nOnly this exact change is made. The app scans again afterwards and records whether it worked.`,
+          buttons: ['Make this change', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const parent = BrowserWindow.getFocusedWindow();
+        const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+        return response === 0;
+      },
       // M9: reference files come only from a native picker, never from a path the page supplies.
       pickFiles: async () => {
         const options = {

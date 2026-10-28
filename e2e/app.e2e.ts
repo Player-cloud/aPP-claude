@@ -3,10 +3,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ElectronApplication, Page } from 'playwright-core';
-import { launch, SHOTS, tempHome } from './helpers.ts';
+import { launch, ROOT, SHOTS, tempHome } from './helpers.ts';
 import { buildClaudeFixture, CANARIES } from '../test/claude-fixture.ts';
 import { solidPng } from '../test/helpers.ts';
 
@@ -821,6 +821,92 @@ test('M10: the app assesses its own records in three layers, and the person move
     await page.getByRole('button', { name: 'Run self-assessment' }).click();
     await inspector.getByTestId('recurrence').getByText(/0 since approval/).waitFor();
     await shot(page, '24-improvements-released-dark-1280');
+  } finally {
+    await app.close();
+  }
+});
+
+test('M11: resolve tool conflicts with a dry run, a native approval, a verified result and a restore', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const fixture = buildClaudeFixture(join(home, 'machine'));
+  copyFileSync(fixture.userConfigFile, join(fixture.configDir, '.claude.json'));
+  const log = join(home, 'claude-calls.jsonl');
+  writeFileSync(log, '');
+  const fake = join(ROOT, 'test', 'fake-claude.mjs');
+  const { app, page } = await launch(join(home, 'app'), {
+    CLAUDE_CONFIG_DIR: fixture.configDir,
+    // A stand-in for Claude Code's claude command, run with Electron's own Node.
+    IAP_CLAUDE_COMMAND: JSON.stringify([process.execPath, fake]),
+    FAKE_CLAUDE_CONFIG: fixture.configDir,
+    FAKE_CLAUDE_USER_FILE: join(fixture.configDir, '.claude.json'),
+    FAKE_CLAUDE_LOG: log,
+  });
+  try {
+    await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'Tools', exact: true }).click();
+    await page.getByRole('button', { name: 'Scan now' }).click();
+    const finding = page.locator('details.finding', { hasText: '2 tools answer /deploy' });
+    await finding.waitFor();
+
+    // A personal skill that overlaps a project one: moved aside after approval, then restored.
+    await finding.getByRole('button', { name: /\/deploy · Personal/ }).click();
+    const panel = page.getByRole('region', { name: 'Resolve /deploy' });
+    const options = panel.getByRole('list', { name: 'Ways to resolve it' });
+    await options.getByRole('button', { name: /Uninstall it/ }).waitFor(); // the options load after the panel opens
+    assert.deepEqual(
+      (await options.locator('.run-tile-title').allInnerTexts()).map((s) => s.trim()),
+      ['Keep both', 'Change the configuration', 'Move it aside (can be undone)', 'Use /deploy instead', 'Uninstall it'],
+    );
+    await options.getByRole('button', { name: /Move it aside/ }).click();
+    await panel.getByText('Dry run: nothing has changed.').waitFor();
+    assert.ok(existsSync(join(fixture.configDir, 'skills', 'deploy', 'SKILL.md')), 'a dry run changes nothing');
+
+    // Refused in the native dialog: nothing changes.
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 1, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+    await panel.getByRole('button', { name: 'Make this change…' }).click();
+    await panel.getByText('Not approved. Nothing was changed.').waitFor();
+    assert.ok(existsSync(join(fixture.configDir, 'skills', 'deploy', 'SKILL.md')));
+
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+    await panel.getByLabel('Reason (kept in the audit log)').fill('The project version should win');
+    await panel.getByRole('button', { name: 'Make this change…' }).click();
+    await panel.getByText(/Done: The file is in the backup folder/).waitFor();
+    assert.ok(!existsSync(join(fixture.configDir, 'skills', 'deploy')));
+    await panel.getByRole('button', { name: 'Restore…' }).click();
+    await panel.getByText(/Restored: It is back in place/).waitFor();
+    assert.ok(existsSync(join(fixture.configDir, 'skills', 'deploy', 'SKILL.md')));
+    await panel.getByRole('button', { name: 'Close the cleanup' }).click();
+
+    // A plugin: Claude Code's own disable command, after accepting what depends on it.
+    const table = page.getByRole('table', { name: 'Inventory' });
+    const row = table.locator('tr', { hasText: 'review-kit@acme' }).filter({ hasText: 'Personal' }).first();
+    await row.locator('summary').click();
+    await row.getByRole('button', { name: 'Resolve or remove…' }).click();
+    const pluginPanel = page.getByRole('region', { name: 'Resolve review-kit@acme' });
+    await pluginPanel.getByRole('button', { name: /Disable it/ }).click();
+    await pluginPanel.getByText('claude plugin disable review-kit@acme --scope user').waitFor();
+    await pluginPanel.getByText(/Claude Code refuses if another enabled plugin depends on this one/).waitFor();
+    const go = pluginPanel.getByRole('button', { name: 'Make this change…' });
+    assert.equal(await go.isDisabled(), true, 'dependents must be accepted first');
+    await pluginPanel.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+    await shot(page, '25-tools-cleanup-dry-run-dark-1280');
+    await pluginPanel.getByLabel(/I accept that the tools and workflows/).check();
+    await go.click();
+    await pluginPanel.getByText(/Done: The user settings now disable review-kit@acme/).waitFor();
+    const calls = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l).args.join(' '));
+    assert.deepEqual(calls, ['plugin disable review-kit@acme --scope user']);
+    const history = page.getByRole('list', { name: 'Cleanup plans' });
+    await history.getByText('disable review-kit@acme', { exact: true }).waitFor();
+    await history.getByText('disable /deploy', { exact: true }).waitFor();
+    await pluginPanel.getByRole('button', { name: 'Close the cleanup' }).click();
+    await history.locator('summary').first().click();
+    await history.evaluate((el) => el.closest('section')!.scrollIntoView({ block: 'start' }));
+    await shot(page, '26-tools-cleanup-history-dark-1280');
   } finally {
     await app.close();
   }

@@ -25,9 +25,10 @@ import type { DesignReference, ReferenceKind, ReferenceSuggestion } from './stud
 import type { UiAudit } from './design/audit.ts';
 import type { Evidence, Improvement, SelfAssessmentRecord } from './iterate/backlog.ts';
 import type { SelfAssessmentReport } from './iterate/assess.ts';
+import type { CleanupPlan } from './cleanup/cleanup.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -456,6 +457,34 @@ const MIGRATIONS: Record<number, string> = {
       BEGIN SELECT RAISE(ABORT, 'a self-assessment cannot change'); END;
     CREATE TRIGGER self_assessments_no_delete BEFORE DELETE ON self_assessments
       BEGIN SELECT RAISE(ABORT, 'self-assessments are never deleted'); END;
+  `,
+  12: `
+    -- M11 safe tool cleanup: one row per planned change, with its dry run, the person's
+    -- approval and the verified result. Never deleted; a finished plan only moves to restored.
+    CREATE TABLE cleanup_plans (
+      id TEXT PRIMARY KEY,
+      scan_id TEXT NOT NULL,
+      finding_id TEXT,
+      entry_id TEXT NOT NULL,
+      entry TEXT NOT NULL,
+      action TEXT NOT NULL CHECK (action IN ('keep','configure','disable','replace','uninstall')),
+      mechanism TEXT NOT NULL CHECK (mechanism IN ('record','claude-cli','move-aside','manual')),
+      dry_run TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('planned','recorded','manual','done','partial','failed','stale','cancelled','restored')),
+      approval TEXT,
+      result TEXT,
+      restore TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX cleanup_plans_created ON cleanup_plans(created_at);
+    CREATE TRIGGER cleanup_plans_no_delete BEFORE DELETE ON cleanup_plans
+      BEGIN SELECT RAISE(ABORT, 'cleanup plans are never deleted'); END;
+    CREATE TRIGGER cleanup_plans_final BEFORE UPDATE ON cleanup_plans
+      WHEN OLD.status IN ('recorded','manual','failed','stale','cancelled','restored')
+        OR (OLD.status IN ('done','partial') AND NEW.status NOT IN ('done','partial','restored'))
+        OR NEW.dry_run IS NOT OLD.dry_run OR NEW.entry IS NOT OLD.entry
+      BEGIN SELECT RAISE(ABORT, 'a finished cleanup plan cannot change'); END;
   `,
 };
 
@@ -1270,6 +1299,42 @@ export class Workspace {
     return this.getReference(id);
   }
 
+  // ---- Tool cleanup (M11) -------------------------------------------------------
+
+  createCleanupPlan(p: Pick<CleanupPlan, 'id' | 'scanId' | 'findingId' | 'entry' | 'action' | 'mechanism' | 'dryRun' | 'status'>): CleanupPlan {
+    const at = this.timestamp();
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO cleanup_plans (id, scan_id, finding_id, entry_id, entry, action, mechanism, dry_run, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(p.id, p.scanId, p.findingId, p.entry.id, JSON.stringify(redact(p.entry)), p.action, p.mechanism, JSON.stringify(redact(p.dryRun)), p.status, at, at);
+      this.record('cleanup.planned', null, null, { planId: p.id, entryId: p.entry.id, action: p.action, mechanism: p.mechanism, targets: p.dryRun.targets, command: p.dryRun.command?.display ?? null });
+    });
+    return this.getCleanupPlan(p.id);
+  }
+
+  getCleanupPlan(id: string): CleanupPlan {
+    const row = this.db.prepare('SELECT * FROM cleanup_plans WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Cleanup plan', id);
+    return toCleanupPlan(row);
+  }
+
+  listCleanupPlans(limit = 50): CleanupPlan[] {
+    return (this.db.prepare('SELECT * FROM cleanup_plans ORDER BY created_at DESC, rowid DESC LIMIT ?').all(limit) as Record<string, unknown>[]).map(toCleanupPlan);
+  }
+
+  updateCleanupPlan(id: string, patch: Partial<Pick<CleanupPlan, 'status' | 'approval' | 'result' | 'restore'>>, event: { type: string; payload: Record<string, unknown> }): CleanupPlan {
+    const n = { ...this.getCleanupPlan(id), ...patch };
+    const j = (v: unknown) => (v === null ? null : JSON.stringify(redact(v)));
+    this.transaction(() => {
+      this.db.prepare('UPDATE cleanup_plans SET status = ?, approval = ?, result = ?, restore = ?, updated_at = ? WHERE id = ?').run(n.status, j(n.approval), j(n.result), j(n.restore), this.timestamp(), id);
+      this.record(event.type, null, null, { planId: id, ...event.payload });
+    });
+    return this.getCleanupPlan(id);
+  }
+
   // ---- Improvement backlog (M10) ---------------------------------------------
 
   createImprovement(i: Pick<Improvement, 'title' | 'problem' | 'expectedOutcome' | 'successCriteria' | 'priority' | 'risk' | 'status' | 'source' | 'signature' | 'evidence'>): Improvement {
@@ -1765,6 +1830,25 @@ function toRelease(row: Record<string, unknown>): Release {
     updatedAt: String(row.updated_at),
     checkedAt: (row.checked_at as string | null) ?? null,
     preparedAt: (row.prepared_at as string | null) ?? null,
+  };
+}
+
+function toCleanupPlan(row: Record<string, unknown>): CleanupPlan {
+  const json = <T,>(k: string) => (row[k] === null || row[k] === undefined ? null : (JSON.parse(String(row[k])) as T));
+  return {
+    id: String(row.id),
+    scanId: String(row.scan_id),
+    findingId: (row.finding_id as string | null) ?? null,
+    entry: json<CleanupPlan['entry']>('entry')!,
+    action: row.action as CleanupPlan['action'],
+    mechanism: row.mechanism as CleanupPlan['mechanism'],
+    dryRun: json<CleanupPlan['dryRun']>('dry_run')!,
+    status: row.status as CleanupPlan['status'],
+    approval: json<CleanupPlan['approval']>('approval'),
+    result: json<CleanupPlan['result']>('result'),
+    restore: json<CleanupPlan['restore']>('restore'),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 
