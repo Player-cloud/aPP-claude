@@ -34,6 +34,7 @@ Set `IAP_HOME` to use another directory. Contents:
 - `iap.db` (+ `-wal`, `-shm`) — projects, workflow runs, append-only audit log.
 - `projects/<projectId>/` — project workspace; `docs/designs/` holds design documents.
 - `references/` — the Learning Studio's copies of design references (`<refId>.<ext>`). Archived references stay here.
+- `cleanup/<planId>/` — tool cleanup backups: skills, commands and subagents that were moved aside, and MCP server definitions kept without their secret values (M11). Delete a folder yourself to remove something for good.
 
 No credentials are stored here. Secret-looking values are redacted before anything is written.
 
@@ -49,6 +50,17 @@ The Tools screen and `iap tools scan` read, and never write, these locations:
 | Organisation policy | Windows `C:\Program Files\ClaudeCode` and `C:\ProgramData\ClaudeCode`; macOS `/Library/Application Support/ClaudeCode`; Linux `/etc/claude-code` (`managed-settings.json`, `managed-mcp.json`) |
 
 MCP server environment variables and headers are reduced to their names, URLs lose query strings and credentials, and hook commands are redacted. The last 20 scans are kept in `iap.db`, and each scan is recorded in the audit log.
+
+## Tool cleanup (M11, DEC-027)
+
+| What | Where / how |
+|---|---|
+| Starting | Tools → a finding's *Resolve* buttons, or *Resolve or remove…* on any tool. CLI: `iap tools options <toolId>`, then `iap tools plan <toolId> --action <keep\|configure\|disable\|replace\|uninstall>` |
+| Dry run | Shows the exact command or move, targets, what depends on it, risks and how to undo it. Nothing changes |
+| Running | Desktop: approve in the Windows dialog. CLI: `iap tools run <planId> --confirm` (add `--accept` when something depends on it). The app uses `claude` from your PATH; plugins: `claude plugin disable\|uninstall <id> --scope <scope>`; MCP servers: `claude mcp remove <name> --scope <scope>`; your own skills, commands and subagents are moved into `<data dir>/cleanup/` |
+| Not automated | Hooks (entries inside settings files), marketplaces, organisation-managed tools, a plugin's own components and anything unclear: the app shows the steps instead |
+| Results | The app scans again. *Done* only when Claude Code succeeded and the scan shows it; otherwise *partial* or *failed* with Claude Code's output and next steps. A Claude Code session that is already open needs `/reload-plugins` or a restart |
+| Undo | `iap tools restore <planId> --confirm` or *Restore…*: moves files back, re-enables or reinstalls plugins. A removed MCP server is re-added by you from the kept copy (re-enter its secrets) |
 
 ## Planning documents (M5, DEC-019)
 

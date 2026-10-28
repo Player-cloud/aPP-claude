@@ -24,6 +24,7 @@ import { Assessor, scopeLabel, STATUS_LABEL } from '../core/assess/assessor.ts';
 import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
 import { Studio, type DesignReference, type ReferenceEdit } from '../core/studio/library.ts';
 import { describeAudit } from '../core/design/audit.ts';
+import { Cleanup, claudeRunner, type CleanupPlan } from '../core/cleanup/cleanup.ts';
 import { Backlog, type ImprovementDetail, type ImprovementStatus, type SelfAssessmentRecord } from '../core/iterate/backlog.ts';
 import type { Assessment } from '../core/workspace.ts';
 import type { AgentTask } from '../core/workspace.ts';
@@ -46,6 +47,13 @@ Workflow runs
 Claude Code tools (read-only: nothing is changed or removed)
   tools scan [--include <projectDir>]...   Inventory plugins, skills, commands, agents, hooks and MCP servers, and report conflicts
   tools show                               Show the latest scan
+
+Tool cleanup (changes your Claude Code setup only after --confirm; plans are kept for good)
+  tools options <toolId> [--finding <findingId>]        Ways to resolve it, least disruptive first
+  tools plan <toolId> --action <keep|configure|disable|replace|uninstall> [--finding <findingId>]   Dry run: nothing changes
+  tools run <planId> --confirm [--accept] [--reason <why>]   Make the change (--accept: other tools or workflows depend on it)
+  tools restore <planId> --confirm                     Undo it where the app can
+  tools cancel <planId> | tools cleanups
 
 Main agent (simulated unless a monthly budget is set and ANTHROPIC_API_KEY holds your key)
   agent run [runId] --goal <text> [--title <text>]   Plan, delegate and reconcile a request (the run must be "running")
@@ -180,6 +188,9 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       result: { type: 'string' },
       outcome: { type: 'string' },
       into: { type: 'string' },
+      action: { type: 'string' },
+      finding: { type: 'string' },
+      accept: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -330,6 +341,44 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       case 'ref archive': {
         const r = new Studio(ws, new SimulatedModel()).archive(need(rest[0], 'refId'), !values.restore);
         print(r, () => out(`${r.id} is ${r.status}.`));
+        return 0;
+      }
+      case 'tools options': {
+        const opts = cliCleanup(ws).options(need(rest[0], 'toolId'), values.finding ?? null);
+        print(opts, () => {
+          for (const o of opts) out(`${o.available ? '✓' : '✗'} ${o.action.padEnd(10)} ${o.label}: ${o.available ? o.detail : o.why}`);
+        });
+        return 0;
+      }
+      case 'tools plan': {
+        const p = cliCleanup(ws).plan(need(rest[0], 'toolId'), need(values.action, '--action'), values.finding ?? null);
+        print(p, () => describeCleanup(p, out));
+        return 0;
+      }
+      case 'tools run':
+      case 'tools restore': {
+        const id = need(rest[0], 'planId');
+        const p = ws.getCleanupPlan(id);
+        if (!values.confirm && (sub === 'restore' || p.mechanism !== 'record')) {
+          describeCleanup(p, err);
+          err('Re-run with --confirm to make this change.');
+          return 1;
+        }
+        const done = sub === 'run' ? await cliCleanup(ws).execute(id, { acceptDependencies: values.accept, reason: values.reason ?? null }) : await cliCleanup(ws).restore(id);
+        print(done, () => describeCleanup(done, out));
+        return done.status === 'done' || done.status === 'recorded' || done.status === 'restored' ? 0 : 1;
+      }
+      case 'tools cancel': {
+        const p = cliCleanup(ws).cancel(need(rest[0], 'planId'));
+        print(p, () => out(`${p.id} is cancelled. Nothing was changed.`));
+        return 0;
+      }
+      case 'tools cleanups': {
+        const list = ws.listCleanupPlans();
+        print(list, () => {
+          if (!list.length) out('No cleanup plans yet.');
+          for (const p of list) out(`${p.id}  ${p.status.padEnd(9)} ${p.action.padEnd(9)} ${p.entry.invocation ?? p.entry.name}`);
+        });
         return 0;
       }
       case 'iter assess': {
@@ -691,6 +740,32 @@ function describeAssessment(a: Assessment, out: Out): void {
   for (const f of r.capabilities) out(`  ${STATUS_LABEL[f.status].padEnd(20)} ${f.title.padEnd(16)} confidence ${f.confidence}${f.externalState ? ', outside the code not verified' : ''}`);
   for (const x of r.notInspected) out(`  not inspected: ${x}`);
   if (a.reportPath) out(`  Report: ${a.reportPath}`);
+}
+
+function cliCleanup(ws: Workspace): Cleanup {
+  // The same folders as the last scan, so the rescan after a change can be compared with it.
+  return new Cleanup(ws, ws.latestToolScan()?.roots ?? defaultScanRoots(), claudeRunner(process.env.IAP_CLAUDE_COMMAND ? JSON.parse(process.env.IAP_CLAUDE_COMMAND) as string[] : undefined));
+}
+
+function describeCleanup(p: CleanupPlan, out: Out): void {
+  const d = p.dryRun;
+  out(`${p.id}  ${p.status}  ${p.action} ${p.entry.invocation ?? p.entry.name} (${p.entry.scope})`);
+  if (d.command) out(`  runs: ${d.command.display}  (in ${d.command.cwd})`);
+  if (d.move) out(`  moves: ${d.move.from} → ${d.move.to}`);
+  for (const t of d.targets) out(`  changes: ${t}`);
+  if (d.dependents.length) out(`  also affects: ${d.dependents.map((x) => x.label).join(', ')}`);
+  for (const w of d.workflows) out(`  workflow: ${w}`);
+  for (const e of d.effects) out(`  effect: ${e}`);
+  for (const r of d.risks) out(`  risk: ${r}`);
+  for (const r of d.recovery) out(`  undo: ${r}`);
+  for (const m of d.manual) out(`  do it yourself: ${m}`);
+  if (d.needsAcceptance && p.status === 'planned') out('  Other tools or workflows depend on this: add --accept to go ahead.');
+  for (const [name, r] of [['result', p.result], ['restore', p.restore]] as const) {
+    if (!r) continue;
+    out(`  ${name}: ${r.verification}${r.exitCode !== null ? ` (exit ${r.exitCode})` : ''}`);
+    if (r.output) out(`    ${r.output.split('\n').slice(-5).join('\n    ')}`);
+    for (const n of r.nextSteps) out(`    next: ${n}`);
+  }
 }
 
 function describeSelfAssessment(a: SelfAssessmentRecord, out: Out): void {

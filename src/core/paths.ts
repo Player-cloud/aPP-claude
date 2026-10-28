@@ -26,8 +26,10 @@ export interface AppPaths {
   worktrees: string;
   /** Copies of Learning Studio references (M9). */
   references: string;
+  /** Backups and moved-aside files from tool cleanup (M11). */
+  cleanup: string;
 }
 
 export function appPaths(home: string): AppPaths {
-  return { home, db: join(home, 'iap.db'), projects: join(home, 'projects'), worktrees: join(home, 'worktrees'), references: join(home, 'references') };
+  return { home, db: join(home, 'iap.db'), projects: join(home, 'projects'), worktrees: join(home, 'worktrees'), references: join(home, 'references'), cleanup: join(home, 'cleanup') };
 }

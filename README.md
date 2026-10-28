@@ -7,12 +7,13 @@ An installable AI development platform with two layers:
 
 The specification lives in [`docs/spec/`](docs/spec/). Start with [`docs/IMPLEMENTATION_ASSESSMENT.md`](docs/IMPLEMENTATION_ASSESSMENT.md) for the current plan, [`docs/DECISIONS.md`](docs/DECISIONS.md) for architecture decisions, and [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) for what is actually implemented and verified.
 
-## Current state: milestones M3 to M10 (main agent, tool inventory, planning, build work, release gate, assessment, Learning Studio, improvements)
+## Current state: milestones M3 to M11 (main agent, tool inventory and cleanup, planning, build work, release gate, assessment, Learning Studio, improvements)
 
 Implemented and tested:
 
 - A Windows desktop app (Electron) with project creation, workflow runs with explicit states and blockers, an activity log, dark/light/system themes, a frosted-glass look, and a recovery screen for a damaged database.
 - A **read-only inventory of your Claude Code tools** (plugins, skills, commands, subagents, hooks, MCP servers) with conflict detection, on the Tools screen and in `iap tools scan`.
+- **Safe tool cleanup**: for a conflict, options from "keep both" to "uninstall", a dry run of the exact change, and only after you approve it, Claude Code's own `claude plugin` / `claude mcp` commands or a reversible move of your own skill or command file. The app scans again and records done, partial or failed, and can restore.
 - A **main agent** on running workflow runs that plans, picks a single agent, subagents or a team, and checks every result before a request counts as done. It uses a free **simulated model** until you choose a monthly budget and add an Anthropic API key in Settings → AI usage; then it calls Claude and stops before any call that would go over the budget.
 - **Planning** on each project: the agent drafts a concept brief from your idea and facts, then a specification with stable requirement IDs; you edit and approve each one. Approved versions are frozen, revisions need a reason and record what changed, and everything is kept as Markdown in the project's `docs/designs/`. EGM is detected from the tool scan but not used yet.
 - **Build work**: fix a bug or build a feature from the approved spec in its own git worktree and branch. Checks you approve run before and after the change, the agent (or you) changes the code, and a review flags regressions, weakened tests, unrelated files and missing tests. Nothing is merged for you; a finished change is committed on its branch for you to merge.
@@ -23,7 +24,7 @@ Implemented and tested:
 - **Improvements** (the first part of the Iterative Layer): the app reads its own records (blocked or failed runs, failed agent tasks, abandoned builds, accepted risks, checks that time out or cannot run, failed assessments, tool conflicts, spend near the budget) and shows what it observed, the likely cause and a recommendation separately, plus what it does not record. Findings become backlog items, a repeat adds evidence instead of a duplicate, and you move items from idea to released. Approving an item records your decision and changes nothing in the app. No AI calls.
 - Under both: the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI.
 
-Not yet built: deployment, running code-review and security-review tools, integrations (so external state is never verified), safe cleanup of tools, building approved improvements, and ecosystem monitoring in the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
+Not yet built: deployment, running code-review and security-review tools, integrations (so external state is never verified), building approved improvements, and ecosystem monitoring in the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
 
 ```bash
 npm install

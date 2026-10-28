@@ -1,9 +1,11 @@
-// Tool inventory and conflict report (M4: FR-TOOL-001/002). Read-only: the
-// screen can start a scan and show results, nothing else.
+// Tool inventory and conflict report (M4: FR-TOOL-001/002). Scanning is
+// read-only. Resolving a tool (M11) starts with a dry run; nothing changes until
+// the person approves the exact change in a native dialog.
 import { useState } from 'react';
 import type { Finding, Severity, ToolEntry, ToolKind, ToolScan } from '../../shared/api.ts';
 import { Icon } from '../icons.tsx';
 import { Alert, Badge, Empty, formatTime } from '../ui.tsx';
+import { CleanupHistory, CleanupPanel } from './CleanupPanel.tsx';
 
 export type ToolFilter = 'all' | 'findings' | ToolKind;
 
@@ -43,7 +45,7 @@ const SCOPE_LABEL: Record<ToolEntry['scope'], string> = {
   unknown: 'Unknown',
 };
 
-function FindingItem({ finding }: { finding: Finding }) {
+function FindingItem({ finding, entries, onResolve }: { finding: Finding; entries: ToolEntry[]; onResolve: (e: ToolEntry, f: Finding) => void }) {
   const s = SEVERITY[finding.severity];
   return (
     <details className="finding" open={finding.severity !== 'informational'}>
@@ -66,12 +68,24 @@ function FindingItem({ finding }: { finding: Finding }) {
         )}
         <h4>Suggested</h4>
         <p>{finding.recommendation}</p>
+        <h4>Resolve</h4>
+        <div className="btn-row">
+          {finding.entryIds
+            .map((id) => entries.find((e) => e.id === id))
+            .filter((e): e is ToolEntry => !!e)
+            .map((e) => (
+              <button key={e.id} type="button" className="btn" onClick={() => onResolve(e, finding)}>
+                {e.invocation ?? e.name} · {SCOPE_LABEL[e.scope]}
+                {e.owner ? ` (${e.owner})` : ''}
+              </button>
+            ))}
+        </div>
       </div>
     </details>
   );
 }
 
-function EntryRow({ entry }: { entry: ToolEntry }) {
+function EntryRow({ entry, onResolve }: { entry: ToolEntry; onResolve: (e: ToolEntry) => void }) {
   return (
     <tr>
       <td>
@@ -100,6 +114,9 @@ function EntryRow({ entry }: { entry: ToolEntry }) {
             <dt>Removal</dt>
             <dd>{entry.removal.instructions}</dd>
           </dl>
+          <button type="button" className="btn" onClick={() => onResolve(entry)}>
+            Resolve or remove…
+          </button>
         </details>
       </td>
       <td>{KIND_SINGULAR[entry.kind]}</td>
@@ -121,13 +138,21 @@ export function ToolsView({
   error,
   filter,
   onScan,
+  onRefresh,
 }: {
   scan: ToolScan | null | undefined;
   error: string | null;
   filter: ToolFilter;
   onScan: () => Promise<void>;
+  onRefresh: () => Promise<void>;
 }) {
   const [scanning, setScanning] = useState(false);
+  const [resolving, setResolving] = useState<{ entry: ToolEntry; finding: Finding | null } | null>(null);
+  const [changes, setChanges] = useState(0);
+  const changed = () => {
+    setChanges((n) => n + 1);
+    void onRefresh();
+  };
   const run = async () => {
     setScanning(true);
     try {
@@ -154,8 +179,8 @@ export function ToolsView({
         <div>
           <h1 className="page-title">Tools</h1>
           <p className="page-lede">
-            An inventory of your Claude Code setup: plugins, skills, commands, subagents, hooks and MCP servers. Scanning only reads files. Nothing is
-            changed, started or removed.
+            An inventory of your Claude Code setup: plugins, skills, commands, subagents, hooks and MCP servers. Scanning only reads files. To resolve a
+            conflict, the app shows a dry run first and changes nothing until you approve the exact change.
           </p>
         </div>
         {scan && scanButton}
@@ -200,6 +225,10 @@ export function ToolsView({
             </li>
           </ul>
 
+          {resolving && (
+            <CleanupPanel key={`${resolving.entry.id}:${resolving.finding?.id ?? ''}`} entry={resolving.entry} finding={resolving.finding} onDone={changed} onClose={() => setResolving(null)} />
+          )}
+
           {(filter === 'all' || filter === 'findings') && (
             <section className="card" aria-labelledby="findings-title">
               <h2 className="card-title" id="findings-title">
@@ -210,7 +239,7 @@ export function ToolsView({
               ) : (
                 <div className="findings">
                   {scan.findings.map((f) => (
-                    <FindingItem key={f.id} finding={f} />
+                    <FindingItem key={f.id} finding={f} entries={scan.entries} onResolve={(entry, finding) => setResolving({ entry, finding })} />
                   ))}
                 </div>
               )}
@@ -251,7 +280,7 @@ export function ToolsView({
                     </thead>
                     <tbody>
                       {entries.map((e) => (
-                        <EntryRow key={e.id} entry={e} />
+                        <EntryRow key={e.id} entry={e} onResolve={(entry) => setResolving({ entry, finding: null })} />
                       ))}
                     </tbody>
                   </table>
@@ -260,6 +289,7 @@ export function ToolsView({
               <p className="subtle">Status and version say "Unknown" when the files do not record them. Nothing is guessed.</p>
             </section>
           )}
+          <CleanupHistory refreshKey={`${changes}`} onChanged={changed} />
         </>
       )}
     </>

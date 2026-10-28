@@ -15,6 +15,7 @@ import { Assessor } from '../core/assess/assessor.ts';
 import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
 import { REFERENCE_KINDS, Studio, type ReferenceEdit } from '../core/studio/library.ts';
 import { Backlog, type ImprovementStatus } from '../core/iterate/backlog.ts';
+import { Cleanup, claudeRunner, type CleanupPlan } from '../core/cleanup/cleanup.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -25,7 +26,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference';
+type AsyncMethod = 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -72,6 +73,27 @@ export interface ServiceOptions {
    * person did not choose. Returns nothing when the person cancels.
    */
   pickFiles?: () => Promise<string[]>;
+  /**
+   * Asks the person, outside the renderer, before a tool cleanup changes their
+   * Claude Code setup (M11). The desktop app shows a native dialog.
+   */
+  confirmCleanup?: (request: { title: string; lines: string[] }) => Promise<boolean>;
+  /** Replaces the `claude` executable. Tests pass a stand-in; the app finds claude on PATH. */
+  claudeCommand?: string[];
+}
+
+/** What the native approval dialog shows: the exact command or move, and what else changes. */
+function cleanupLines(p: CleanupPlan): string[] {
+  const d = p.dryRun;
+  return [
+    ...(d.command ? [`Runs: ${d.command.display}`, `In: ${d.command.cwd}`] : []),
+    ...(d.move ? [`Moves: ${d.move.from}`, `To: ${d.move.to}`] : []),
+    ...d.targets.map((t) => `Changes: ${t}`),
+    ...(d.dependents.length ? [`Also affects ${d.dependents.length}: ${d.dependents.slice(0, 6).map((x) => x.label).join(', ')}${d.dependents.length > 6 ? ', …' : ''}`] : []),
+    ...d.workflows.map((w) => `Workflow: ${w}`),
+    ...d.risks.map((r) => `Risk: ${r}`),
+    ...d.recovery.map((r) => `Undo: ${r}`),
+  ];
 }
 
 /** A build definition from the renderer. Contents are validated in builder.ts. */
@@ -120,6 +142,8 @@ export class AppService {
   private readonly keys: KeyStore;
   private readonly claudeClient: (apiKey: string) => ClaudeClient;
   private readonly confirmChecks: NonNullable<ServiceOptions['confirmChecks']>;
+  private readonly confirmCleanup: NonNullable<ServiceOptions['confirmCleanup']>;
+  private readonly claudeCommand: string[] | undefined;
   private readonly checkTimeoutMs: number | undefined;
   private readonly pickFiles: () => Promise<string[]>;
 
@@ -131,6 +155,8 @@ export class AppService {
     this.claudeClient = options.claudeClient ?? ((apiKey) => new Anthropic({ apiKey, maxRetries: 1 }));
     // Without a way to ask (plain Node, tests), commands never run unless a caller supplies one.
     this.confirmChecks = options.confirmChecks ?? (async () => false);
+    this.confirmCleanup = options.confirmCleanup ?? (async () => false);
+    this.claudeCommand = options.claudeCommand;
     this.checkTimeoutMs = options.checkTimeoutMs;
     this.pickFiles = options.pickFiles ?? (async () => []);
     this.tryOpen();
@@ -232,6 +258,10 @@ export class AppService {
     return this.ws;
   }
 
+  private cleanup(): Cleanup {
+    return new Cleanup(this.workspace(), this.scanRoots(), claudeRunner(this.claudeCommand));
+  }
+
   close(): void {
     this.ws?.close();
     this.ws = null;
@@ -309,6 +339,38 @@ export class AppService {
     // The renderer cannot choose what is scanned: locations come from the main process only.
     scanTools: () => wrap(() => this.workspace().saveToolScan(runToolScan(this.scanRoots()))),
     getToolScan: () => wrap(() => this.workspace().latestToolScan()),
+    // Tool cleanup (M11). Planning changes nothing; running or restoring asks the person in a native dialog first.
+    cleanupOptions: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Tool');
+        return this.cleanup().options(str(i.entryId, 'Tool id')!, str(i.findingId, 'Finding id', true) ?? null);
+      }),
+    planCleanup: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Plan');
+        return this.cleanup().plan(str(i.entryId, 'Tool id')!, str(i.action, 'Action')!, str(i.findingId, 'Finding id', true) ?? null);
+      }),
+    runCleanup: (input) =>
+      wrapAsync(async () => {
+        const i = obj(input, 'Run');
+        const plan = this.workspace().getCleanupPlan(str(i.planId, 'Plan id')!);
+        const cleanup = this.cleanup();
+        if (plan.mechanism !== 'record' && plan.status === 'planned') {
+          if (plan.dryRun.needsAcceptance && i.acceptDependencies !== true) throw new ValidationError('Other tools or workflows depend on this. Accept that they are affected, or choose another option.');
+          const approved = await this.confirmCleanup({ title: `${plan.action === 'uninstall' ? 'Uninstall' : 'Switch off'} ${plan.entry.invocation ?? plan.entry.name}?`, lines: cleanupLines(plan) });
+          if (!approved) throw new ValidationError('Not approved. Nothing was changed.');
+        }
+        return cleanup.execute(plan.id, { acceptDependencies: i.acceptDependencies === true, reason: str(i.reason, 'Reason', true) ?? null });
+      }),
+    restoreCleanup: (planId) =>
+      wrapAsync(async () => {
+        const plan = this.workspace().getCleanupPlan(str(planId, 'Plan id')!);
+        const what = plan.dryRun.move ? [`Move ${plan.dryRun.move.to} back to ${plan.dryRun.move.from}`] : plan.dryRun.recovery;
+        if (!(await this.confirmCleanup({ title: `Restore ${plan.entry.invocation ?? plan.entry.name}?`, lines: what }))) throw new ValidationError('Not approved. Nothing was changed.');
+        return this.cleanup().restore(plan.id);
+      }),
+    cancelCleanup: (planId) => wrap(() => this.cleanup().cancel(str(planId, 'Plan id')!)),
+    listCleanups: () => wrap(() => this.workspace().listCleanupPlans()),
     // The renderer cannot grant tools: delegated tasks get none (DEC-017).
     runAgent: (input) =>
       wrapAsync(async () => {
