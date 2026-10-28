@@ -853,6 +853,7 @@ test('M11: resolve tool conflicts with a dry run, a native approval, a verified 
     await finding.getByRole('button', { name: /\/deploy · Personal/ }).click();
     const panel = page.getByRole('region', { name: 'Resolve /deploy' });
     const options = panel.getByRole('list', { name: 'Ways to resolve it' });
+    await options.getByRole('button', { name: /Uninstall it/ }).waitFor(); // the options load after the panel opens
     assert.deepEqual(
       (await options.locator('.run-tile-title').allInnerTexts()).map((s) => s.trim()),
       ['Keep both', 'Change the configuration', 'Move it aside (can be undone)', 'Use /deploy instead', 'Uninstall it'],
