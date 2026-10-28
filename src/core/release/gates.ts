@@ -6,7 +6,7 @@
 // release unless the person records an exception with a mitigation plan.
 
 import type { Requirement } from '../planning.ts';
-import type { CheckResult } from '../build/checks.ts';
+import { ranNoTests, type CheckResult } from '../build/checks.ts';
 import type { Risk } from '../build/review.ts';
 
 export type GateStatus = 'passed' | 'failed' | 'skipped' | 'blocked';
@@ -199,6 +199,8 @@ function testsGate({ checks }: GateInput): Gate {
   const evidence = checks.results.map((r) => `${r.checkId}: ${r.status} (exit ${r.exitCode ?? '-'}) ${r.command}`);
   const bad = checks.results.filter((r) => r.status !== 'passed');
   if (bad.length) return { ...base, status: 'failed', summary: `${bad.length} of ${checks.results.length} checks did not pass.`, evidence };
+  const empty = checks.results.filter((r) => ranNoTests(r.output));
+  if (empty.length) return { ...base, status: 'failed', summary: `${empty.map((r) => r.checkId).join(', ')} passed but found no tests.`, evidence };
   return { ...base, status: 'passed', summary: `All ${checks.results.length} checks passed.`, evidence };
 }
 

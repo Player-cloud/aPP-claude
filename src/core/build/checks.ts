@@ -121,3 +121,11 @@ export function runCheck(cwd: string, check: Check, opts: { timeoutMs?: number; 
     });
   });
 }
+
+/**
+ * True when a passing check's output says it found no tests (node:test, Jest,
+ * Vitest, Mocha). Such a pass proves nothing about the change.
+ */
+export function ranNoTests(output: string): boolean {
+  return /^\s*(?:ℹ|#)\s*tests 0\s*$/m.test(output) || /No tests found|No test files found|^\s*0 passing\b/m.test(output);
+}

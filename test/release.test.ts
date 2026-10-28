@@ -272,6 +272,8 @@ test('M7: gate rules over recorded evidence', () => {
   assert.equal(st(input({ checks: { defined: 0, results: [] } }), 'tests').status, 'failed');
   assert.equal(st(input({ checks: { defined: 1, results: [] } }), 'tests').status, 'blocked');
   assert.equal(st(input({ secrets: null }), 'secrets').status, 'blocked');
+  const empty = { ...build().verify[0]!, output: 'ℹ tests 0\nℹ pass 0' };
+  assert.match(st(input({ checks: { defined: 1, results: [empty] } }), 'tests').summary, /passed but found no tests/);
   assert.equal(st(input({ specOutdated: true }), 'spec').status, 'failed');
   assert.match(st(input({ reviewTools: ['/security-review'] }), 'reviews').summary, /has not verified them/);
   // An exception for a gate that passed is ignored; only failed or blocked gates carry one.

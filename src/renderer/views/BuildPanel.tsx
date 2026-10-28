@@ -166,7 +166,7 @@ function NewBuild({ projectId, specIds, onCreated }: { projectId: string; specId
         </fieldset>
       )}
       <div className="field">
-        <label htmlFor="b-components">Files or folders it should change (optional, one per line)</label>
+        <label htmlFor="b-components">Files or folders it should change (optional, one per line or separated by commas)</label>
         <textarea id="b-components" className="textarea" rows={2} value={components} onChange={(e) => setComponents(e.target.value)} placeholder="src/" />
       </div>
       <div className="field">

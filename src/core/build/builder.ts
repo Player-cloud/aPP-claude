@@ -231,7 +231,9 @@ export class Builder {
     }
     const unknown = ids.filter((id) => !known.has(id));
     if (unknown.length) throw new ValidationError(`${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not in the approved specification.`);
-    const components = list('Components', input.components ?? [], 50, 300).map((c) => {
+    // "src/, test/" or "src/ and test/" on one line means two folders, as people write them.
+    const split = (input.components ?? []).flatMap((c) => (typeof c === 'string' ? c.split(/\s*,\s*|\s+and\s+/) : [c])).filter((c) => c !== '');
+    const components = list('Components', split, 50, 300).map((c) => {
       const p = c.replace(/\\/g, '/');
       if (p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..')) throw new ValidationError(`Component "${c}" must be a path inside the repository.`);
       return p.replace(/^\.\//, '');
