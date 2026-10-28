@@ -32,6 +32,15 @@ export type { Assessment } from '../core/workspace.ts';
 export type { AssessmentReport, AssessmentScope, ScopeKind } from '../core/assess/assessor.ts';
 export type { CapabilityFinding, CapabilityStatus, CategoryId, CodebaseSummary, Level, Observation } from '../core/assess/capabilities.ts';
 
+import type { DesignReference, ImportResult } from '../core/studio/library.ts';
+export type { DesignReference, ImportResult, ReferenceKind, ReferenceSuggestion } from '../core/studio/library.ts';
+
+/** Kinds a reference can have, and the tags in use (M9). */
+export interface ReferenceCatalog {
+  kinds: string[];
+  tags: { tag: string; count: number }[];
+}
+
 /** The capability model, for choosing a focused scope (M8). */
 export interface AssessmentCatalog {
   categories: { id: string; title: string }[];
@@ -131,6 +140,16 @@ export interface IapApi {
   getAssessment(assessmentId: string): Promise<Result<Assessment>>;
   /** Records the scope, then assesses the repository's current commit within it. */
   runAssessment(input: { projectId: string; scope: AssessmentScope }): Promise<Result<Assessment>>;
+  /** Learning Studio (M9): design references. Files are chosen in a native dialog and copied into the app. */
+  importReferences(input?: { projectId?: string }): Promise<Result<ImportResult>>;
+  listReferences(filter?: { projectId?: string | null; query?: string; tag?: string; kind?: string; archived?: boolean }): Promise<Result<DesignReference[]>>;
+  getReference(id: string): Promise<Result<DesignReference>>;
+  referenceCatalog(): Promise<Result<ReferenceCatalog>>;
+  updateReference(input: { id: string; title?: string; kind?: string; tags?: string[]; notes?: string | null; explanation?: string | null; projectId?: string | null }): Promise<Result<DesignReference>>;
+  /** Asks the model (simulated or Claude) for a kind, tags and explanation; nothing is applied until accepted or edited. */
+  suggestReference(id: string): Promise<Result<DesignReference>>;
+  acceptReferenceSuggestion(id: string): Promise<Result<DesignReference>>;
+  archiveReference(input: { id: string; archived: boolean }): Promise<Result<DesignReference>>;
   /** Planning (M5): concept brief and specification, versioned. */
   getPlanning(projectId: string): Promise<Result<PlanningOverview>>;
   draftBrief(projectId: string): Promise<Result<PlanDoc>>;
@@ -190,6 +209,14 @@ export const IAP_METHODS = [
   'listAssessments',
   'getAssessment',
   'runAssessment',
+  'importReferences',
+  'listReferences',
+  'getReference',
+  'referenceCatalog',
+  'updateReference',
+  'suggestReference',
+  'acceptReferenceSuggestion',
+  'archiveReference',
   'getPlanning',
   'draftBrief',
   'draftSpec',

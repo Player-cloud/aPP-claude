@@ -50,6 +50,15 @@ const paths: Record<string, ReactElement> = {
       <circle cx="15" cy="8.4" r=".6" />
     </>
   ),
+  studio: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="3" />
+      <circle cx="9" cy="9.5" r="1.6" />
+      <path d="M4 17l5-4.5 3.5 3 3-2.5 4.5 4" />
+    </>
+  ),
+  play: <path d="M8 5.5v13l10.5-6.5z" />,
+  archive: <path d="M4 5h16v4H4zM5.5 9v9.5a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V9M10 13h4" />,
   database: (
     <>
       <ellipse cx="12" cy="6.5" rx="7" ry="2.8" />

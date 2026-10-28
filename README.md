@@ -7,7 +7,7 @@ An installable AI development platform with two layers:
 
 The specification lives in [`docs/spec/`](docs/spec/). Start with [`docs/IMPLEMENTATION_ASSESSMENT.md`](docs/IMPLEMENTATION_ASSESSMENT.md) for the current plan, [`docs/DECISIONS.md`](docs/DECISIONS.md) for architecture decisions, and [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) for what is actually implemented and verified.
 
-## Current state: milestones M3 to M8 (main agent, tool inventory, planning, build work, release gate, assessment)
+## Current state: milestones M3 to M9 (main agent, tool inventory, planning, build work, release gate, assessment, Learning Studio)
 
 Implemented and tested:
 
@@ -18,6 +18,7 @@ Implemented and tested:
 - **Build work**: fix a bug or build a feature from the approved spec in its own git worktree and branch. Checks you approve run before and after the change, the agent (or you) changes the code, and a review flags regressions, weakened tests, unrelated files and missing tests. Nothing is merged for you; a finished change is committed on its branch for you to merge.
 - **Releases**: a ship-check runs your release checks on the repository's current commit (after you approve them), scans tracked files for credentials, and checks the included work against the approved spec. Eight gates show the evidence they were decided on; a failed required gate blocks the release unless you record an exception with a mitigation. *Prepared* means ready to ship: the app does not deploy, tag or push.
 - **Import and assessment**: register an existing git repository as a project without changing it, then assess it read-only. The app reads the current commit from git's object store (never the working folder, never running its code), summarises structure, stack, dependencies, tests, configuration and documentation, and gives each of 29 capabilities (Product, Operations, Interfaces, Management) a status with evidence, confidence, impact and a next step. Anything that lives with an outside provider is *not verified*, and a focused assessment of one category or capability records its scope first and stays inside it. No AI calls.
+- **Learning Studio**: collect screenshots, designs and short videos you want to learn from. Files are checked by their content and copied into the app (your originals stay where they are). Tag them, add notes, link them to a project, search and group them. The agent can suggest a kind, tags and a description, which you accept or correct; with real calls on, Claude looks at the image for about 1 to 3 cents. A reference never changes a spec.
 - Under both: the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI.
 
 Not yet built: deployment, running code-review and security-review tools, integrations (so external state is never verified), safe cleanup of tools, and the rest of the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
@@ -41,6 +42,7 @@ npm run iap -- events --project <projectId>
 npm run iap -- tools scan [--include <projectDir>]   # read-only; changes nothing
 npm run iap -- project import --name "Shop" --path /path/to/repo
 npm run iap -- assess run <projectId> [--scope category:operations]   # read-only; changes nothing
+npm run iap -- ref import ./screens/*.png --project <projectId>   # then: ref list / ref edit / ref suggest / ref accept
 npm run iap -- agent run <runId> --goal "..."      # simulated unless a budget is set and ANTHROPIC_API_KEY is set
 npm run iap -- release new <projectId> --version 1.0.0 --check unit="npm test" --build <buildId> --target "..." --health "..." --rollback "..."
 npm run iap -- release check <releaseId> --confirm   # exit 4 if a gate blocks; never deploys

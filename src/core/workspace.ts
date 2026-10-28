@@ -21,9 +21,10 @@ import type { Risk } from './build/review.ts';
 import type { AgentStep } from './build/agent.ts';
 import type { DriftKind, Gate, GateException, ReleaseEvidence, ReleasePlan } from './release/gates.ts';
 import type { AssessmentReport, AssessmentScope } from './assess/assessor.ts';
+import type { DesignReference, ReferenceKind, ReferenceSuggestion } from './studio/library.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -328,6 +329,33 @@ const MIGRATIONS: Record<number, string> = {
       BEGIN SELECT RAISE(ABORT, 'a finished assessment cannot change'); END;
     CREATE TRIGGER assessments_no_delete BEFORE DELETE ON assessments
       BEGIN SELECT RAISE(ABORT, 'assessments are never deleted'); END;
+  `,
+  9: `
+    -- M9 Learning Studio: design references. The file is a copy in the app's data folder;
+    -- a reference is archived, never deleted, so the audit trail keeps pointing at something.
+    CREATE TABLE design_refs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id),
+      title TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      width INTEGER,
+      height INTEGER,
+      kind TEXT NOT NULL,
+      tags TEXT NOT NULL DEFAULT '[]',
+      notes TEXT,
+      explanation TEXT,
+      suggestion TEXT,
+      stored_path TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('active','archived')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX design_refs_project ON design_refs(project_id, created_at);
+    CREATE TRIGGER design_refs_no_delete BEFORE DELETE ON design_refs
+      BEGIN SELECT RAISE(ABORT, 'references are archived, never deleted'); END;
   `,
 };
 
@@ -1025,6 +1053,74 @@ export class Workspace {
     }));
   }
 
+  // ---- Learning Studio (M9) ---------------------------------------------------
+
+  createReference(r: Omit<DesignReference, 'createdAt' | 'updatedAt' | 'status' | 'suggestion' | 'explanation'>): DesignReference {
+    if (r.projectId) this.getProject(r.projectId);
+    const at = this.timestamp();
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO design_refs (id, project_id, title, file_name, media_type, size, sha256, width, height, kind, tags, notes, stored_path, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+        )
+        .run(r.id, r.projectId, redactString(r.title), redactString(r.fileName), r.mediaType, r.size, r.sha256, r.width, r.height, r.kind, JSON.stringify(r.tags), r.notes === null ? null : redactString(r.notes), r.storedPath, at, at);
+      this.record('reference.imported', r.projectId, null, { referenceId: r.id, fileName: r.fileName, mediaType: r.mediaType, size: r.size, sha256: r.sha256 });
+    });
+    return this.getReference(r.id);
+  }
+
+  getReference(id: string): DesignReference {
+    const row = this.db.prepare('SELECT * FROM design_refs WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Reference', id);
+    return toReference(row);
+  }
+
+  /** Active references, newest first; `projectId: null` lists the ones linked to no project. */
+  listReferences(filter: { projectId?: string | null; archived?: boolean } = {}): DesignReference[] {
+    const where = [filter.archived ? "status = 'archived'" : "status = 'active'"];
+    const params: string[] = [];
+    if (filter.projectId === null) where.push('project_id IS NULL');
+    else if (filter.projectId !== undefined) {
+      where.push('project_id = ?');
+      params.push(filter.projectId);
+    }
+    return (this.db.prepare(`SELECT * FROM design_refs WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id`).all(...params) as Record<string, unknown>[]).map(toReference);
+  }
+
+  findReferenceByHash(sha256: string): DesignReference | null {
+    const row = this.db.prepare("SELECT * FROM design_refs WHERE sha256 = ? AND status = 'active'").get(sha256) as Record<string, unknown> | undefined;
+    return row ? toReference(row) : null;
+  }
+
+  updateReference(
+    id: string,
+    patch: Partial<{ projectId: string | null; title: string; kind: ReferenceKind; tags: string[]; notes: string | null; explanation: string | null; suggestion: ReferenceSuggestion | null; status: 'active' | 'archived' }>,
+    event: { type: string; payload: Record<string, unknown> },
+  ): DesignReference {
+    const r = this.getReference(id);
+    if (patch.projectId) this.getProject(patch.projectId);
+    const n = { ...r, ...patch };
+    this.transaction(() => {
+      this.db
+        .prepare('UPDATE design_refs SET project_id = ?, title = ?, kind = ?, tags = ?, notes = ?, explanation = ?, suggestion = ?, status = ?, updated_at = ? WHERE id = ?')
+        .run(
+          n.projectId,
+          redactString(n.title),
+          n.kind,
+          JSON.stringify(n.tags),
+          n.notes === null ? null : redactString(n.notes),
+          n.explanation === null ? null : redactString(n.explanation),
+          n.suggestion ? JSON.stringify(redact(n.suggestion)) : null,
+          n.status,
+          this.timestamp(),
+          id,
+        );
+      this.record(event.type, n.projectId ?? r.projectId, null, { referenceId: id, ...event.payload });
+    });
+    return this.getReference(id);
+  }
+
   // ---- Assessments (M8) ------------------------------------------------------
 
   /** Records the scope before anything is read (FR-PROJ-003). */
@@ -1404,6 +1500,29 @@ function toRelease(row: Record<string, unknown>): Release {
     updatedAt: String(row.updated_at),
     checkedAt: (row.checked_at as string | null) ?? null,
     preparedAt: (row.prepared_at as string | null) ?? null,
+  };
+}
+
+function toReference(row: Record<string, unknown>): DesignReference {
+  return {
+    id: String(row.id),
+    projectId: (row.project_id as string | null) ?? null,
+    title: String(row.title),
+    fileName: String(row.file_name),
+    mediaType: String(row.media_type) as DesignReference['mediaType'],
+    size: Number(row.size),
+    sha256: String(row.sha256),
+    width: row.width === null || row.width === undefined ? null : Number(row.width),
+    height: row.height === null || row.height === undefined ? null : Number(row.height),
+    kind: row.kind as ReferenceKind,
+    tags: JSON.parse(String(row.tags)) as string[],
+    notes: (row.notes as string | null) ?? null,
+    explanation: (row.explanation as string | null) ?? null,
+    suggestion: row.suggestion === null || row.suggestion === undefined ? null : (JSON.parse(String(row.suggestion)) as ReferenceSuggestion),
+    storedPath: String(row.stored_path),
+    status: row.status as DesignReference['status'],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 

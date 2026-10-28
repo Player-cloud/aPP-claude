@@ -22,6 +22,7 @@ import { Releaser, type ReleaseDetail } from '../core/release/releaser.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
 import { Assessor, scopeLabel, STATUS_LABEL } from '../core/assess/assessor.ts';
 import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
+import { Studio, type DesignReference, type ReferenceEdit } from '../core/studio/library.ts';
 import type { Assessment } from '../core/workspace.ts';
 import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
@@ -85,6 +86,15 @@ Assessment (read-only: reads the repository's current commit from git, never run
   assess capabilities                          List the categories and capabilities a scope can name
   assess list <projectId> | assess show <assessmentId>
 
+Learning Studio (design references: copied into the app, never changing a spec)
+  ref import <file>... [--project <projectId>]   Add PNG, JPEG, GIF, WebP, MP4, MOV or WebM files (the originals are left alone)
+  ref list [--query <text>] [--tag <tag>] [--kind <kind>] [--project <projectId>] [--archived]
+  ref show <refId>
+  ref edit <refId> [--title <t>] [--kind <kind>] [--tag <tag>]... [--notes <text>] [--explanation <text>] [--project <projectId> | --unlink]
+  ref suggest <refId>                         Ask for a kind, tags and explanation (simulated unless real calls are on)
+  ref accept <refId>                          Apply the suggestion as it is
+  ref archive <refId> [--restore]             Hide it from the library (references are never deleted)
+
 Audit and health
   events [--project <id>] [--run <id>] [--limit <n>]
   doctor
@@ -138,6 +148,13 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       path: { type: 'string' },
       scope: { type: 'string' },
       'not-applicable': { type: 'string', multiple: true },
+      query: { type: 'string' },
+      tag: { type: 'string', multiple: true },
+      notes: { type: 'string' },
+      explanation: { type: 'string' },
+      unlink: { type: 'boolean', default: false },
+      archived: { type: 'boolean', default: false },
+      restore: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -241,6 +258,53 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       case 'assess show': {
         const a = ws.getAssessment(need(rest[0], 'assessmentId'));
         print(a, () => describeAssessment(a, out));
+        return 0;
+      }
+      case 'ref import': {
+        if (!rest.length) throw new ValidationError('Missing <file>.');
+        const result = await new Studio(ws, new SimulatedModel()).importFiles(rest.map((f) => resolve(f)), values.project ?? null);
+        print(result, () => {
+          for (const r of result.imported) out(`Added ${r.id}  ${r.kind.padEnd(12)} ${r.title}`);
+          for (const s of result.skipped) out(`Skipped ${s.file}: ${s.reason}`);
+        });
+        return result.imported.length || !result.skipped.length ? 0 : 1;
+      }
+      case 'ref list': {
+        const list = new Studio(ws, new SimulatedModel()).list({ projectId: values.project, query: values.query, tag: values.tag?.[0], kind: values.kind, archived: values.archived });
+        print(list, () => {
+          if (!list.length) out('No references match.');
+          for (const r of list) out(`${r.id}  ${r.kind.padEnd(12)} ${r.title}${r.tags.length ? `  [${r.tags.join(', ')}]` : ''}`);
+        });
+        return 0;
+      }
+      case 'ref show': {
+        const r = ws.getReference(need(rest[0], 'refId'));
+        print(r, () => describeReference(r, out));
+        return 0;
+      }
+      case 'ref edit': {
+        const edit: ReferenceEdit = {};
+        if (values.title !== undefined) edit.title = values.title;
+        if (values.kind !== undefined) edit.kind = values.kind;
+        if (values.tag !== undefined) edit.tags = values.tag;
+        if (values.notes !== undefined) edit.notes = values.notes || null;
+        if (values.explanation !== undefined) edit.explanation = values.explanation || null;
+        if (values.unlink) edit.projectId = null;
+        else if (values.project !== undefined) edit.projectId = values.project;
+        const r = new Studio(ws, new SimulatedModel()).update(need(rest[0], 'refId'), edit);
+        print(r, () => describeReference(r, out));
+        return 0;
+      }
+      case 'ref suggest':
+      case 'ref accept': {
+        const id = need(rest[0], 'refId');
+        const r = sub === 'suggest' ? await new Studio(ws, agentModel(ws)).suggest(id) : new Studio(ws, new SimulatedModel()).acceptSuggestion(id);
+        print(r, () => describeReference(r, out));
+        return 0;
+      }
+      case 'ref archive': {
+        const r = new Studio(ws, new SimulatedModel()).archive(need(rest[0], 'refId'), !values.restore);
+        print(r, () => out(`${r.id} is ${r.status}.`));
         return 0;
       }
       case 'project show': {
@@ -546,6 +610,16 @@ function describeAssessment(a: Assessment, out: Out): void {
   for (const f of r.capabilities) out(`  ${STATUS_LABEL[f.status].padEnd(20)} ${f.title.padEnd(16)} confidence ${f.confidence}${f.externalState ? ', outside the code not verified' : ''}`);
   for (const x of r.notInspected) out(`  not inspected: ${x}`);
   if (a.reportPath) out(`  Report: ${a.reportPath}`);
+}
+
+function describeReference(r: DesignReference, out: Out): void {
+  out(`${r.id}  ${r.kind} "${r.title}" (${r.status})`);
+  out(`  file: ${r.fileName}, ${r.mediaType}, ${r.size} bytes${r.width ? `, ${r.width}×${r.height}` : ''}`);
+  out(`  project: ${r.projectId ?? 'none'}   tags: ${r.tags.join(', ') || 'none'}`);
+  if (r.notes) out(`  notes: ${r.notes}`);
+  if (r.explanation) out(`  explanation: ${r.explanation}`);
+  const s = r.suggestion;
+  if (s) out(`  suggestion (${s.model}, ${s.status}): ${s.kind}; ${s.tags.join(', ') || 'no tags'}; ${s.explanation}`);
 }
 
 function need(value: string | undefined, label: string): string {

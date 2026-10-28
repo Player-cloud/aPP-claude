@@ -13,6 +13,7 @@ import { Releaser, type ReleaseInput } from '../core/release/releaser.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
 import { Assessor } from '../core/assess/assessor.ts';
 import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
+import { REFERENCE_KINDS, Studio, type ReferenceEdit } from '../core/studio/library.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -23,7 +24,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment';
+type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -64,6 +65,12 @@ export interface ServiceOptions {
    */
   confirmChecks?: (request: { title: string; commands: string[]; folder: string }) => Promise<boolean>;
   checkTimeoutMs?: number;
+  /**
+   * Lets the person pick reference files in a native dialog (M9). The renderer
+   * never supplies a path, so a page cannot make the app read a file the
+   * person did not choose. Returns nothing when the person cancels.
+   */
+  pickFiles?: () => Promise<string[]>;
 }
 
 /** A build definition from the renderer. Contents are validated in builder.ts. */
@@ -111,6 +118,7 @@ export class AppService {
   private readonly claudeClient: (apiKey: string) => ClaudeClient;
   private readonly confirmChecks: NonNullable<ServiceOptions['confirmChecks']>;
   private readonly checkTimeoutMs: number | undefined;
+  private readonly pickFiles: () => Promise<string[]>;
 
   constructor(home: string, version: string, options: ServiceOptions = {}) {
     this.home = home;
@@ -121,6 +129,7 @@ export class AppService {
     // Without a way to ask (plain Node, tests), commands never run unless a caller supplies one.
     this.confirmChecks = options.confirmChecks ?? (async () => false);
     this.checkTimeoutMs = options.checkTimeoutMs;
+    this.pickFiles = options.pickFiles ?? (async () => []);
     this.tryOpen();
   }
 
@@ -188,6 +197,17 @@ export class AppService {
       throw new ValidationError('A monthly budget is set but no API key is stored. Add your Anthropic API key in Settings → AI usage, or choose "No real calls" to use the simulated agent.');
     }
     return new ClaudeModel(this.claudeClient(key));
+  }
+
+  /** For the main process's reference protocol only: the app's copy of a reference and its type. Never exposed over IPC. */
+  referenceFile(id: string): { path: string; mediaType: string } | null {
+    if (!/^ref_[0-9a-f-]{36}$/.test(id) || !this.ws) return null;
+    try {
+      const r = this.ws.getReference(id);
+      return { path: r.storedPath, mediaType: r.mediaType };
+    } catch {
+      return null;
+    }
   }
 
   private tryOpen(): void {
@@ -372,6 +392,41 @@ export class AppService {
       wrapAsync(() => {
         const i = obj(input, 'Assessment');
         return new Assessor(this.workspace()).run(str(i.projectId, 'Project id')!, i.scope === undefined ? {} : obj(i.scope, 'Scope'));
+      }),
+    // Learning Studio (M9). Files come only from the native picker; edits are validated in library.ts.
+    importReferences: (input) =>
+      wrapAsync(async () => {
+        const i = input === undefined ? {} : obj(input, 'Import');
+        const projectId = str(i.projectId, 'Project id', true) ?? null;
+        const files = await this.pickFiles();
+        if (!files.length) return { imported: [], skipped: [] };
+        return new Studio(this.workspace(), new SimulatedModel()).importFiles(files, projectId);
+      }),
+    listReferences: (filter) =>
+      wrap(() => {
+        const f = filter === undefined ? {} : obj(filter, 'Filter');
+        const projectId = f.projectId === null ? null : str(f.projectId, 'Project id', true);
+        return new Studio(this.workspace(), new SimulatedModel()).list({ projectId, query: str(f.query, 'Search', true), tag: str(f.tag, 'Tag', true), kind: str(f.kind, 'Kind', true), archived: f.archived === true });
+      }),
+    getReference: (id) => wrap(() => this.workspace().getReference(str(id, 'Reference id')!)),
+    referenceCatalog: () => wrap(() => ({ kinds: [...REFERENCE_KINDS], tags: new Studio(this.workspace(), new SimulatedModel()).tagCounts() })),
+    updateReference: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Reference');
+        const edit: ReferenceEdit = {};
+        if (i.title !== undefined) edit.title = str(i.title, 'Title')!;
+        if (i.kind !== undefined) edit.kind = str(i.kind, 'Kind')!;
+        for (const k of ['notes', 'explanation'] as const) if (i[k] !== undefined) edit[k] = i[k] === null ? null : str(i[k], k)!;
+        if (i.tags !== undefined) edit.tags = i.tags as string[];
+        if (i.projectId !== undefined) edit.projectId = i.projectId === null ? null : str(i.projectId, 'Project id')!;
+        return new Studio(this.workspace(), new SimulatedModel()).update(str(i.id, 'Reference id')!, edit);
+      }),
+    suggestReference: (id) => wrapAsync(() => new Studio(this.workspace(), this.agentModel()).suggest(str(id, 'Reference id')!)),
+    acceptReferenceSuggestion: (id) => wrap(() => new Studio(this.workspace(), new SimulatedModel()).acceptSuggestion(str(id, 'Reference id')!)),
+    archiveReference: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Archive');
+        return new Studio(this.workspace(), new SimulatedModel()).archive(str(i.id, 'Reference id')!, i.archived !== false);
       }),
     // Planning (M5). Content is validated in planner.ts; ids are checked to exist.
     getPlanning: (projectId) => wrap(() => this.planner().overview(str(projectId, 'Project id')!)),
