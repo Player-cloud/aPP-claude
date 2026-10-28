@@ -521,7 +521,11 @@ export function scanInventory(roots: ScanRoots): Inventory {
       for (const dir of pathsFrom('agents', 'agents')) scanAgents(dir, origin);
       const hooksFile = join(installPath, 'hooks', 'hooks.json');
       const hooksJson = r.json(hooksFile);
-      if (hooksJson) scanHooks(hooksJson.hooks ?? hooksJson, hooksFile, origin);
+      if (hooksJson) {
+        const modules = Array.isArray(hooksJson.modules) ? hooksJson.modules.filter((m): m is string => typeof m === 'string') : [];
+        if (modules.length) r.issues.push({ path: hooksFile, problem: `Hooks are registered by code (${modules.slice(0, 5).join(', ')}), which the scan does not run, so they are not listed.` });
+        else scanHooks(hooksJson.hooks ?? hooksJson, hooksFile, origin);
+      }
       const mcpFile = join(installPath, '.mcp.json');
       const mcpJson = r.json(mcpFile);
       if (mcpJson) scanMcpServers(mcpJson.mcpServers ?? mcpJson, mcpFile, origin);
