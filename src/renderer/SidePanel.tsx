@@ -114,6 +114,9 @@ const PREFERENCE_TABS = [
   { icon: 'bookmark', label: 'Preferences', tab: 'preferences' },
   { icon: 'list', label: 'Wrap-up', tab: 'wrapup' },
   { icon: 'archive', label: 'Vault', tab: 'vault' },
+  { icon: 'sparkle', label: 'Lessons', tab: 'lessons' },
+  { icon: 'board', label: 'Skills', tab: 'skills' },
+  { icon: 'tools', label: 'Add-ons', tab: 'addons' },
 ] as const;
 
 const PLATFORM_GROUPS = [

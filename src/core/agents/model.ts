@@ -19,8 +19,10 @@ export interface ModelRequest {
    * "brief" and "spec" are JSON written by planner.ts. "build" is one turn of
    * the build agent's tool loop (M6, DEC-020): see `loop`. "classify" suggests
    * a kind, tags and an explanation for a design reference (M9), with `image`.
+   * "lessons" reads a source the person imported, with `document`, and answers
+   * with citations (M14, DEC-031).
    */
-  purpose: 'plan' | 'work' | 'brief' | 'spec' | 'build' | 'classify';
+  purpose: 'plan' | 'work' | 'brief' | 'spec' | 'build' | 'classify' | 'lessons';
   taskTitle: string;
   instructions: string;
   maxOutputTokens: number;
@@ -29,6 +31,27 @@ export interface ModelRequest {
   loop?: { tools: LoopTool[]; turns: LoopTurn[] };
   /** For "classify": the image itself, base64-encoded. Its content is data, never instructions. */
   image?: { mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; data: string };
+  /** For "lessons": the source, as a PDF or as numbered passages. Its content is data, never instructions. */
+  document?: SourceDocument;
+}
+
+export type SourceDocument = { title: string; kind: 'pdf'; data: string; pages: number | null } | { title: string; kind: 'passages'; passages: string[] };
+
+/**
+ * Where a cited claim comes from. Pages are 1-based; passages are 0-based
+ * indexes into the passages sent. `end` is exclusive in both.
+ */
+export interface SourceCitation {
+  kind: 'page' | 'passage';
+  start: number;
+  end: number;
+  quote: string;
+}
+
+/** A piece of the answer and the source locations it cites (none for the model's own words). */
+export interface CitedText {
+  text: string;
+  citations: SourceCitation[];
 }
 
 /** A tool the build agent may call. The schema is JSON Schema for its input. */
@@ -64,6 +87,8 @@ export interface ModelResponse {
   /** For "build": the tools the model wants to call next (empty when it is done), and its content to send back. */
   calls?: LoopToolCall[];
   raw?: unknown;
+  /** For "lessons": the answer in pieces with their citations; `text` is the same pieces joined. */
+  cited?: CitedText[];
 }
 
 export interface ModelAdapter {
@@ -81,6 +106,8 @@ export interface SimulatedStep {
   toolRequests?: ToolRequest[];
   /** For "build": tool calls to make this turn. */
   calls?: LoopToolCall[];
+  /** For "lessons": the answer with citations. */
+  cited?: CitedText[];
   /** Throw this message instead of answering (simulates an agent or API failure). */
   fail?: string;
   /** Answer after this many milliseconds (or never, if it exceeds the timeout). */
@@ -124,13 +151,14 @@ export class SimulatedModel implements ModelAdapter {
     }
     if (signal.aborted) throw new Error('aborted');
     if (step.fail) throw new Error(step.fail);
-    const text = step.text ?? '';
+    const text = step.cited ? step.cited.map((c) => c.text).join('') : (step.text ?? '');
     return {
       text,
       toolRequests: step.toolRequests ?? [],
       usage: { inputTokens: Math.ceil(rest.instructions.length / 4), outputTokens: Math.ceil(text.length / 4) },
       costUsd: step.costUsd ?? 0,
       ...(rest.purpose === 'build' ? { calls: step.calls ?? [], raw: { text, calls: step.calls ?? [] } } : {}),
+      ...(step.cited ? { cited: step.cited } : {}),
     };
   }
 }
@@ -147,6 +175,7 @@ function defaultScript(request: Omit<ModelRequest, 'signal'>): SimulatedStep {
     if (turns.length === 0) return { calls: [{ id: 'sim_1', name: 'list_files', input: { path: '.' } }] };
     return { text: `${SIMULATED_NOTE}\n\nThe simulated agent listed the repository files and made no changes. Make the change yourself in the worktree, then run the checks again.` };
   }
+  if (request.purpose === 'lessons') return { cited: simulatedLessons(request.document) };
   if (request.purpose === 'classify') return { text: JSON.stringify(simulatedClassification(JSON.parse(request.instructions))) };
   if (request.purpose === 'plan') {
     return { text: JSON.stringify({ subtasks: [{ title: request.taskTitle, goal: request.instructions, writes: [], dependsOn: [], risk: 'low', estTokens: 2000 }] }) };
@@ -163,4 +192,20 @@ function simulatedClassification(input: { fileName?: string; mediaType?: string;
   const kind = video ? 'video' : /anim|motion|transition|gif/.test(name) ? 'animation' : /screen|shot|capture|dashboard|page/.test(name) ? 'screenshot' : /mock|figma|design|wireframe|ui/.test(name) ? 'ui_design' : 'other';
   const tags = [...new Set([...words.slice(0, 4), ...(video ? [] : [wide ? 'landscape' : 'portrait'])])];
   return { kind, tags, explanation: `${SIMULATED_NOTE} Suggested from the file name and size only; the image was not looked at.` };
+}
+
+/**
+ * Quotes the first passages word for word, so the layout of cited lessons can
+ * be seen without a model. It never pretends to have understood the source,
+ * and a PDF is not read at all.
+ */
+function simulatedLessons(document: SourceDocument | undefined): CitedText[] {
+  const out: CitedText[] = [{ text: '## Lessons\n', citations: [] }];
+  const passages = document?.kind === 'passages' ? document.passages.slice(0, 3) : [];
+  passages.forEach((p, i) => {
+    const quote = p.replace(/^\[[\d:]+\]\s*/, '');
+    out.push({ text: '- ', citations: [] }, { text: `[Simulated] The source says: “${quote.length > 160 ? `${quote.slice(0, 159)}…` : quote}”`, citations: [{ kind: 'passage', start: i, end: i + 1, quote: p }] }, { text: '\n', citations: [] });
+  });
+  out.push({ text: `\n## Suggestions\n- [other] ${SIMULATED_NOTE} No AI read this source${document?.kind === 'pdf' ? ' (a PDF is not read without a model)' : ''}; real suggestions appear here when a budget and an API key are set.\n`, citations: [] });
+  return out;
 }

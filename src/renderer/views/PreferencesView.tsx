@@ -8,12 +8,13 @@ import type { Preference, PreferenceDetail, Project, SessionSummary, SummaryItem
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { Alert, Badge, Empty, formatTime, relativeTime, type Tone } from '../ui.tsx';
+import { AddonsTab, LessonsTab, SkillsTab } from './LearnTabs.tsx';
 
-export type PreferencesTab = 'preferences' | 'wrapup' | 'vault';
+export type PreferencesTab = 'preferences' | 'wrapup' | 'vault' | 'lessons' | 'skills' | 'addons';
 
 const STATUS_TONE: Record<Preference['status'], Tone> = { proposed: 'warn', active: 'ok', rejected: 'neutral', removed: 'neutral' };
 const BASIS_TONE: Record<SummaryItem['basis'], Tone> = { confirmed: 'ok', assumption: 'warn', inferred: 'info' };
-const SOURCE_LABEL: Record<Preference['source']['type'], string> = { person: 'Typed as a preference', feedback: 'From feedback', wrap_up: 'From a wrap-up' };
+const SOURCE_LABEL: Record<Preference['source']['type'], string> = { person: 'Typed as a preference', feedback: 'From feedback', wrap_up: 'From a wrap-up', lesson: 'From a lesson' };
 
 function ScopeChooser({ scope, projectId, projects, onChange, name }: { scope: 'global' | 'project'; projectId: string; projects: Project[]; onChange: (scope: 'global' | 'project', projectId: string) => void; name: string }) {
   return (
@@ -504,7 +505,7 @@ function VaultTab({ onProposed }: { onProposed: () => void }) {
                   <span className="imp-num">NOTE-{n.number}</span>
                   <span className="run-tile-title">{n.title}</span>
                   <span className="imp-badges">
-                    <Badge tone="neutral">{n.kind === 'session' ? 'Wrap-up' : 'Note'}</Badge>
+                    <Badge tone="neutral">{n.kind === 'session' ? 'Wrap-up' : n.kind === 'lesson' ? 'Lessons' : 'Note'}</Badge>
                     <span className="subtle">{relativeTime(n.createdAt)}</span>
                   </span>
                 </button>
@@ -615,6 +616,14 @@ function VaultTab({ onProposed }: { onProposed: () => void }) {
 
 export function PreferencesView({ projects, tab, onTab }: { projects: Project[]; tab: PreferencesTab; onTab: (t: PreferencesTab) => void }) {
   const [refresh, setRefresh] = useState(0);
+  const tabs: { id: PreferencesTab; label: string }[] = [
+    { id: 'preferences', label: 'Preferences' },
+    { id: 'wrapup', label: 'Wrap-up' },
+    { id: 'vault', label: 'Vault' },
+    { id: 'lessons', label: 'Lessons' },
+    { id: 'skills', label: 'Skills' },
+    { id: 'addons', label: 'Add-ons' },
+  ];
   return (
     <>
       <p className="eyebrow">Learning</p>
@@ -622,22 +631,21 @@ export function PreferencesView({ projects, tab, onTab }: { projects: Project[];
         Remember how you <span className="accent">like the work done</span>
       </h1>
       <p className="page-lede">
-        Preferences you approve guide the build agent, for all work or for one project. Wrap-ups summarise what happened from the app&rsquo;s records and go to the Vault only when you save them.
+        Preferences you approve guide the build agent, for all work or for one project. Wrap-ups and lessons are notes until you choose otherwise, skills from repeated work are exported as files, and optional add-ons are reviewed one by one. Nothing here is used or installed without you.
       </p>
       <div className="segmented page-tabs" role="group" aria-label="Show">
-        <button type="button" aria-pressed={tab === 'preferences'} onClick={() => onTab('preferences')}>
-          Preferences
-        </button>
-        <button type="button" aria-pressed={tab === 'wrapup'} onClick={() => onTab('wrapup')}>
-          Wrap-up
-        </button>
-        <button type="button" aria-pressed={tab === 'vault'} onClick={() => onTab('vault')}>
-          Vault
-        </button>
+        {tabs.map((t) => (
+          <button key={t.id} type="button" aria-pressed={tab === t.id} onClick={() => onTab(t.id)}>
+            {t.label}
+          </button>
+        ))}
       </div>
       {tab === 'preferences' && <PreferencesTabView key={refresh} projects={projects} />}
       {tab === 'wrapup' && <WrapUpTab onSaved={() => setRefresh((n) => n + 1)} />}
       {tab === 'vault' && <VaultTab onProposed={() => setRefresh((n) => n + 1)} />}
+      {tab === 'lessons' && <LessonsTab projects={projects} />}
+      {tab === 'skills' && <SkillsTab />}
+      {tab === 'addons' && <AddonsTab />}
     </>
   );
 }

@@ -150,6 +150,17 @@ The database is the source of truth: editing these files does not change the app
 | Wrap-up | Desktop: Preferences → *Wrap-up*. CLI: `iap wrapup [--hours <n>] [--save]`. Built from the app's records, no AI call. Without a period it starts where the last saved wrap-up ended, or 24 hours ago |
 | Vault | `iap vault list | show | keep | archive NOTE-<n>`, `iap vault note --title <t> <text>`, `iap vault prefer NOTE-<n> <line>` (propose one line as a preference) |
 
+## Lessons, skills and add-ons (M14, DEC-031)
+
+| What | Where / how |
+|---|---|
+| Add a source | Desktop: Preferences and lessons → *Lessons* → *Add sources* (native picker). CLI: `iap lesson import <file>...`. Transcripts (.vtt, .srt, .txt with times), notes (.md, .txt) and PDFs up to 32 MB and 100 pages. For a video, import its transcript. Copies are kept in `<data directory>/sources/` |
+| Read it | *Read for lessons*, or `iap lesson read SRC-<n>`. One Claude call with citations when real calls are on (a 30-minute transcript is roughly 10,000 input tokens, about $0.05–0.15; a PDF costs about 3,000 tokens a page); simulated otherwise. Reading stores the lessons and suggestions and changes nothing else |
+| Use a suggestion | *Propose as preference* (then approve it in Preferences), *Add as idea* (Improvements), or *Set aside*. CLI: `iap lesson prefer | idea | dismiss SRC-<n> <suggestion>`. `iap lesson vault SRC-<n>` saves the reading to the Vault inbox |
+| Skill proposals | *Skills* → *Look for repeated work*, or `iap skill detect`. Work done three or more times alike becomes SKL-<n>. Scan your tools first (Tools → *Scan now*) so duplicates can be checked; each likely duplicate needs your note before *Approve* (`iap skill approve SKL-<n> --different <id>=<why>`) |
+| Export a skill | *Export SKILL.md…* (native folder picker) or `iap skill export SKL-<n> --out <folder>`. Writes `<folder>/<name>/SKILL.md`, never overwrites, and refuses Claude Code's folders. To use it, copy the folder into `~/.claude/skills/` yourself |
+| Add-ons | *Add-ons* or `iap addon list` / `iap addon review <name> --decision include|exclude|defer --reason <why> [--source ok:<note>] …`. A decision is a record only: the app never installs, enables or removes an add-on, and works the same with all of them off |
+
 ## Real model calls (M3, DEC-018)
 
 The main agent, the planning drafts and the build agent all use this. A build agent run is also capped at $3 and 40 turns. Real Claude calls need **both** a monthly budget and an Anthropic API key, set in *Settings → AI usage*. Without either, the agent uses the free simulated model.

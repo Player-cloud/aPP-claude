@@ -29,9 +29,12 @@ import type { CleanupPlan } from './cleanup/cleanup.ts';
 import type { SourceResult, UpdateCheck, UpdateItem } from './updates/updates.ts';
 import type { Preference } from './learn/preferences.ts';
 import type { SessionSummary, VaultNote } from './learn/vault.ts';
+import type { LearningSource } from './learn/lessons.ts';
+import type { SkillProposal } from './learn/skills.ts';
+import type { AddonReview } from './learn/addons.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -641,6 +644,79 @@ const MIGRATIONS: Record<number, string> = {
       WHEN NEW.summary IS NOT OLD.summary OR NEW.kind IS NOT OLD.kind OR NEW.source IS NOT OLD.source
         OR (OLD.kind <> 'note' AND (NEW.body IS NOT OLD.body OR NEW.title IS NOT OLD.title))
       BEGIN SELECT RAISE(ABORT, 'a saved summary cannot change'); END;
+  `,
+  16: `
+    -- M14 learning, part 2: sources imported for lessons, skill proposals from repeated
+    -- work, and reviews of the optional add-ons. None is ever deleted. A source's file
+    -- and passages cannot change; a skill proposal keeps its examples and first draft;
+    -- an add-on review is a fixed record, and a new review is a new row.
+    CREATE TABLE learning_sources (
+      id TEXT PRIMARY KEY,
+      number INTEGER NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('transcript','text','pdf')),
+      size INTEGER NOT NULL,
+      sha256 TEXT NOT NULL UNIQUE,
+      pages INTEGER,
+      segments TEXT NOT NULL,
+      stored_path TEXT NOT NULL,
+      project_id TEXT REFERENCES projects(id),
+      status TEXT NOT NULL CHECK (status IN ('active','archived')),
+      extractions TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TRIGGER learning_sources_no_delete BEFORE DELETE ON learning_sources
+      BEGIN SELECT RAISE(ABORT, 'learning sources are never deleted'); END;
+    CREATE TRIGGER learning_sources_fixed BEFORE UPDATE ON learning_sources
+      WHEN NEW.kind IS NOT OLD.kind OR NEW.sha256 IS NOT OLD.sha256 OR NEW.segments IS NOT OLD.segments
+        OR NEW.stored_path IS NOT OLD.stored_path OR NEW.file_name IS NOT OLD.file_name
+        OR json_array_length(NEW.extractions) < json_array_length(OLD.extractions)
+      BEGIN SELECT RAISE(ABORT, 'a source and its readings cannot be replaced'); END;
+    CREATE TABLE skill_proposals (
+      id TEXT PRIMARY KEY,
+      number INTEGER NOT NULL UNIQUE,
+      signature TEXT NOT NULL UNIQUE,
+      examples TEXT NOT NULL,
+      draft TEXT NOT NULL,
+      proposed_draft TEXT NOT NULL,
+      duplicates TEXT NOT NULL,
+      scan_id TEXT,
+      scanned_at TEXT,
+      decisions TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL CHECK (status IN ('proposed','approved','rejected')),
+      approver TEXT,
+      approved_at TEXT,
+      reason TEXT,
+      exports TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TRIGGER skill_proposals_no_delete BEFORE DELETE ON skill_proposals
+      BEGIN SELECT RAISE(ABORT, 'skill proposals are never deleted'); END;
+    CREATE TRIGGER skill_proposals_fixed BEFORE UPDATE ON skill_proposals
+      WHEN OLD.status = 'rejected' OR NEW.signature IS NOT OLD.signature OR NEW.examples IS NOT OLD.examples
+        OR NEW.proposed_draft IS NOT OLD.proposed_draft
+        OR (OLD.status = 'approved' AND (NEW.status <> 'approved' OR NEW.draft IS NOT OLD.draft OR NEW.decisions IS NOT OLD.decisions))
+      BEGIN SELECT RAISE(ABORT, 'a decided skill proposal cannot change'); END;
+    CREATE TABLE addon_reviews (
+      id TEXT PRIMARY KEY,
+      number INTEGER NOT NULL UNIQUE,
+      addon_key TEXT NOT NULL,
+      criteria TEXT NOT NULL,
+      decision TEXT NOT NULL CHECK (decision IN ('include','exclude','defer')),
+      reason TEXT NOT NULL,
+      scan_id TEXT,
+      found TEXT NOT NULL,
+      reviewer TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX addon_reviews_key ON addon_reviews(addon_key, number);
+    CREATE TRIGGER addon_reviews_frozen BEFORE UPDATE ON addon_reviews
+      BEGIN SELECT RAISE(ABORT, 'a review cannot change; record a new one'); END;
+    CREATE TRIGGER addon_reviews_no_delete BEFORE DELETE ON addon_reviews
+      BEGIN SELECT RAISE(ABORT, 'reviews are never deleted'); END;
   `,
 };
 
@@ -1951,6 +2027,121 @@ export class Workspace {
     }));
   }
 
+  // ---- Lessons, skill proposals and add-on reviews (M14) ---------------------------
+
+  createLearningSource(s: Pick<LearningSource, 'id' | 'title' | 'fileName' | 'kind' | 'size' | 'sha256' | 'pages' | 'segments' | 'storedPath' | 'projectId'>): LearningSource {
+    const at = this.timestamp();
+    this.transaction(() => {
+      const number = Number((this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM learning_sources').get() as { n: number }).n);
+      this.db
+        .prepare(
+          `INSERT INTO learning_sources (id, number, title, file_name, kind, size, sha256, pages, segments, stored_path, project_id, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+        )
+        .run(s.id, number, s.title, s.fileName, s.kind, s.size, s.sha256, s.pages, JSON.stringify(s.segments), s.storedPath, s.projectId, at, at);
+      this.record('source.imported', s.projectId, null, { sourceId: s.id, number, kind: s.kind, fileName: s.fileName, size: s.size, passages: s.segments.length, pages: s.pages });
+    });
+    return this.getLearningSource(s.id);
+  }
+
+  getLearningSource(id: string): LearningSource {
+    const row = this.db.prepare('SELECT * FROM learning_sources WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Source', id);
+    return toLearningSource(row);
+  }
+
+  findLearningSourceByHash(sha256: string): LearningSource | null {
+    const row = this.db.prepare('SELECT * FROM learning_sources WHERE sha256 = ?').get(sha256) as Record<string, unknown> | undefined;
+    return row ? toLearningSource(row) : null;
+  }
+
+  /** Newest first. `archived: null` lists both. */
+  listLearningSources(filter: { archived?: boolean | null } = {}): LearningSource[] {
+    const sql = filter.archived === null ? 'SELECT * FROM learning_sources ORDER BY number DESC' : 'SELECT * FROM learning_sources WHERE status = ? ORDER BY number DESC';
+    const rows = (filter.archived === null ? this.db.prepare(sql).all() : this.db.prepare(sql).all(filter.archived ? 'archived' : 'active')) as Record<string, unknown>[];
+    return rows.map(toLearningSource);
+  }
+
+  updateLearningSource(id: string, patch: Partial<Pick<LearningSource, 'title' | 'status' | 'extractions'>>, event: { type: string; payload: Record<string, unknown> }): LearningSource {
+    const n = { ...this.getLearningSource(id), ...patch };
+    this.transaction(() => {
+      this.db.prepare('UPDATE learning_sources SET title = ?, status = ?, extractions = ?, updated_at = ? WHERE id = ?').run(n.title, n.status, JSON.stringify(redact(n.extractions)), this.timestamp(), id);
+      this.record(event.type, n.projectId, null, { sourceId: id, ...event.payload });
+    });
+    return this.getLearningSource(id);
+  }
+
+  createSkillProposal(p: Pick<SkillProposal, 'signature' | 'examples' | 'draft' | 'duplicates' | 'scanId' | 'scannedAt'>): SkillProposal {
+    const id = `skl_${randomUUID()}`;
+    const at = this.timestamp();
+    this.transaction(() => {
+      const number = Number((this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM skill_proposals').get() as { n: number }).n);
+      const draft = JSON.stringify(redact(p.draft));
+      this.db
+        .prepare(
+          `INSERT INTO skill_proposals (id, number, signature, examples, draft, proposed_draft, duplicates, scan_id, scanned_at, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?)`,
+        )
+        .run(id, number, p.signature, JSON.stringify(redact(p.examples)), draft, draft, JSON.stringify(p.duplicates), p.scanId, p.scannedAt, at, at);
+      this.record('skill.proposed', null, null, { skillId: id, number, name: p.draft.name, examples: p.examples.length, duplicates: p.duplicates.length, scanId: p.scanId });
+    });
+    return this.getSkillProposal(id);
+  }
+
+  getSkillProposal(id: string): SkillProposal {
+    const row = this.db.prepare('SELECT * FROM skill_proposals WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Skill proposal', id);
+    return toSkillProposal(row);
+  }
+
+  /** Newest first. */
+  listSkillProposals(status?: SkillProposal['status']): SkillProposal[] {
+    const rows = (status ? this.db.prepare('SELECT * FROM skill_proposals WHERE status = ? ORDER BY number DESC').all(status) : this.db.prepare('SELECT * FROM skill_proposals ORDER BY number DESC').all()) as Record<string, unknown>[];
+    return rows.map(toSkillProposal);
+  }
+
+  updateSkillProposal(id: string, patch: Partial<Pick<SkillProposal, 'draft' | 'duplicates' | 'scanId' | 'scannedAt' | 'decisions' | 'status' | 'approver' | 'approvedAt' | 'reason' | 'exports'>>, event: { type: string; payload: Record<string, unknown> }): SkillProposal {
+    const n = { ...this.getSkillProposal(id), ...patch };
+    this.transaction(() => {
+      this.db
+        .prepare('UPDATE skill_proposals SET draft = ?, duplicates = ?, scan_id = ?, scanned_at = ?, decisions = ?, status = ?, approver = ?, approved_at = ?, reason = ?, exports = ?, updated_at = ? WHERE id = ?')
+        .run(
+          patch.draft ? JSON.stringify(redact(n.draft)) : JSON.stringify(n.draft),
+          JSON.stringify(n.duplicates),
+          n.scanId,
+          n.scannedAt,
+          JSON.stringify(redact(n.decisions)),
+          n.status,
+          n.approver,
+          n.approvedAt,
+          n.reason === null ? null : redactString(n.reason),
+          JSON.stringify(n.exports),
+          this.timestamp(),
+          id,
+        );
+      this.record(event.type, null, null, { skillId: id, ...event.payload });
+    });
+    return this.getSkillProposal(id);
+  }
+
+  createAddonReview(r: Pick<AddonReview, 'addonKey' | 'criteria' | 'decision' | 'reason' | 'scanId' | 'found'>): AddonReview {
+    const id = `rev_${randomUUID()}`;
+    this.transaction(() => {
+      const number = Number((this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM addon_reviews').get() as { n: number }).n);
+      this.db
+        .prepare('INSERT INTO addon_reviews (id, number, addon_key, criteria, decision, reason, scan_id, found, reviewer, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, number, r.addonKey, JSON.stringify(redact(r.criteria)), r.decision, redactString(r.reason), r.scanId, JSON.stringify(r.found), this.actorName(), this.timestamp());
+      this.record('addon.reviewed', null, null, { reviewId: id, number, addon: r.addonKey, decision: r.decision, found: r.found.length, scanId: r.scanId });
+    });
+    const row = this.db.prepare('SELECT * FROM addon_reviews WHERE id = ?').get(id) as Record<string, unknown>;
+    return toAddonReview(row);
+  }
+
+  /** Newest first. */
+  listAddonReviews(): AddonReview[] {
+    return (this.db.prepare('SELECT * FROM addon_reviews ORDER BY number DESC').all() as Record<string, unknown>[]).map(toAddonReview);
+  }
+
   // ---- Assessments (M8) ------------------------------------------------------
 
   /** Records the scope before anything is read (FR-PROJ-003). */
@@ -2451,6 +2642,64 @@ function toPreference(row: Record<string, unknown>): Preference {
     reason: opt('reason'),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toLearningSource(row: Record<string, unknown>): LearningSource {
+  return {
+    id: String(row.id),
+    number: Number(row.number),
+    title: String(row.title),
+    fileName: String(row.file_name),
+    kind: row.kind as LearningSource['kind'],
+    size: Number(row.size),
+    sha256: String(row.sha256),
+    pages: row.pages === null || row.pages === undefined ? null : Number(row.pages),
+    segments: JSON.parse(String(row.segments)) as LearningSource['segments'],
+    storedPath: String(row.stored_path),
+    projectId: (row.project_id as string | null) ?? null,
+    status: row.status as LearningSource['status'],
+    extractions: JSON.parse(String(row.extractions)) as LearningSource['extractions'],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toSkillProposal(row: Record<string, unknown>): SkillProposal {
+  const opt = (k: string) => (row[k] as string | null) ?? null;
+  return {
+    id: String(row.id),
+    number: Number(row.number),
+    signature: String(row.signature),
+    examples: JSON.parse(String(row.examples)) as SkillProposal['examples'],
+    draft: JSON.parse(String(row.draft)) as SkillProposal['draft'],
+    proposedDraft: JSON.parse(String(row.proposed_draft)) as SkillProposal['proposedDraft'],
+    duplicates: JSON.parse(String(row.duplicates)) as SkillProposal['duplicates'],
+    scanId: opt('scan_id'),
+    scannedAt: opt('scanned_at'),
+    decisions: JSON.parse(String(row.decisions)) as SkillProposal['decisions'],
+    status: row.status as SkillProposal['status'],
+    approver: opt('approver'),
+    approvedAt: opt('approved_at'),
+    reason: opt('reason'),
+    exports: JSON.parse(String(row.exports)) as SkillProposal['exports'],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toAddonReview(row: Record<string, unknown>): AddonReview {
+  return {
+    id: String(row.id),
+    number: Number(row.number),
+    addonKey: String(row.addon_key),
+    criteria: JSON.parse(String(row.criteria)) as AddonReview['criteria'],
+    decision: row.decision as AddonReview['decision'],
+    reason: String(row.reason),
+    scanId: (row.scan_id as string | null) ?? null,
+    found: JSON.parse(String(row.found)) as AddonReview['found'],
+    reviewer: String(row.reviewer),
+    createdAt: String(row.created_at),
   };
 }
 

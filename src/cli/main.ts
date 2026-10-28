@@ -34,6 +34,9 @@ import { listBackups, Maintenance, restoreBackup, type MaintenanceOverview } fro
 import type { AgentTask } from '../core/workspace.ts';
 import { Preferences, type PreferenceDetail } from '../core/learn/preferences.ts';
 import { renderSummary, Vault, type VaultNote } from '../core/learn/vault.ts';
+import { Lessons, renderLessons, type LearningSource } from '../core/learn/lessons.ts';
+import { Skills, type SkillProposal } from '../core/learn/skills.ts';
+import { Addons } from '../core/learn/addons.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
 
 const USAGE = `Usage: iap <command> [options]
@@ -146,6 +149,29 @@ Session wrap-up and Vault (summaries come from the records; saved only with --sa
   vault note --title <t> <text> [--project <projectId>]
   vault prefer <NOTE-n> <line>                Propose one line of a saved note as a preference
 
+Lessons (from transcripts and documents you import; reading one changes nothing else)
+  lesson import <file>... [--project <projectId>]   Add .vtt, .srt, .txt, .md or .pdf files (videos: import their transcript)
+  lesson list [--archived] | lesson show <SRC-n>
+  lesson read <SRC-n>                         Cited lessons and separate suggestions (simulated unless real calls are on)
+  lesson prefer <SRC-n> <n> [--project <projectId>]   Propose suggestion n as a preference (it still needs approval)
+  lesson idea <SRC-n> <n> | lesson dismiss <SRC-n> <n>   Add suggestion n to the improvement backlog, or set it aside
+  lesson vault <SRC-n>                        Save the latest reading to the Vault inbox
+  lesson archive <SRC-n> [--restore]
+
+Skills (proposed from repeated work; exported as a file, never installed)
+  skill detect                                Look for work done three or more times and propose a skill for each
+  skill list [--status <proposed|approved|rejected>] | skill show <SKL-n>   show prints the SKILL.md it would export
+  skill edit <SKL-n> [--name <kebab-name>] [--description <when to use it>] [--step <t>]... [--permission <t>]... [--test <t>]... [--benefit <t>]
+  skill approve <SKL-n> [--different <id=why it is different>]...   Needs a tool scan; each likely duplicate needs --different
+  skill reject <SKL-n> --reason <why>
+  skill export <SKL-n> --out <folder>         Writes <folder>/<name>/SKILL.md (never into Claude Code's folders, never overwriting)
+
+Add-ons (optional tools reviewed one by one; the app never installs, enables or removes them)
+  addon list
+  addon review <name> --decision <include|exclude|defer> --reason <why>
+            [--source <ok|concern>:<note>] [--permissions …] [--compatibility …] [--cost …] [--benefit …]
+            Include needs the add-on in the latest tool scan and all five reviewed
+
 Platform maintenance (approved items are built in worktrees of the app's own source; the running app is never changed)
   platform setup <sourceFolder>              Use the app's source repository (records the running version as known-good)
   platform status
@@ -239,6 +265,18 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       hours: { type: 'string' },
       save: { type: 'boolean', default: false },
       feedback: { type: 'boolean', default: false },
+      description: { type: 'string' },
+      step: { type: 'string', multiple: true },
+      permission: { type: 'string', multiple: true },
+      test: { type: 'string', multiple: true },
+      benefit: { type: 'string' },
+      different: { type: 'string', multiple: true },
+      out: { type: 'string' },
+      decision: { type: 'string' },
+      source: { type: 'string' },
+      permissions: { type: 'string' },
+      compatibility: { type: 'string' },
+      cost: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -644,6 +682,115 @@ Not saved. Save it to the Vault inbox with: iap wrapup --save${values.hours ? ` 
         const p = new Vault(ws).proposePreference(need(rest[0], 'NOTE-n'), rest.slice(1).join(' ').trim(), undefined, values.project);
         const d = new Preferences(ws).detail(p.id);
         print(d, () => describePreference(d, out));
+        return 0;
+      }
+      case 'lesson import': {
+        if (!rest.length) throw new ValidationError('Give at least one file.');
+        const r = new Lessons(ws, new SimulatedModel()).importFiles(rest.map((f) => resolve(f)), values.project ?? null);
+        print(r, () => {
+          for (const s of r.imported) out(`SRC-${s.number}  ${s.kind.padEnd(10)} ${s.title}  (${s.kind === 'pdf' ? `${s.pages ?? '?'} pages` : `${s.segments.length} passage${s.segments.length === 1 ? '' : 's'}`})`);
+          for (const s of r.skipped) out(`skipped ${s.file}: ${s.reason}`);
+          if (r.imported.length) out(`Read one with: iap lesson read SRC-${r.imported[0]!.number}`);
+        });
+        return r.imported.length || !r.skipped.length ? 0 : 1;
+      }
+      case 'lesson list': {
+        const list = new Lessons(ws, new SimulatedModel()).list({ archived: values.archived });
+        print(list, () => {
+          if (!list.length) out('No sources yet. Import one with: iap lesson import <file>');
+          for (const s of list) out(`SRC-${s.number}  ${s.kind.padEnd(10)} ${String(s.extractions.length).padStart(2)} reading(s)  ${s.title}`);
+        });
+        return 0;
+      }
+      case 'lesson show':
+      case 'lesson read': {
+        const ref = need(rest[0], 'SRC-n');
+        const s = sub === 'read' ? await new Lessons(ws, agentModel(ws)).extract(ref) : new Lessons(ws, new SimulatedModel()).resolve(ref);
+        print(s, () => describeSource(s, out));
+        return 0;
+      }
+      case 'lesson prefer':
+      case 'lesson idea':
+      case 'lesson dismiss': {
+        const n = Number(need(rest[1], 'suggestion number'));
+        const r = new Lessons(ws, new SimulatedModel()).act(need(rest[0], 'SRC-n'), n, sub === 'prefer' ? 'preference' : sub === 'idea' ? 'improvement' : 'dismiss', { projectId: values.project });
+        print(r, () => out(r.preference ? `Proposed as PREF-${r.preference.number}. Approve it with: iap pref approve PREF-${r.preference.number}` : r.improvement ? `Added IMP-${r.improvement.number} to the backlog as an idea.` : `Suggestion ${n} set aside.`));
+        return 0;
+      }
+      case 'lesson vault': {
+        const r = new Lessons(ws, new SimulatedModel()).saveToVault(need(rest[0], 'SRC-n'));
+        print(r, () => out(`Saved to the Vault inbox as NOTE-${r.note.number}. It is a note, not a rule.`));
+        return 0;
+      }
+      case 'lesson archive': {
+        const s = new Lessons(ws, new SimulatedModel()).archive(need(rest[0], 'SRC-n'), !values.restore);
+        print(s, () => out(`SRC-${s.number} is ${s.status}.`));
+        return 0;
+      }
+      case 'skill detect': {
+        const r = new Skills(ws).detect();
+        print(r, () => {
+          out(`Looked at ${r.looked} pieces of work.`);
+          for (const p of r.created) out(`Proposed SKL-${p.number} ${p.draft.name} from ${p.examples.length} examples${p.duplicates.length ? `; may duplicate ${p.duplicates.map((d) => d.name).join(', ')}` : ''}`);
+          if (r.known.length) out(`Already proposed: ${r.known.map((n) => `SKL-${n}`).join(', ')}`);
+          if (!r.created.length && !r.known.length) out('No work was done three or more times in a similar way.');
+        });
+        return 0;
+      }
+      case 'skill list': {
+        const list = new Skills(ws).list({ status: values.status });
+        print(list, () => {
+          if (!list.length) out('No skill proposals. Look for repeated work with: iap skill detect');
+          for (const p of list) out(`SKL-${p.number}  ${p.status.padEnd(8)} ${p.draft.name}  (${p.examples.length} examples)`);
+        });
+        return 0;
+      }
+      case 'skill show':
+      case 'skill edit':
+      case 'skill approve':
+      case 'skill reject': {
+        const skills = new Skills(ws);
+        const ref = need(rest[0], 'SKL-n');
+        let p = sub === 'show' ? skills.recheck(ref) : skills.resolve(ref);
+        if (sub === 'edit') p = skills.edit(p.id, { name: values.name, description: values.description, workflow: values.step, permissions: values.permission, tests: values.test, benefit: values.benefit });
+        if (sub === 'approve')
+          p = skills.approve(
+            p.id,
+            (values.different ?? []).map((d) => {
+              const at = d.indexOf('=');
+              if (at < 1) throw new ValidationError('Use --different <id>=<why it is different>.');
+              return { id: d.slice(0, at), note: d.slice(at + 1) };
+            }),
+          );
+        if (sub === 'reject') p = skills.reject(p.id, values.reason);
+        print(p, () => describeSkill(p, skills.render(p.id), out));
+        return 0;
+      }
+      case 'skill export': {
+        const r = new Skills(ws).export(need(rest[0], 'SKL-n'), resolve(need(values.out, '--out <folder>')), [defaultScanRoots().configDir]);
+        print(r, () => out(`Wrote ${r.path}. Nothing was installed; copy it into Claude Code yourself if you want to use it.`));
+        return 0;
+      }
+      case 'addon list': {
+        const o = new Addons(ws).overview();
+        print(o, () => {
+          out(o.scannedAt ? `Tool scan of ${o.scannedAt}.` : 'No tool scan yet: run iap tools scan so add-ons can be found.');
+          for (const a of o.addons) out(`${a.addon.key.padEnd(17)} ${a.found.length ? `found (${a.found.map((f) => f.status).join(', ')})` : 'not found'.padEnd(9)}  ${a.review ? `${a.review.decision} by ${a.review.reviewer}: ${a.review.reason}` : 'not reviewed'}`);
+          out('The app does not load, call or change any add-on.');
+        });
+        return 0;
+      }
+      case 'addon review': {
+        const criteria: Record<string, { status: string; note: string }> = {};
+        for (const c of ['source', 'permissions', 'compatibility', 'cost', 'benefit'] as const) {
+          const v = values[c];
+          if (v === undefined) continue;
+          const m = /^(ok|concern):\s*(.*)$/s.exec(v);
+          if (!m) throw new ValidationError(`Use --${c} ok:<note> or --${c} concern:<note>.`);
+          criteria[c] = { status: m[1]!, note: m[2]! };
+        }
+        const r = new Addons(ws).review(need(rest[0], 'add-on name'), { criteria, decision: values.decision, reason: values.reason });
+        print(r, () => out(`REV-${r.number}: ${r.addonKey} ${r.decision}. Nothing in Claude Code was changed.`));
         return 0;
       }
       case 'platform setup':
@@ -1125,6 +1272,30 @@ function describePreference(d: PreferenceDetail, out: Out) {
   if (p.approver) out(`  Approved by ${p.approver} on ${p.approvedAt}`);
   if (p.reason) out(`  ${p.status === 'rejected' ? 'Rejected' : 'Removed'}: ${p.reason}`);
   for (const m of d.matches) out(`  ${m.kind === 'conflict' ? 'May contradict' : 'May duplicate'} PREF-${m.number} (${Math.round(m.similarity * 100)}% the same words): ${m.text}`);
+}
+
+function describeSource(s: LearningSource, out: Out) {
+  out(`SRC-${s.number}  ${s.status}  ${s.kind}  ${s.title}  (${s.fileName})`);
+  const e = s.extractions[s.extractions.length - 1];
+  if (!e) {
+    out(`  Not read yet: iap lesson read SRC-${s.number}`);
+    return;
+  }
+  out('');
+  out(renderLessons(s, e));
+  for (const x of e.suggestions) if (x.outcome) out(`  Suggestion ${x.n}: ${x.outcome.action === 'dismissed' ? 'set aside' : `became ${x.outcome.label}`} (${x.outcome.by})`);
+  if (e.droppedCitations) out(`  ${e.droppedCitations} citation(s) pointed outside the source and were dropped.`);
+}
+
+function describeSkill(p: SkillProposal, skillMd: string, out: Out) {
+  out(`SKL-${p.number}  ${p.status}${p.reason ? ` (${p.reason})` : ''}  ${p.scannedAt ? `checked against the tool scan of ${p.scannedAt}` : 'no tool scan yet: run iap tools scan'}`);
+  for (const d of p.duplicates) {
+    const decided = p.decisions.find((x) => x.id === d.id);
+    out(`  May duplicate ${d.kind} "${d.name}" (${d.where}): ${d.why}${decided ? ` Decided: ${decided.note}` : `  Decide with --different ${d.id}=<why>`}`);
+  }
+  for (const e of p.exports) out(`  Exported to ${e.path} by ${e.by}`);
+  out('');
+  out(skillMd);
 }
 
 function describeNote(n: VaultNote, out: Out) {

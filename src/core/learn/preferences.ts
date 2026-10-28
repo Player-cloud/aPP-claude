@@ -19,8 +19,8 @@ export type PreferenceScope = (typeof PREFERENCE_SCOPES)[number];
 export type PreferenceStatus = 'proposed' | 'active' | 'rejected' | 'removed';
 
 export interface PreferenceSource {
-  /** person = typed as a preference; feedback = typed as feedback about the work; wrap_up = a line of a session summary. */
-  type: 'person' | 'feedback' | 'wrap_up';
+  /** person = typed as a preference; feedback = typed as feedback about the work; wrap_up = a line of a session summary; lesson = a suggestion from an imported source. */
+  type: 'person' | 'feedback' | 'wrap_up' | 'lesson';
   summary: string;
   /** The record it came from, such as a Vault note. */
   ref: string | null;
@@ -271,12 +271,17 @@ function analyse(t: string): { normal: string; words: Set<string>; negative: boo
   return { normal: tokens.join(' '), words, negative: NEGATIVE.test(lower) };
 }
 
+/** The meaningful words of a text, stemmed, for comparing texts (also used by skill proposals). */
+export function keywords(t: string): Set<string> {
+  return analyse(t).words;
+}
+
 function stem(w: string): string {
   for (const suffix of ['ing', 'ed', 'es', 's']) if (w.length > suffix.length + 3 && w.endsWith(suffix)) return w.slice(0, -suffix.length);
   return w;
 }
 
-function jaccard(a: Set<string>, b: Set<string>): number {
+export function jaccard(a: Set<string>, b: Set<string>): number {
   if (!a.size || !b.size) return 0;
   let both = 0;
   for (const w of a) if (b.has(w)) both++;
