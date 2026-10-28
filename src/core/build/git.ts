@@ -121,3 +121,51 @@ export function parseChanges(nameStatus: string, numstat: string): ChangedFile[]
   }
   return files;
 }
+
+/** A worktree at `commit` with no branch, for checking a release candidate (M7). */
+export async function addDetachedWorktree(repo: string, path: string, commit: string): Promise<void> {
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) throw new ValidationError('The commit must be a full commit hash.');
+  await git(repo, ['worktree', 'add', '--detach', path, commit]);
+}
+
+/** Moves an app-owned detached worktree to `commit`, discarding what earlier checks left behind (ignored files such as node_modules are kept). */
+export async function resetDetachedWorktree(worktree: string, commit: string): Promise<void> {
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) throw new ValidationError('The commit must be a full commit hash.');
+  await git(worktree, ['checkout', '--quiet', '--force', '--detach', commit]);
+  await git(worktree, ['clean', '-q', '-f', '-d']);
+}
+
+/** True when `commit` (or branch) is part of the history of `head`. */
+export async function isAncestor(repo: string, commit: string, head: string): Promise<boolean> {
+  try {
+    await git(repo, ['merge-base', '--is-ancestor', commit, head]);
+    return true;
+  } catch (e) {
+    if (e instanceof GitError && /not installed/.test(e.message)) throw e;
+    return false;
+  }
+}
+
+/** Files tracked at the worktree's commit. */
+export async function trackedFiles(worktree: string): Promise<string[]> {
+  return (await git(worktree, ['ls-files', '-z'])).split('\0').filter(Boolean);
+}
+
+/**
+ * Commits everything in an app-owned worktree to its branch and returns the commit.
+ * Returns the current commit when there is nothing to commit. Hooks never run.
+ */
+export async function commitWorktree(worktree: string, message: string): Promise<string> {
+  await git(worktree, ['add', '-A']);
+  const staged = (await git(worktree, ['diff', '--cached', '--name-only'])).trim();
+  if (staged) {
+    let identity: string[] = [];
+    try {
+      await git(worktree, ['config', 'user.email']);
+    } catch {
+      identity = ['-c', 'user.name=Iterative Platform', '-c', 'user.email=iap@localhost'];
+    }
+    await git(worktree, [...identity, 'commit', '--quiet', '--no-verify', '--no-gpg-sign', '-m', message]);
+  }
+  return (await git(worktree, ['rev-parse', 'HEAD'])).trim();
+}

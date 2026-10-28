@@ -189,8 +189,54 @@ test('M6: build commands run only after the approval outside the renderer', asyn
   assert.ok(verified.ok && verified.value.build.status === 'review');
   const diff = await h.buildDiff(b.value.id);
   assert.ok(diff.ok && diff.value.files.length === 0);
-  assert.equal(h.completeBuild({ buildId: b.value.id }).ok, false, 'risks need a note');
-  assert.ok(h.completeBuild({ buildId: b.value.id, note: 'Could not reproduce; closing.' }).ok);
+  assert.equal((await h.completeBuild({ buildId: b.value.id })).ok, false, 'risks need a note');
+  assert.ok((await h.completeBuild({ buildId: b.value.id, note: 'Could not reproduce; closing.' })).ok);
   const listed = h.listBuilds(p.value.id);
   assert.ok(listed.ok && listed.value[0]!.status === 'completed');
+});
+
+test('M7: the ship-check runs only after approval, and the release flow goes through validated handlers', async (t) => {
+  const { home, cleanup } = tempHome();
+  let approve = false;
+  const asked: { title: string; commands: string[] }[] = [];
+  const s = new AppService(home, '0.0.0-test', {
+    confirmChecks: async ({ title, commands }) => {
+      asked.push({ title, commands });
+      return approve;
+    },
+  });
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
+  const h = s.handlers;
+  const p = h.createProject({ name: 'Ship' });
+  assert.ok(p.ok);
+  const plan = { target: 'GitHub release', healthCheck: 'Open the app', rollback: 'Withdraw the release', envVars: [] };
+  for (const bad of [undefined, { projectId: p.value.id }, { projectId: p.value.id, version: '1.0.0', checks: 'npm test' }, { projectId: p.value.id, version: '1.0.0', checks: [{ id: 'u', command: 'x' }], buildIds: 'all' }, { projectId: p.value.id, version: '1.0.0', plan: 'ship it', checks: [{ id: 'u', command: 'x' }] }]) {
+    assert.equal(h.createRelease(bad).ok, false, JSON.stringify(bad));
+  }
+  const r = h.createRelease({ projectId: p.value.id, version: '1.0.0', plan, checks: [{ id: 'ok', command: 'node -e "process.exit(0)"' }] });
+  assert.ok(r.ok);
+  const noRepo = await h.checkRelease(r.value.id);
+  assert.ok(!noRepo.ok && /git repository/.test(noRepo.error.message));
+  assert.ok((await h.initProjectRepo(p.value.id)).ok);
+  const refused = await h.checkRelease(r.value.id);
+  assert.ok(!refused.ok && /not approved, so nothing ran/.test(refused.error.message));
+  assert.deepEqual(asked, [{ title: 'Ship-check for release 1.0.0', commands: ['node -e "process.exit(0)"'] }]);
+  assert.equal((h.getRelease(r.value.id) as { ok: true; value: { checkRuns: unknown[] } }).value.checkRuns.length, 0);
+  approve = true;
+  const checked = await h.checkRelease(r.value.id);
+  assert.ok(checked.ok);
+  // No spec and no included work: those gates block, the checks and the plan pass.
+  assert.deepEqual(checked.value.blocking.sort(), ['builds', 'drift', 'spec']);
+  assert.equal(h.addGateException({ releaseId: r.value.id, gateId: 'spec', reason: 'x' }).ok, false);
+  for (const gateId of ['spec', 'drift', 'builds']) {
+    assert.ok(h.addGateException({ releaseId: r.value.id, gateId, reason: 'First packaging test only', mitigation: 'Not shared with anyone' }).ok);
+  }
+  const prepared = await h.prepareRelease(r.value.id);
+  assert.ok(prepared.ok && prepared.value.release.status === 'prepared' && prepared.value.exceptions.length === 3);
+  assert.equal(h.abandonRelease(r.value.id).ok, false);
+  const listed = h.listReleases(p.value.id);
+  assert.ok(listed.ok && listed.value[0]!.status === 'prepared');
 });

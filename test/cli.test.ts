@@ -193,3 +193,36 @@ test('M6: iap build runs a bug fix from start to done, with approval and evidenc
   assert.match(iap(home, 'build', 'list', project.id).out, /bugfix\s+completed\s+Crash/);
   assert.equal(iap(home, 'build', 'new', project.id, '--kind', 'bugfix', '--title', 't', '--goal', 'g', '--repro', 'r', '--check', 'nocommand').code, 1);
 });
+
+test('M7: iap release runs the ship-check with approval, blocks on failed gates and prepares without deploying', (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const project = JSON.parse(iap(home, 'project', 'create', '--name', 'Ship', '--json').out);
+  assert.equal(iap(home, 'build', 'repo', project.id, '--init').code, 0);
+  assert.equal(iap(home, 'release', 'new', project.id, '--version', 'soon', '--check', 'ok=node -v').code, 1);
+  const created = iap(home, 'release', 'new', project.id, '--version', '0.1.0', '--check', 'ok=node -e "process.exit(0)"', '--target', 'Local zip', '--json');
+  assert.equal(created.code, 0, created.err);
+  const release = JSON.parse(created.out);
+  const unconfirmed = iap(home, 'release', 'check', release.id);
+  assert.equal(unconfirmed.code, 1);
+  assert.match(unconfirmed.err, /ok: node -e "process.exit\(0\)"\nRe-run with --confirm/);
+  const blocked = iap(home, 'release', 'check', release.id, '--confirm');
+  assert.equal(blocked.code, 4, blocked.err);
+  assert.match(blocked.out, /FAILED\s+required plan\s+Missing: health check, rollback or mitigation/);
+  assert.match(blocked.out, /PASSED\s+required tests\s+All 1 checks passed/);
+  assert.match(blocked.out, /SKIPPED\s+optional reviews/);
+  assert.equal(iap(home, 'release', 'prepare', release.id).code, 1);
+  assert.equal(iap(home, 'release', 'plan', release.id, '--health', 'Unzip and run it', '--rollback', 'Delete the zip').code, 0);
+  for (const gate of ['spec', 'drift', 'builds']) {
+    assert.equal(iap(home, 'release', 'except', release.id, gate, '--reason', 'Trying the flow', '--mitigation', 'Nobody receives it').code, 1, 'needs a fresh check');
+  }
+  assert.equal(iap(home, 'release', 'check', release.id, '--confirm').code, 4);
+  for (const gate of ['spec', 'drift', 'builds']) {
+    const r = iap(home, 'release', 'except', release.id, gate, '--reason', 'Trying the flow', '--mitigation', 'Nobody receives it');
+    assert.equal(r.code, 0, r.err);
+  }
+  const prepared = iap(home, 'release', 'prepare', release.id);
+  assert.equal(prepared.code, 0, prepared.err);
+  assert.match(prepared.out, /Nothing was deployed, tagged or pushed/);
+  assert.match(iap(home, 'release', 'list', project.id).out, /0\.1\.0\s+prepared\s+ready/);
+});

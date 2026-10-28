@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { Build, PlanningOverview, Project, RunState, RunWithNext, Workflow } from '../../shared/api.ts';
+import type { Build, PlanningOverview, Project, Release, RunState, RunWithNext, Workflow } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { AgentPanel } from './AgentPanel.tsx';
 import { PlanningPanel } from './PlanningPanel.tsx';
 import { BuildPanel } from './BuildPanel.tsx';
+import { ReleasePanel } from './ReleasePanel.tsx';
 import { Alert, Empty, formatDate, formatTime, needsPerson, StateBadge, stateLabel } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
@@ -179,7 +180,7 @@ const runSummary = (list: RunWithNext[]) => {
 };
 
 /** The lifecycle as recorded: a phase is only marked done when its own records say so. */
-function phasesFor(planning: PlanningOverview | null, builds: Build[] | null, runs: RunWithNext[] | null): Phase[] {
+function phasesFor(planning: PlanningOverview | null, builds: Build[] | null, runs: RunWithNext[] | null, releases: Release[] | null): Phase[] {
   const of = (w: Workflow) => runs?.filter((r) => r.workflow === w) ?? [];
   const specApproved = !!planning?.spec.approved;
   const plan: Phase = {
@@ -211,7 +212,24 @@ function phasesFor(planning: PlanningOverview | null, builds: Build[] | null, ru
     const open = list.some((r) => !['completed', 'failed', 'cancelled'].includes(r.state));
     return { id, label, target: 'runs-title', state: open ? 'active' : 'idle', detail: runSummary(list) };
   };
-  return [plan, build, later('design', 'Design & Animation'), later('review', 'Check & Review'), later('ship', 'Ship & Deploy')];
+  // Deploying is not built yet, so Ship is never "done": a prepared release is shown as not deployed.
+  const latest = releases?.[0];
+  const ship: Phase = {
+    id: 'ship',
+    label: 'Ship & Deploy',
+    target: 'phase-ship',
+    state: latest && (latest.status === 'draft' || latest.status === 'checked') ? 'active' : 'idle',
+    detail: !releases
+      ? 'Loading'
+      : !latest
+        ? runSummary(of('ship'))
+        : latest.status === 'prepared'
+          ? `${latest.version} prepared · not deployed`
+          : latest.status === 'checked'
+            ? `${latest.version} ${latest.ready ? 'ready to prepare' : 'blocked by gates'}`
+            : `${latest.version} ${latest.status === 'draft' ? 'not checked' : 'abandoned'}`,
+  };
+  return [plan, build, later('design', 'Design & Animation'), later('review', 'Check & Review'), ship];
 }
 
 function PhaseStepper({ phases }: { phases: Phase[] }) {
@@ -267,6 +285,7 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
   const runs = useAsync(() => call(iap().listRuns(projectId)), [projectId]);
   const planning = useAsync(() => call(iap().getPlanning(projectId)), [projectId]);
   const builds = useAsync(() => call(iap().listBuilds(projectId)), [projectId]);
+  const releases = useAsync(() => call(iap().listReleases(projectId)), [projectId]);
   const [workflow, setWorkflow] = useState<Workflow>('plan');
   const [title, setTitle] = useState('');
   const [startError, setStartError] = useState<string | null>(null);
@@ -298,11 +317,12 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
     <>
       <h1 className="page-title">{p.name}</h1>
       <p className="page-lede">{p.idea ?? 'No idea recorded yet.'}</p>
-      <PhaseStepper phases={phasesFor(planning.data, builds.data, runs.data)} />
+      <PhaseStepper phases={phasesFor(planning.data, builds.data, runs.data, releases.data)} />
       <div className="content-grid">
         <div>
           <PlanningPanel projectId={p.id} onChanged={() => void planning.reload()} />
           <BuildPanel project={p} onProjectChanged={async () => void (await project.reload())} onChanged={() => void builds.reload()} />
+          <ReleasePanel project={p} onChanged={() => void releases.reload()} />
           <section className="card" aria-labelledby="runs-title">
             <h2 className="card-title" id="runs-title">
               Workflow runs {runs.data && <span className="count-pill">{runs.data.length}</span>}

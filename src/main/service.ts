@@ -9,6 +9,8 @@ import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
 import { Planner } from '../core/planner.ts';
 import { Builder, type BuildInput } from '../core/build/builder.ts';
+import { Releaser, type ReleaseInput } from '../core/release/releaser.ts';
+import type { ReleasePlan } from '../core/release/gates.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -19,7 +21,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'buildDiff';
+type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -63,6 +65,20 @@ export interface ServiceOptions {
 }
 
 /** A build definition from the renderer. Contents are validated in builder.ts. */
+function ids(v: unknown): string[] {
+  if (!Array.isArray(v) || v.length > 200 || v.some((x) => typeof x !== 'string')) throw new ValidationError('Choose the work this release includes.');
+  return v as string[];
+}
+
+function releaseInput(i: Record<string, unknown>): ReleaseInput {
+  return {
+    version: str(i.version, 'Version')!,
+    plan: (i.plan === undefined ? {} : obj(i.plan, 'Release plan')) as Partial<ReleasePlan>,
+    checks: i.checks as ReleaseInput['checks'],
+    buildIds: i.buildIds === undefined ? [] : ids(i.buildIds),
+  };
+}
+
 function buildInput(value: unknown): BuildInput {
   const i = obj(value, 'Build');
   const strings = (v: unknown, label: string) => {
@@ -136,6 +152,21 @@ export class AppService {
   }
 
   /** Starts a build after the person approves its commands in a dialog the renderer cannot answer. */
+  private releaser(): Releaser {
+    return new Releaser(this.workspace(), { checkTimeoutMs: this.checkTimeoutMs });
+  }
+
+  /** The ship-check runs commands, so the person approves them every time it runs. */
+  private async checkRelease(releaseId: string) {
+    const ws = this.workspace();
+    const release = ws.getRelease(releaseId);
+    const project = ws.getProject(release.projectId);
+    if (!project.repoPath) throw new ValidationError('Choose the git repository for this project first.');
+    const approved = await this.confirmChecks({ title: `Ship-check for release ${release.version}`, commands: release.checks.map((c) => c.command), folder: project.repoPath });
+    if (!approved) throw new ValidationError('The check commands were not approved, so nothing ran.');
+    return this.releaser().check(releaseId);
+  }
+
   private async startBuild(buildId: string) {
     const ws = this.workspace();
     const build = ws.getBuild(buildId);
@@ -286,7 +317,7 @@ export class AppService {
     runBuildAgent: (buildId) => wrapAsync(() => this.builder(this.agentModel()).runAgent(str(buildId, 'Build id')!)),
     verifyBuild: (buildId) => wrapAsync(() => this.builder().verify(str(buildId, 'Build id')!)),
     completeBuild: (input) =>
-      wrap(() => {
+      wrapAsync(async () => {
         const i = obj(input, 'Completion');
         return this.builder().complete(str(i.buildId, 'Build id')!, str(i.note, 'Note', true) ?? null);
       }),
@@ -296,6 +327,35 @@ export class AppService {
         return this.builder().abandon(str(i.buildId, 'Build id')!, str(i.reason, 'Reason', true) ?? null);
       }),
     buildDiff: (buildId) => wrapAsync(() => this.builder().diff(str(buildId, 'Build id')!)),
+    // Releases (M7). Content is validated in releaser.ts.
+    listReleases: (projectId) => wrap(() => this.workspace().listReleases(str(projectId, 'Project id')!)),
+    getRelease: (releaseId) => wrap(() => this.releaser().detail(str(releaseId, 'Release id')!)),
+    createRelease: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Release');
+        return this.releaser().create(str(i.projectId, 'Project id')!, releaseInput(i));
+      }),
+    editRelease: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Release');
+        return this.releaser().edit(str(i.releaseId, 'Release id')!, {
+          plan: i.plan === undefined ? undefined : (obj(i.plan, 'Release plan') as Partial<ReleasePlan>),
+          buildIds: i.buildIds === undefined ? undefined : ids(i.buildIds),
+        });
+      }),
+    checkRelease: (releaseId) => wrapAsync(() => this.checkRelease(str(releaseId, 'Release id')!)),
+    classifyDrift: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Classification');
+        return this.releaser().classify(str(i.releaseId, 'Release id')!, str(i.requirementId, 'Requirement')!, str(i.kind, 'Kind')!, str(i.note, 'Note')!);
+      }),
+    addGateException: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Exception');
+        return this.releaser().addException(str(i.releaseId, 'Release id')!, str(i.gateId, 'Gate')!, str(i.reason, 'Reason')!, str(i.mitigation, 'Mitigation')!);
+      }),
+    prepareRelease: (releaseId) => wrapAsync(() => this.releaser().prepare(str(releaseId, 'Release id')!)),
+    abandonRelease: (releaseId) => wrap(() => this.releaser().abandon(str(releaseId, 'Release id')!)),
     // Planning (M5). Content is validated in planner.ts; ids are checked to exist.
     getPlanning: (projectId) => wrap(() => this.planner().overview(str(projectId, 'Project id')!)),
     draftBrief: (projectId) => wrapAsync(() => this.agentPlanner().draftBrief(str(projectId, 'Project id')!)),

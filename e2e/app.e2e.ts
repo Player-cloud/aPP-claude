@@ -442,3 +442,64 @@ test('M6: fix a bug in a worktree, with commands approved in a native dialog and
     await app.close();
   }
 });
+
+test('M7: a ship-check shows each gate with its evidence, needs exceptions for failed gates, and prepares without deploying', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByLabel('Name').fill('Ship demo');
+    await page.getByRole('button', { name: 'Create project' }).click();
+    const builds = page.getByRole('region', { name: /Build work/ });
+    await builds.getByRole('button', { name: 'Start a repository in the project folder' }).click();
+    await builds.getByText(/^Repository:/).waitFor();
+
+    const panel = page.getByRole('region', { name: /Releases/ });
+    await panel.getByRole('button', { name: 'New release' }).click();
+    const form = panel.getByRole('form', { name: 'New release' });
+    await form.getByLabel('Version').fill('0.1.0');
+    await form.getByLabel(/Release checks/).fill('unit = node -e "process.exit(0)"');
+    await form.getByLabel('Where it goes').fill('A zip file for one tester');
+    await form.getByLabel('How you will know it works').fill('The tester opens the app');
+    await form.getByLabel('How to undo it').fill('Ask the tester to delete the zip');
+    await form.getByRole('button', { name: 'Add release' }).click();
+
+    const card = panel.locator('.release-card').first();
+    await card.getByText('Not checked', { exact: true }).waitFor();
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 1, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+    await card.getByRole('button', { name: 'Run the ship-check' }).click();
+    await card.getByText(/not approved, so nothing ran/).waitFor();
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+    await card.getByRole('button', { name: 'Run the ship-check' }).click();
+    await card.getByText('3 blocking', { exact: true }).waitFor();
+    const gates = card.getByRole('list', { name: 'Gates' });
+    const gate = (id: string) => gates.locator(`li[data-gate="${id}"]`);
+    await gate('tests').getByText('Passed', { exact: true }).waitFor();
+    await gate('spec').getByText('No specification has been approved.').waitFor();
+    await gate('reviews').getByText('Skipped', { exact: true }).waitFor();
+    assert.ok(await card.getByRole('button', { name: 'Mark prepared' }).isDisabled());
+    await shot(page, '16-ship-check-blocked-dark-1280');
+
+    for (const id of ['spec', 'drift', 'builds']) {
+      const g = gate(id);
+      await g.getByText('Release anyway with an exception').click();
+      await g.getByLabel('Why this is acceptable').fill('Trying the packaging flow only');
+      await g.getByLabel('How you will limit the risk').fill('Only one tester receives it');
+      await g.getByRole('button', { name: 'Record exception' }).click();
+      await g.getByText('Exception recorded', { exact: true }).waitFor();
+    }
+    await card.getByText('Ready to prepare', { exact: true }).waitFor();
+    await card.getByRole('button', { name: 'Mark prepared' }).click();
+    await card.getByText('Nothing was deployed').waitFor();
+    await page.getByRole('navigation', { name: 'Project phases' }).getByText('0.1.0 prepared · not deployed').waitFor();
+    await shot(page, '17-release-prepared-dark-1280');
+  } finally {
+    await app.close();
+  }
+});
