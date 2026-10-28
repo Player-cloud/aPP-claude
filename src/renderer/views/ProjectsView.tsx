@@ -78,6 +78,61 @@ function CreateProjectPanel({ initialIdea, onCreated, onCancel }: { initialIdea:
   );
 }
 
+/** Registers an existing git repository (M8). Nothing in it is changed. */
+function ImportProjectPanel({ onCreated, onCancel }: { onCreated: (id: string, name: string) => void; onCancel: () => void }) {
+  const [name, setName] = useState('');
+  const [path, setPath] = useState('');
+  const [idea, setIdea] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const project = await call(iap().importProject({ name, path, idea: idea || undefined }));
+      onCreated(project.id, project.name);
+    } catch (e) {
+      setError((e as Error).message);
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="card" aria-labelledby="import-project-title">
+      <h2 className="card-title" id="import-project-title">
+        Import a repository
+      </h2>
+      <p className="subtle">The app records where the repository is. It does not change, move or copy anything in it.</p>
+      <form onSubmit={submit} noValidate>
+        {error && <Alert tone="danger">{error}</Alert>}
+        <div className="field">
+          <label htmlFor="i-name">Name</label>
+          <input id="i-name" className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} required autoFocus />
+        </div>
+        <div className="field">
+          <label htmlFor="i-path">Repository folder</label>
+          <input id="i-path" className="input mono" value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\Users\you\code\my-app" required />
+          <span className="hint">The full path of a git repository with at least one commit.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="i-idea">What it is for (optional)</label>
+          <textarea id="i-idea" className="textarea" value={idea} onChange={(e) => setIdea(e.target.value)} />
+        </div>
+        <div className="btn-row">
+          <button type="submit" className="btn btn-primary" disabled={saving}>
+            {saving ? 'Importing…' : 'Import'}
+          </button>
+          <button type="button" className="btn" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 const STAGES = ['Plan', 'Build', 'Design', 'Review', 'Ship'];
 
 function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
@@ -93,7 +148,10 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
             <Icon name="arrow" size={20} />
           </span>
         </span>
-        <span className="project-card-name">{project.name}</span>
+        <span className="project-card-name">
+          {project.name}
+          {project.origin === 'imported' && <span className="pill">Imported</span>}
+        </span>
         <span className="project-card-idea">{project.idea ?? 'No idea recorded yet.'}</span>
         <span className="project-card-foot">
           <span className="pill">
@@ -126,15 +184,28 @@ export function ProjectsView({
   onOpen: (id: string, name: string) => void;
 }) {
   const [draft, setDraft] = useState('');
+  const [importing, setImporting] = useState(false);
 
   const newButton = (
-    <button type="button" className="btn btn-primary" onClick={() => onCreate()} disabled={!!creating}>
-      <Icon name="plus" size={16} /> New project
-    </button>
+    <span className="btn-row">
+      <button type="button" className="btn btn-primary" onClick={() => {
+          setImporting(false);
+          onCreate();
+        }} disabled={!!creating}>
+        <Icon name="plus" size={16} /> New project
+      </button>
+      <button type="button" className="btn" onClick={() => {
+          onCancelCreate();
+          setImporting(true);
+        }} disabled={importing}>
+        Import a repository
+      </button>
+    </span>
   );
 
   const startFromIdea = (event: FormEvent) => {
     event.preventDefault();
+    setImporting(false);
     onCreate(draft.trim());
     setDraft('');
   };
@@ -180,7 +251,7 @@ export function ProjectsView({
             {projects && projects.length === 0 && (
               <div className="card">
                 <Empty title="No projects yet" action={!creating && newButton}>
-                  Create your first project from an idea. You can record what is confirmed and what is still an assumption.
+                  Create your first project from an idea, or import an existing git repository. You can record what is confirmed and what is still an assumption.
                 </Empty>
               </div>
             )}
@@ -196,6 +267,8 @@ export function ProjectsView({
         <aside aria-label="Project details panel">
           {creating ? (
             <CreateProjectPanel key={creating.idea} initialIdea={creating.idea} onCreated={onCreated} onCancel={onCancelCreate} />
+          ) : importing ? (
+            <ImportProjectPanel onCreated={onCreated} onCancel={() => setImporting(false)} />
           ) : (
             <section className="card">
               <h2 className="card-title">How projects work</h2>

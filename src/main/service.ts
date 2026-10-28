@@ -11,6 +11,8 @@ import { Planner } from '../core/planner.ts';
 import { Builder, type BuildInput } from '../core/build/builder.ts';
 import { Releaser, type ReleaseInput } from '../core/release/releaser.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
+import { Assessor } from '../core/assess/assessor.ts';
+import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -21,7 +23,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease';
+type AsyncMethod = 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -356,6 +358,21 @@ export class AppService {
       }),
     prepareRelease: (releaseId) => wrapAsync(() => this.releaser().prepare(str(releaseId, 'Release id')!)),
     abandonRelease: (releaseId) => wrap(() => this.releaser().abandon(str(releaseId, 'Release id')!)),
+    // Import and assessment (M8). Read-only: the scope is validated in assessor.ts, and nothing in the repository runs.
+    importProject: (input) =>
+      wrapAsync(() => {
+        const i = obj(input, 'Import');
+        return new Assessor(this.workspace()).importProject({ name: str(i.name, 'Project name')!, path: str(i.path, 'Folder')!, idea: str(i.idea, 'Idea', true) });
+      }),
+    assessmentCatalog: () =>
+      wrap(() => ({ categories: CATEGORIES.map(({ id, title }) => ({ id, title })), capabilities: CAPABILITIES.map(({ id, title, category }) => ({ id, title, category })) })),
+    listAssessments: (projectId) => wrap(() => this.workspace().listAssessments(str(projectId, 'Project id')!)),
+    getAssessment: (assessmentId) => wrap(() => this.workspace().getAssessment(str(assessmentId, 'Assessment id')!)),
+    runAssessment: (input) =>
+      wrapAsync(() => {
+        const i = obj(input, 'Assessment');
+        return new Assessor(this.workspace()).run(str(i.projectId, 'Project id')!, i.scope === undefined ? {} : obj(i.scope, 'Scope'));
+      }),
     // Planning (M5). Content is validated in planner.ts; ids are checked to exist.
     getPlanning: (projectId) => wrap(() => this.planner().overview(str(projectId, 'Project id')!)),
     draftBrief: (projectId) => wrapAsync(() => this.agentPlanner().draftBrief(str(projectId, 'Project id')!)),

@@ -12,7 +12,7 @@
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NotFoundError, ValidationError } from '../errors.ts';
-import { redactString } from '../redact.ts';
+import { credentialLines, redactString } from '../redact.ts';
 import type { Release, ReleaseCheckRun, Workspace } from '../workspace.ts';
 import { normalizeChecks, runCheck, type Check, type CheckResult } from '../build/checks.ts';
 import { addDetachedWorktree, inspectRepo, isAncestor, resetDetachedWorktree, trackedFiles } from '../build/git.ts';
@@ -294,16 +294,7 @@ export async function scanForCredentials(worktree: string): Promise<string[] | n
     if (!st.isFile() || st.size > MAX_SCAN_BYTES) continue;
     const buf = readFileSync(abs);
     if (buf.includes(0)) continue;
-    const lines = buf.toString('utf8').split(/\r?\n/);
-    // Private keys span lines, so look at the whole file for those.
-    const whole = buf.toString('utf8');
-    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(whole) && redactString(whole) !== whole) {
-      const at = lines.findIndex((l) => /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(l));
-      hits.push(`${rel}:${at + 1}`);
-    }
-    lines.forEach((line, i) => {
-      if (redactString(line) !== line) hits.push(`${rel}:${i + 1}`);
-    });
+    hits.push(...credentialLines(rel, buf.toString('utf8')));
   }
   return [...new Set(hits)];
 }

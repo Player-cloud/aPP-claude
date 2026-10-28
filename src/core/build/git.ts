@@ -31,7 +31,7 @@ const MAX_PATCH = 200_000;
 const TIMEOUT_MS = 60_000;
 
 /** A hooks folder that never exists, so the repository's own hooks (untrusted code) never run. */
-const NO_HOOKS = process.platform === 'win32' ? 'NUL' : '/dev/null';
+export const NO_HOOKS = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
 /** Runs git with fixed arguments. Hooks and pagers are off. */
 export function git(cwd: string, args: string[]): Promise<string> {
@@ -66,7 +66,8 @@ export async function inspectRepo(path: string): Promise<{ root: string; head: s
     throw new ValidationError(`${root} has no commits yet. Make a first commit, then try again.`);
   }
   const branch = (await git(root, ['branch', '--show-current'])).trim() || null;
-  const clean = (await git(root, ['status', '--porcelain'])).trim() === '';
+  // No optional locks: reading the status must not rewrite the repository's index.
+  const clean = (await git(root, ['--no-optional-locks', 'status', '--porcelain'])).trim() === '';
   return { root, head, branch, clean };
 }
 

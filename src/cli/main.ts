@@ -20,6 +20,9 @@ import { Planner } from '../core/planner.ts';
 import { Builder, type BuildDetail } from '../core/build/builder.ts';
 import { Releaser, type ReleaseDetail } from '../core/release/releaser.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
+import { Assessor, scopeLabel, STATUS_LABEL } from '../core/assess/assessor.ts';
+import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
+import type { Assessment } from '../core/workspace.ts';
 import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
 
@@ -29,6 +32,7 @@ Projects
   project create --name <name> [--idea <text>] [--confirmed <fact>]... [--assumption <fact>]...
   project list
   project show <projectId>
+  project import --name <name> --path <repositoryFolder> [--idea <text>]   Use an existing git repository (nothing in it is changed)
 
 Workflow runs
   run start <projectId> --workflow <${WORKFLOWS.join('|')}> [--title <text>]
@@ -75,6 +79,11 @@ Releases (quality gate and ship-check; preparing a release never deploys, tags o
   release prepare <releaseId>                 Mark it prepared (needs every required gate passed or excepted)
   release abandon <releaseId>
   release list <projectId> | release show <releaseId>
+
+Assessment (read-only: reads the repository's current commit from git, never runs its code or contacts outside services)
+  assess run <projectId> [--scope <full|codebase|category:<id>|capability:<id>>] [--not-applicable <capabilityId>]...
+  assess capabilities                          List the categories and capabilities a scope can name
+  assess list <projectId> | assess show <assessmentId>
 
 Audit and health
   events [--project <id>] [--run <id>] [--limit <n>]
@@ -126,6 +135,9 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       migrations: { type: 'string' },
       env: { type: 'string', multiple: true },
       mitigation: { type: 'string' },
+      path: { type: 'string' },
+      scope: { type: 'string' },
+      'not-applicable': { type: 'string', multiple: true },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -196,6 +208,41 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
         });
         return 0;
       }
+      case 'project import': {
+        const project = await new Assessor(ws).importProject({ name: values.name ?? '', path: values.path ?? '', idea: values.idea });
+        print(project, () => {
+          out(`Imported ${project.id} "${project.name}" from ${project.repoPath}`);
+          out('  Nothing in the repository was changed. Assess it with: iap assess run ' + project.id);
+        });
+        return 0;
+      }
+      case 'assess run': {
+        const a = await new Assessor(ws).run(need(rest[0], 'projectId'), parseScopeOption(values.scope, values['not-applicable']));
+        print(a, () => describeAssessment(a, out));
+        return 0;
+      }
+      case 'assess capabilities': {
+        print({ categories: CATEGORIES, capabilities: CAPABILITIES.map(({ id, title, category }) => ({ id, title, category })) }, () => {
+          for (const c of CATEGORIES) {
+            out(`${c.id}  (${c.title})`);
+            for (const cap of CAPABILITIES.filter((x) => x.category === c.id)) out(`  ${cap.id.padEnd(16)} ${cap.title}`);
+          }
+        });
+        return 0;
+      }
+      case 'assess list': {
+        const list = ws.listAssessments(need(rest[0], 'projectId'));
+        print(list, () => {
+          if (!list.length) out('No assessments yet.');
+          for (const a of list) out(`${a.id}  ${a.status.padEnd(9)} ${a.commit?.slice(0, 12) ?? '-'.padEnd(12)}  ${scopeLabel(a.scope)}`);
+        });
+        return 0;
+      }
+      case 'assess show': {
+        const a = ws.getAssessment(need(rest[0], 'assessmentId'));
+        print(a, () => describeAssessment(a, out));
+        return 0;
+      }
       case 'project show': {
         const project = ws.getProject(need(rest[0], 'projectId'));
         const runs = ws.listRuns(project.id);
@@ -203,6 +250,7 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
           out(`${project.name} (${project.id})`);
           out(`  status: ${project.status}   origin: ${project.origin}   created: ${project.createdAt}`);
           if (project.idea) out(`  idea: ${project.idea}`);
+          if (project.repoPath) out(`  repository: ${project.repoPath}`);
           const confirmed = project.facts.filter((f) => f.kind === 'confirmed');
           const assumptions = project.facts.filter((f) => f.kind === 'assumption');
           out(`  confirmed (${confirmed.length}):`);
@@ -480,6 +528,24 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
   } finally {
     ws.close();
   }
+}
+
+/** "--scope category:operations" etc. Validated again by the assessor. */
+function parseScopeOption(scope: string | undefined, notApplicable: string[] | undefined): unknown {
+  const [kind, target] = (scope ?? 'full').split(':', 2);
+  return { kind, target: target ?? null, notApplicable: notApplicable ?? [] };
+}
+
+function describeAssessment(a: Assessment, out: Out): void {
+  out(`${a.id}  assessment ${a.status}${a.commit ? ` of ${a.commit.slice(0, 12)}` : ''}: ${scopeLabel(a.scope)}`);
+  if (a.error) out(`  Failed: ${a.error}`);
+  const r = a.report;
+  if (!r) return;
+  out(`  Repository unchanged: ${r.unchanged ? 'yes' : 'NO'}. ${r.unchangedEvidence}`);
+  for (const o of r.observations) out(`  FINDING  ${o.impact.padEnd(6)} ${o.title}`);
+  for (const f of r.capabilities) out(`  ${STATUS_LABEL[f.status].padEnd(20)} ${f.title.padEnd(16)} confidence ${f.confidence}${f.externalState ? ', outside the code not verified' : ''}`);
+  for (const x of r.notInspected) out(`  not inspected: ${x}`);
+  if (a.reportPath) out(`  Report: ${a.reportPath}`);
 }
 
 function need(value: string | undefined, label: string): string {

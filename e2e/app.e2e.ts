@@ -2,6 +2,7 @@
 // data directory. Screenshots are saved to e2e/screenshots/ as evidence.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ElectronApplication, Page } from 'playwright-core';
@@ -502,4 +503,72 @@ test('M7: a ship-check shows each gate with its evidence, needs exceptions for f
   } finally {
     await app.close();
   }
+});
+
+test('M8: import an existing repository and assess it read-only, in full and focused', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  // A small existing app, committed, with one uncommitted change the assessment must not read.
+  const repo = join(home, 'existing-shop');
+  const files: Record<string, string> = {
+    'package.json': JSON.stringify({ name: 'shop', scripts: { test: 'node --test' }, dependencies: { express: '^4.0.0', pg: '^8.0.0' } }),
+    'README.md': '# Shop\n\nOrders API for a small shop.\n',
+    'src/server.js': "import express from 'express';\nimport { Pool } from 'pg';\nconst app = express();\nconst pool = new Pool({ connectionString: process.env.DATABASE_URL });\napp.get('/orders', async (req, res) => res.json([]));\n",
+    'test/server.test.js': "import { test } from 'node:test';\ntest('orders', () => {});\n",
+    '.env.example': 'DATABASE_URL=\n',
+  };
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(join(repo, path, '..'), { recursive: true });
+    writeFileSync(join(repo, path), text);
+  }
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: repo, encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'init');
+  writeFileSync(join(repo, 'notes.txt'), 'not committed\n');
+  const before = [git('rev-parse', 'HEAD'), git('for-each-ref'), git('--no-optional-locks', 'status', '--porcelain'), readFileSync(join(repo, '.git', 'index')).toString('base64')];
+
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'Import a repository' }).click();
+    const form = page.getByRole('region', { name: 'Import a repository' });
+    await form.getByLabel('Name').fill('Existing shop');
+    await form.getByLabel('Repository folder').fill(join(home, 'nowhere'));
+    await form.getByRole('button', { name: 'Import' }).click();
+    await form.getByText(/does not exist/).waitFor();
+    await form.getByLabel('Repository folder').fill(repo);
+    await form.getByRole('button', { name: 'Import' }).click();
+
+    await page.getByRole('heading', { name: 'Existing shop', level: 1 }).waitFor();
+    await page.locator('.next-step').getByText('Assess the repository').waitFor();
+    const panel = page.getByRole('region', { name: /^Assessment/ });
+    await panel.getByRole('button', { name: 'Assess (read-only)' }).click();
+    const card = panel.locator('.assess-card').first();
+    await card.getByText('Completed', { exact: true }).waitFor();
+    await card.getByText('Repository unchanged', { exact: true }).waitFor();
+    const api = card.getByRole('list', { name: 'Interfaces capabilities' }).locator('li').filter({ hasText: 'API' }).first();
+    await api.getByText('Implemented in code', { exact: true }).waitFor();
+    const database = card.getByRole('list', { name: 'Operations capabilities' }).locator('li').filter({ hasText: 'Database' }).first();
+    await database.getByText(/outside the code: not verified/).waitFor();
+    await card.getByText('What was and was not inspected').click();
+    await card.getByText(/1 uncommitted change/).waitFor();
+    await card.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+    await shot(page, '18-assessment-full-dark-1280');
+
+    await panel.getByLabel('What to assess').selectOption('capability');
+    await panel.getByLabel('Capability', { exact: true }).selectOption('secrets');
+    await panel.getByRole('button', { name: 'Assess (read-only)' }).click();
+    const focused = panel.locator('.assess-card').first();
+    await focused.getByText('Capability: Secrets', { exact: true }).waitFor();
+    await focused.getByText('Completed', { exact: true }).waitFor();
+    assert.equal(await focused.locator('.release-gates > li').count(), 1, 'only the chosen capability is reported');
+    await focused.getByRole('button', { name: 'Run a full assessment' }).waitFor();
+    await shot(page, '19-assessment-focused-dark-1280');
+  } finally {
+    await app.close();
+  }
+  const after = [git('rev-parse', 'HEAD'), git('for-each-ref'), git('--no-optional-locks', 'status', '--porcelain'), readFileSync(join(repo, '.git', 'index')).toString('base64')];
+  assert.deepEqual(after, before, 'the imported repository was not changed');
 });

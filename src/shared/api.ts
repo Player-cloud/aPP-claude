@@ -26,6 +26,17 @@ export type { Release, ReleaseCheckRun, ReleaseStatus } from '../core/workspace.
 export type { DriftFinding, DriftKind, Gate, GateException, GateId, GateStatus, ReleasePlan } from '../core/release/gates.ts';
 export type { Brief, BriefField, PlanChange, PlanDoc, Priority, Requirement, Spec } from '../core/planning.ts';
 export type { ToolEntry, ToolKind } from '../core/inventory.ts';
+import type { Assessment } from '../core/workspace.ts';
+import type { AssessmentScope } from '../core/assess/assessor.ts';
+export type { Assessment } from '../core/workspace.ts';
+export type { AssessmentReport, AssessmentScope, ScopeKind } from '../core/assess/assessor.ts';
+export type { CapabilityFinding, CapabilityStatus, CategoryId, CodebaseSummary, Level, Observation } from '../core/assess/capabilities.ts';
+
+/** The capability model, for choosing a focused scope (M8). */
+export interface AssessmentCatalog {
+  categories: { id: string; title: string }[];
+  capabilities: { id: string; title: string; category: string }[];
+}
 
 export interface ApiError {
   code: string;
@@ -113,6 +124,13 @@ export interface IapApi {
   addGateException(input: { releaseId: string; gateId: string; reason: string; mitigation: string }): Promise<Result<ReleaseDetail>>;
   prepareRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
   abandonRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
+  /** Import and assessment (M8): read-only. Nothing in the repository is changed or run. */
+  importProject(input: { name: string; path: string; idea?: string }): Promise<Result<Project>>;
+  assessmentCatalog(): Promise<Result<AssessmentCatalog>>;
+  listAssessments(projectId: string): Promise<Result<Assessment[]>>;
+  getAssessment(assessmentId: string): Promise<Result<Assessment>>;
+  /** Records the scope, then assesses the repository's current commit within it. */
+  runAssessment(input: { projectId: string; scope: AssessmentScope }): Promise<Result<Assessment>>;
   /** Planning (M5): concept brief and specification, versioned. */
   getPlanning(projectId: string): Promise<Result<PlanningOverview>>;
   draftBrief(projectId: string): Promise<Result<PlanDoc>>;
@@ -167,6 +185,11 @@ export const IAP_METHODS = [
   'addGateException',
   'prepareRelease',
   'abandonRelease',
+  'importProject',
+  'assessmentCatalog',
+  'listAssessments',
+  'getAssessment',
+  'runAssessment',
   'getPlanning',
   'draftBrief',
   'draftSpec',
