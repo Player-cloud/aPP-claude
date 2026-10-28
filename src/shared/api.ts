@@ -35,6 +35,10 @@ export type { CapabilityFinding, CapabilityStatus, CategoryId, CodebaseSummary, 
 import type { DesignReference, ImportResult } from '../core/studio/library.ts';
 export type { DesignReference, ImportResult, ReferenceKind, ReferenceSuggestion } from '../core/studio/library.ts';
 
+import type { Improvement, ImprovementDetail, ImprovementsOverview, SelfAssessmentRecord } from '../core/iterate/backlog.ts';
+export type { Evidence, Improvement, ImprovementDetail, ImprovementLink, ImprovementStatus, ImprovementsOverview, Recurrence, SelfAssessmentRecord } from '../core/iterate/backlog.ts';
+export type { Occurrence, SelfAssessmentReport, SelfFinding } from '../core/iterate/assess.ts';
+
 /** Kinds a reference can have, and the tags in use (M9). */
 export interface ReferenceCatalog {
   kinds: string[];
@@ -150,6 +154,14 @@ export interface IapApi {
   suggestReference(id: string): Promise<Result<DesignReference>>;
   acceptReferenceSuggestion(id: string): Promise<Result<DesignReference>>;
   archiveReference(input: { id: string; archived: boolean }): Promise<Result<DesignReference>>;
+  /** Iterative Layer (M10): self-assessment and the improvement backlog. Approving an item changes nothing in the app. */
+  improvementsOverview(filter?: { status?: string }): Promise<Result<ImprovementsOverview>>;
+  getImprovement(id: string): Promise<Result<ImprovementDetail>>;
+  runSelfAssessment(): Promise<Result<SelfAssessmentRecord>>;
+  addFeedback(input: { text: string; title?: string }): Promise<Result<Improvement>>;
+  editImprovement(input: { id: string; title?: string; problem?: string; expectedOutcome?: string; successCriteria?: string; priority?: string; risk?: string; dependencies?: string[] }): Promise<Result<ImprovementDetail>>;
+  moveImprovement(input: { id: string; to: string; reason?: string; result?: string; measuredOutcome?: string }): Promise<Result<ImprovementDetail>>;
+  mergeImprovement(input: { id: string; into: string }): Promise<Result<ImprovementDetail>>;
   /** Planning (M5): concept brief and specification, versioned. */
   getPlanning(projectId: string): Promise<Result<PlanningOverview>>;
   draftBrief(projectId: string): Promise<Result<PlanDoc>>;
@@ -217,6 +229,13 @@ export const IAP_METHODS = [
   'suggestReference',
   'acceptReferenceSuggestion',
   'archiveReference',
+  'improvementsOverview',
+  'getImprovement',
+  'runSelfAssessment',
+  'addFeedback',
+  'editImprovement',
+  'moveImprovement',
+  'mergeImprovement',
   'getPlanning',
   'draftBrief',
   'draftSpec',

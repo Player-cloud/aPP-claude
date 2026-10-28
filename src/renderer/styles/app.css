@@ -2361,3 +2361,107 @@ button.status-pill {
 .assess-card .kv {
   margin-bottom: var(--space-3);
 }
+
+/* Improvements (M10). Observation, inference and recommendation stay in separate columns. */
+.imp-layers {
+  display: grid;
+  gap: 1px;
+  margin: var(--space-3) 0;
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-border);
+}
+.imp-layer-head,
+.imp-layer-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.imp-layer-head > span,
+.imp-layer-row > span {
+  padding: var(--space-2) var(--space-3);
+  background: var(--raised-bg);
+}
+.imp-layer-head > span {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.imp-cell-meta {
+  display: block;
+  margin-top: var(--space-1);
+}
+.imp-gaps {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+}
+.imp-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+}
+.imp-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+.imp-row[aria-current='true'] {
+  border-color: var(--accent);
+}
+.imp-num {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.imp-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+}
+.imp-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+.imp-facts {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+}
+.imp-facts dt {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.imp-facts dd {
+  margin: 0 0 var(--space-2);
+}
+.imp-moves {
+  margin-bottom: var(--space-4);
+}
+.imp-evidence {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+}
+.imp-evidence ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-3);
+}
+@media (max-width: 900px) {
+  .imp-layer-head {
+    display: none;
+  }
+  .imp-layer-row {
+    grid-template-columns: 1fr;
+  }
+}

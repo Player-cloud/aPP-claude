@@ -14,6 +14,7 @@ import type { ReleasePlan } from '../core/release/gates.ts';
 import { Assessor } from '../core/assess/assessor.ts';
 import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
 import { REFERENCE_KINDS, Studio, type ReferenceEdit } from '../core/studio/library.ts';
+import { Backlog, type ImprovementStatus } from '../core/iterate/backlog.ts';
 import { IapError, StateCorruptError, StateTooNewError, ValidationError } from '../core/errors.ts';
 import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
@@ -429,6 +430,47 @@ export class AppService {
       wrap(() => {
         const i = obj(input, 'Archive');
         return new Studio(this.workspace(), new SimulatedModel()).archive(str(i.id, 'Reference id')!, i.archived !== false);
+      }),
+    // Iterative Layer (M10). Only the person, through these calls, moves an item; nothing here changes the app.
+    improvementsOverview: (filter) =>
+      wrap(() => {
+        const f = filter === undefined ? {} : obj(filter, 'Filter');
+        return new Backlog(this.workspace()).overview({ status: str(f.status, 'Status', true) });
+      }),
+    getImprovement: (id) => wrap(() => new Backlog(this.workspace()).detail(str(id, 'Improvement id')!)),
+    runSelfAssessment: () => wrap(() => new Backlog(this.workspace()).assess()),
+    addFeedback: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Feedback');
+        return new Backlog(this.workspace()).feedback({ text: i.text, title: i.title });
+      }),
+    editImprovement: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Improvement');
+        const backlog = new Backlog(this.workspace());
+        const id = str(i.id, 'Improvement id')!;
+        const { id: _id, ...fields } = i;
+        backlog.edit(id, fields);
+        return backlog.detail(id);
+      }),
+    moveImprovement: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Move');
+        const backlog = new Backlog(this.workspace());
+        const id = str(i.id, 'Improvement id')!;
+        backlog.move(id, {
+          to: str(i.to, 'Status')! as ImprovementStatus,
+          reason: str(i.reason, 'Reason', true),
+          result: str(i.result, 'Result', true),
+          measuredOutcome: str(i.measuredOutcome, 'Measured outcome', true),
+        });
+        return backlog.detail(id);
+      }),
+    mergeImprovement: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Merge');
+        const backlog = new Backlog(this.workspace());
+        return backlog.detail(backlog.merge(str(i.id, 'Improvement id')!, str(i.into, 'Item to keep')!).id);
       }),
     // Planning (M5). Content is validated in planner.ts; ids are checked to exist.
     getPlanning: (projectId) => wrap(() => this.planner().overview(str(projectId, 'Project id')!)),

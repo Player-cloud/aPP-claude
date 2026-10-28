@@ -24,6 +24,7 @@ import { Assessor, scopeLabel, STATUS_LABEL } from '../core/assess/assessor.ts';
 import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
 import { Studio, type DesignReference, type ReferenceEdit } from '../core/studio/library.ts';
 import { describeAudit } from '../core/design/audit.ts';
+import { Backlog, type ImprovementDetail, type ImprovementStatus, type SelfAssessmentRecord } from '../core/iterate/backlog.ts';
 import type { Assessment } from '../core/workspace.ts';
 import type { AgentTask } from '../core/workspace.ts';
 import { allowedTransitions, RUN_STATES, WORKFLOWS, type RunState } from '../core/workflow.ts';
@@ -97,6 +98,16 @@ Learning Studio (design references: copied into the app, never changing a spec)
   ref accept <refId>                          Apply the suggestion as it is
   ref archive <refId> [--restore]             Hide it from the library (references are never deleted)
 
+Improvements (the app assesses its own records; approving an item changes nothing in the app)
+  iter assess                                 Read the app's own records and file what went wrong as backlog items
+  iter list [--status <status>]               Statuses: idea, proposed, approved, in_progress, verified, released, blocked, rejected
+  iter show <IMP-n>
+  iter feedback <text> [--title <t>]          Add an idea
+  iter edit <IMP-n> [--title <t>] [--problem <t>] [--expected <t>] [--criteria <t>] [--priority <low|medium|high>]
+            [--risk <low|medium|high>] [--depends <IMP-n>]...      Only before approval
+  iter move <IMP-n> <status> [--reason <why>] [--result <what was done>] [--outcome <measured outcome>]
+  iter merge <duplicate IMP-n> --into <IMP-n>  Link a duplicate to the item that stays (nothing is deleted)
+
 Audit and health
   events [--project <id>] [--run <id>] [--limit <n>]
   doctor
@@ -159,6 +170,16 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       restore: { type: 'boolean', default: false },
       ref: { type: 'string', multiple: true },
       motion: { type: 'boolean', default: false },
+      status: { type: 'string' },
+      problem: { type: 'string' },
+      expected: { type: 'string' },
+      criteria: { type: 'string' },
+      priority: { type: 'string' },
+      risk: { type: 'string' },
+      depends: { type: 'string', multiple: true },
+      result: { type: 'string' },
+      outcome: { type: 'string' },
+      into: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -309,6 +330,60 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       case 'ref archive': {
         const r = new Studio(ws, new SimulatedModel()).archive(need(rest[0], 'refId'), !values.restore);
         print(r, () => out(`${r.id} is ${r.status}.`));
+        return 0;
+      }
+      case 'iter assess': {
+        const a = new Backlog(ws).assess();
+        print(a, () => describeSelfAssessment(a, out));
+        return 0;
+      }
+      case 'iter list': {
+        const { items } = new Backlog(ws).overview({ status: values.status });
+        print(items, () => {
+          if (!items.length) out('No improvements yet. Run: iap iter assess, or add one with: iap iter feedback <text>');
+          for (const i of items) out(`IMP-${i.number}  ${i.status.padEnd(11)} ${i.priority.padEnd(6)} ${i.title}`);
+        });
+        return 0;
+      }
+      case 'iter show': {
+        const b = new Backlog(ws);
+        const d = b.detail(b.resolve(need(rest[0], 'IMP-n')).id);
+        print(d, () => describeImprovement(d, out));
+        return 0;
+      }
+      case 'iter feedback': {
+        const i = new Backlog(ws).feedback({ text: rest.join(' '), title: values.title });
+        print(i, () => out(`Added IMP-${i.number} as an idea: ${i.title}`));
+        return 0;
+      }
+      case 'iter edit': {
+        const b = new Backlog(ws);
+        const id = b.resolve(need(rest[0], 'IMP-n')).id;
+        const fields: Record<string, unknown> = {};
+        if (values.title !== undefined) fields.title = values.title;
+        if (values.problem !== undefined) fields.problem = values.problem;
+        if (values.expected !== undefined) fields.expectedOutcome = values.expected;
+        if (values.criteria !== undefined) fields.successCriteria = values.criteria;
+        if (values.priority !== undefined) fields.priority = values.priority;
+        if (values.risk !== undefined) fields.risk = values.risk;
+        if (values.depends !== undefined) fields.dependencies = values.depends.map((d) => b.resolve(d).id);
+        b.edit(id, fields);
+        const d = b.detail(id);
+        print(d, () => describeImprovement(d, out));
+        return 0;
+      }
+      case 'iter move': {
+        const b = new Backlog(ws);
+        const id = b.resolve(need(rest[0], 'IMP-n')).id;
+        b.move(id, { to: need(rest[1], 'status') as ImprovementStatus, reason: values.reason, result: values.result, measuredOutcome: values.outcome });
+        const d = b.detail(id);
+        print(d, () => out(`IMP-${d.item.number} is ${d.item.status}.${d.item.approver && d.item.status === 'approved' ? ` Approved by ${d.item.approver}.` : ''}`));
+        return 0;
+      }
+      case 'iter merge': {
+        const b = new Backlog(ws);
+        const kept = b.merge(b.resolve(need(rest[0], 'IMP-n')).id, b.resolve(need(values.into, '--into')).id);
+        print(kept, () => out(`Merged into IMP-${kept.number}: ${kept.title}`));
         return 0;
       }
       case 'project show': {
@@ -616,6 +691,42 @@ function describeAssessment(a: Assessment, out: Out): void {
   for (const f of r.capabilities) out(`  ${STATUS_LABEL[f.status].padEnd(20)} ${f.title.padEnd(16)} confidence ${f.confidence}${f.externalState ? ', outside the code not verified' : ''}`);
   for (const x of r.notInspected) out(`  not inspected: ${x}`);
   if (a.reportPath) out(`  Report: ${a.reportPath}`);
+}
+
+function describeSelfAssessment(a: SelfAssessmentRecord, out: Out): void {
+  out(`Self-assessment ${a.id} at ${a.at}`);
+  out(`  Read: ${a.report.sources.map((s) => `${s.name} ${s.count}`).join(', ')}`);
+  if (!a.report.findings.length) out('  Nothing went wrong in the records read.');
+  for (const f of a.report.findings) {
+    out(`  - ${f.observation.text}`);
+    out(`    Likely cause (${f.inference.confidence} confidence): ${f.inference.text}`);
+    out(`    Recommendation: ${f.recommendation.title}`);
+  }
+  out(`  Backlog: ${a.created.length} new, ${a.updated.length} with new evidence`);
+  out('  Not recorded, so not assessed:');
+  for (const g of a.report.gaps) out(`    ${g}`);
+}
+
+function describeImprovement({ item: i, allowed, recurrence, dependencies, mergedFrom, mergedInto }: ImprovementDetail, out: Out): void {
+  out(`IMP-${i.number}  ${i.title}`);
+  out(`  status: ${i.status}${i.reason ? ` (${i.reason})` : ''}   priority: ${i.priority}   risk: ${i.risk}   from: ${i.source === 'feedback' ? 'feedback' : 'self-assessment'}`);
+  out(`  problem: ${i.problem}`);
+  out(`  expected outcome: ${i.expectedOutcome || '-'}`);
+  out(`  success criteria: ${i.successCriteria || '-'}`);
+  if (dependencies.length) out(`  depends on: ${dependencies.map((d) => `IMP-${d.number} (${d.status})`).join(', ')}`);
+  if (i.approver) out(`  approved by ${i.approver} at ${i.approvedAt}`);
+  if (i.result) out(`  result: ${i.result}`);
+  if (i.measuredOutcome) out(`  measured outcome: ${i.measuredOutcome}`);
+  out(`  recurrence: ${recurrence.sinceApproval === null ? recurrence.note : `${recurrence.sinceApproval} since approval (${recurrence.note})`}`);
+  if (mergedInto) out(`  merged into IMP-${mergedInto.number}`);
+  if (mergedFrom.length) out(`  merged from: ${mergedFrom.map((m) => `IMP-${m.number}`).join(', ')}`);
+  out('  evidence:');
+  for (const e of i.evidence) {
+    out(`    ${e.at}  ${e.summary}`);
+    for (const o of e.occurrences.slice(0, 5)) out(`      ${o.id}  ${o.label}`);
+    if (e.occurrences.length > 5) out(`      … and ${e.occurrences.length - 5} more`);
+  }
+  out(`  can move to: ${allowed.join(', ') || 'nothing (final)'}`);
 }
 
 function describeReference(r: DesignReference, out: Out): void {

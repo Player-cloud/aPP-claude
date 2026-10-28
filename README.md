@@ -7,7 +7,7 @@ An installable AI development platform with two layers:
 
 The specification lives in [`docs/spec/`](docs/spec/). Start with [`docs/IMPLEMENTATION_ASSESSMENT.md`](docs/IMPLEMENTATION_ASSESSMENT.md) for the current plan, [`docs/DECISIONS.md`](docs/DECISIONS.md) for architecture decisions, and [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) for what is actually implemented and verified.
 
-## Current state: milestones M3 to M9 (main agent, tool inventory, planning, build work, release gate, assessment, Learning Studio)
+## Current state: milestones M3 to M10 (main agent, tool inventory, planning, build work, release gate, assessment, Learning Studio, improvements)
 
 Implemented and tested:
 
@@ -20,9 +20,10 @@ Implemented and tested:
 - **Import and assessment**: register an existing git repository as a project without changing it, then assess it read-only. The app reads the current commit from git's object store (never the working folder, never running its code), summarises structure, stack, dependencies, tests, configuration and documentation, and gives each of 29 capabilities (Product, Operations, Interfaces, Management) a status with evidence, confidence, impact and a next step. Anything that lives with an outside provider is *not verified*, and a focused assessment of one category or capability records its scope first and stays inside it. No AI calls.
 - **Learning Studio**: collect screenshots, designs and short videos you want to learn from. Files are checked by their content and copied into the app (your originals stay where they are). Tag them, add notes, link them to a project, search and group them. The agent can suggest a kind, tags and a description, which you accept or correct; with real calls on, Claude looks at the image for about 1 to 3 cents. A reference never changes a spec.
 - **Polish the UI**: a third kind of build work. It first audits the project's design tokens, components, libraries and breakpoints, gives the agent your chosen references as inspiration, and its review flags new UI libraries, raw colours, accessibility slips and motion problems. One check always asks you to look at the screens yourself.
+- **Improvements** (the first part of the Iterative Layer): the app reads its own records (blocked or failed runs, failed agent tasks, abandoned builds, accepted risks, checks that time out or cannot run, failed assessments, tool conflicts, spend near the budget) and shows what it observed, the likely cause and a recommendation separately, plus what it does not record. Findings become backlog items, a repeat adds evidence instead of a duplicate, and you move items from idea to released. Approving an item records your decision and changes nothing in the app. No AI calls.
 - Under both: the M1 core (SQLite persistence, append-only audit log, secret redaction) and the `iap` CLI.
 
-Not yet built: deployment, running code-review and security-review tools, integrations (so external state is never verified), safe cleanup of tools, and the rest of the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
+Not yet built: deployment, running code-review and security-review tools, integrations (so external state is never verified), safe cleanup of tools, building approved improvements, and ecosystem monitoring in the Iterative Layer. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
 
 ```bash
 npm install

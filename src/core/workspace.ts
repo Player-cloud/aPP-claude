@@ -23,9 +23,11 @@ import type { DriftKind, Gate, GateException, ReleaseEvidence, ReleasePlan } fro
 import type { AssessmentReport, AssessmentScope } from './assess/assessor.ts';
 import type { DesignReference, ReferenceKind, ReferenceSuggestion } from './studio/library.ts';
 import type { UiAudit } from './design/audit.ts';
+import type { Evidence, Improvement, SelfAssessmentRecord } from './iterate/backlog.ts';
+import type { SelfAssessmentReport } from './iterate/assess.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -406,6 +408,55 @@ const MIGRATIONS: Record<number, string> = {
     ALTER TABLE builds_v10 RENAME TO builds;
     CREATE INDEX builds_project ON builds(project_id, created_at);
   `,
+  11: `
+    -- M10 Iterative Layer: the improvement backlog and the app's self-assessments.
+    -- Items are never deleted (a duplicate is merged, which links it); a self-assessment
+    -- is frozen once written.
+    CREATE TABLE improvements (
+      id TEXT PRIMARY KEY,
+      number INTEGER NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      problem TEXT NOT NULL,
+      evidence TEXT NOT NULL DEFAULT '[]',
+      expected_outcome TEXT NOT NULL DEFAULT '',
+      success_criteria TEXT NOT NULL DEFAULT '',
+      priority TEXT NOT NULL CHECK (priority IN ('low','medium','high')),
+      risk TEXT NOT NULL CHECK (risk IN ('low','medium','high')),
+      dependencies TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL CHECK (status IN ('idea','proposed','approved','in_progress','verified','released','blocked','rejected')),
+      blocked_from TEXT,
+      reason TEXT,
+      source TEXT NOT NULL CHECK (source IN ('self_assessment','feedback')),
+      signature TEXT,
+      approver TEXT,
+      approved_at TEXT,
+      result TEXT,
+      measured_outcome TEXT,
+      merged_into TEXT REFERENCES improvements(id),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      released_at TEXT
+    );
+    CREATE INDEX improvements_signature ON improvements(signature);
+    CREATE TRIGGER improvements_no_delete BEFORE DELETE ON improvements
+      BEGIN SELECT RAISE(ABORT, 'improvements are never deleted'); END;
+    CREATE TRIGGER improvements_released_final BEFORE UPDATE ON improvements
+      WHEN OLD.status = 'released' AND (NEW.status <> 'released' OR NEW.measured_outcome IS NOT OLD.measured_outcome OR NEW.result IS NOT OLD.result)
+      BEGIN SELECT RAISE(ABORT, 'a released improvement cannot change'); END;
+    CREATE TABLE self_assessments (
+      id TEXT PRIMARY KEY,
+      at TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      report TEXT NOT NULL,
+      created TEXT NOT NULL,
+      updated TEXT NOT NULL
+    );
+    CREATE INDEX self_assessments_at ON self_assessments(at);
+    CREATE TRIGGER self_assessments_frozen BEFORE UPDATE ON self_assessments
+      BEGIN SELECT RAISE(ABORT, 'a self-assessment cannot change'); END;
+    CREATE TRIGGER self_assessments_no_delete BEFORE DELETE ON self_assessments
+      BEGIN SELECT RAISE(ABORT, 'self-assessments are never deleted'); END;
+  `,
 };
 
 export type ReleaseStatus = 'draft' | 'checked' | 'prepared' | 'abandoned';
@@ -687,8 +738,13 @@ export class Workspace {
     }
   }
 
+  private depth = 0;
+
+  /** Nested calls join the outer transaction, so several writes commit or roll back together. */
   private transaction<T>(fn: () => T): T {
+    if (this.depth > 0) return fn();
     this.db.exec('BEGIN IMMEDIATE');
+    this.depth++;
     try {
       const result = fn();
       this.db.exec('COMMIT');
@@ -696,7 +752,23 @@ export class Workspace {
     } catch (err) {
       this.db.exec('ROLLBACK');
       throw err;
+    } finally {
+      this.depth--;
     }
+  }
+
+  /** For core modules that write several records at once (M10 backlog). */
+  inTransaction<T>(fn: () => T): T {
+    return this.transaction(fn);
+  }
+
+  nowIso(): string {
+    return this.timestamp();
+  }
+
+  /** The person using the app (the OS user name), who is recorded as the approver. */
+  actorName(): string {
+    return this.actor;
   }
 
   private timestamp(): string {
@@ -1198,6 +1270,119 @@ export class Workspace {
     return this.getReference(id);
   }
 
+  // ---- Improvement backlog (M10) ---------------------------------------------
+
+  createImprovement(i: Pick<Improvement, 'title' | 'problem' | 'expectedOutcome' | 'successCriteria' | 'priority' | 'risk' | 'status' | 'source' | 'signature' | 'evidence'>): Improvement {
+    const id = `imp_${randomUUID()}`;
+    const at = this.timestamp();
+    this.transaction(() => {
+      const number = Number((this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM improvements').get() as { n: number }).n);
+      this.db
+        .prepare(
+          `INSERT INTO improvements (id, number, title, problem, evidence, expected_outcome, success_criteria, priority, risk, status, source, signature, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, number, redactString(i.title), redactString(i.problem), JSON.stringify(redact(i.evidence)), redactString(i.expectedOutcome), redactString(i.successCriteria), i.priority, i.risk, i.status, i.source, i.signature, at, at);
+      this.record('improvement.created', null, null, { improvementId: id, number, source: i.source, signature: i.signature, status: i.status });
+    });
+    return this.getImprovement(id);
+  }
+
+  getImprovement(id: string): Improvement {
+    const row = this.db.prepare('SELECT * FROM improvements WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Improvement', id);
+    return toImprovement(row);
+  }
+
+  /** Newest first. Merged duplicates are left out unless asked for. */
+  listImprovements(filter: { status?: string; includeMerged?: boolean } = {}): Improvement[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (!filter.includeMerged) where.push('merged_into IS NULL');
+    if (filter.status) {
+      where.push('status = ?');
+      params.push(filter.status);
+    }
+    const sql = `SELECT * FROM improvements ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY number DESC`;
+    return (this.db.prepare(sql).all(...params) as Record<string, unknown>[]).map(toImprovement);
+  }
+
+  /** The live item tracking a finding: merged items lead to the item they were merged into. */
+  findImprovementBySignature(signature: string): Improvement | null {
+    const row = this.db.prepare('SELECT id FROM improvements WHERE signature = ? ORDER BY number LIMIT 1').get(signature) as { id: string } | undefined;
+    if (!row) return null;
+    let item = this.getImprovement(row.id);
+    for (let hops = 0; item.mergedInto && hops < 100; hops++) item = this.getImprovement(item.mergedInto);
+    return item;
+  }
+
+  updateImprovement(id: string, patch: Partial<Omit<Improvement, 'id' | 'number' | 'evidence' | 'source' | 'signature' | 'createdAt' | 'updatedAt'>>, event: { type: string; payload: Record<string, unknown> }): Improvement {
+    const n = { ...this.getImprovement(id), ...patch };
+    const t = (v: string | null) => (v === null ? null : redactString(v));
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE improvements SET title = ?, problem = ?, expected_outcome = ?, success_criteria = ?, priority = ?, risk = ?, dependencies = ?, status = ?, blocked_from = ?,
+             reason = ?, approver = ?, approved_at = ?, result = ?, measured_outcome = ?, merged_into = ?, released_at = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          redactString(n.title),
+          redactString(n.problem),
+          redactString(n.expectedOutcome),
+          redactString(n.successCriteria),
+          n.priority,
+          n.risk,
+          JSON.stringify(n.dependencies),
+          n.status,
+          n.blockedFrom,
+          t(n.reason),
+          n.approver,
+          n.approvedAt,
+          t(n.result),
+          t(n.measuredOutcome),
+          n.mergedInto,
+          n.releasedAt,
+          this.timestamp(),
+          id,
+        );
+      this.record(event.type, null, null, { improvementId: id, number: n.number, ...event.payload });
+    });
+    return this.getImprovement(id);
+  }
+
+  addImprovementEvidence(id: string, evidence: Evidence): Improvement {
+    const item = this.getImprovement(id);
+    this.transaction(() => {
+      this.db.prepare('UPDATE improvements SET evidence = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(redact([...item.evidence, evidence])), this.timestamp(), id);
+      this.record('improvement.evidence', null, null, { improvementId: id, number: item.number, source: evidence.source, occurrences: evidence.occurrences.length });
+    });
+    return this.getImprovement(id);
+  }
+
+  saveSelfAssessment(a: { id: string; report: SelfAssessmentReport; created: string[]; updated: string[] }): void {
+    this.transaction(() => {
+      this.db
+        .prepare('INSERT INTO self_assessments (id, at, actor, report, created, updated) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(a.id, a.report.at, this.actor, JSON.stringify(redact(a.report)), JSON.stringify(a.created), JSON.stringify(a.updated));
+      this.record('self_assessment.completed', null, null, { assessmentId: a.id, findings: a.report.findings.length, created: a.created.length, updated: a.updated.length });
+    });
+  }
+
+  getSelfAssessment(id: string): SelfAssessmentRecord {
+    const row = this.db.prepare('SELECT * FROM self_assessments WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Self-assessment', id);
+    return toSelfAssessment(row);
+  }
+
+  latestSelfAssessment(): SelfAssessmentRecord | null {
+    const row = this.db.prepare('SELECT * FROM self_assessments ORDER BY at DESC, rowid DESC LIMIT 1').get() as Record<string, unknown> | undefined;
+    return row ? toSelfAssessment(row) : null;
+  }
+
+  listSelfAssessments(limit = 20): SelfAssessmentRecord[] {
+    return (this.db.prepare('SELECT * FROM self_assessments ORDER BY at DESC, rowid DESC LIMIT ?').all(limit) as Record<string, unknown>[]).map(toSelfAssessment);
+  }
+
   // ---- Assessments (M8) ------------------------------------------------------
 
   /** Records the scope before anything is read (FR-PROJ-003). */
@@ -1580,6 +1765,46 @@ function toRelease(row: Record<string, unknown>): Release {
     updatedAt: String(row.updated_at),
     checkedAt: (row.checked_at as string | null) ?? null,
     preparedAt: (row.prepared_at as string | null) ?? null,
+  };
+}
+
+function toImprovement(row: Record<string, unknown>): Improvement {
+  const opt = (k: string) => (row[k] as string | null) ?? null;
+  return {
+    id: String(row.id),
+    number: Number(row.number),
+    title: String(row.title),
+    problem: String(row.problem),
+    evidence: JSON.parse(String(row.evidence)) as Evidence[],
+    expectedOutcome: String(row.expected_outcome),
+    successCriteria: String(row.success_criteria),
+    priority: row.priority as Improvement['priority'],
+    risk: row.risk as Improvement['risk'],
+    dependencies: JSON.parse(String(row.dependencies)) as string[],
+    status: row.status as Improvement['status'],
+    blockedFrom: opt('blocked_from') as Improvement['blockedFrom'],
+    reason: opt('reason'),
+    source: row.source as Improvement['source'],
+    signature: opt('signature'),
+    approver: opt('approver'),
+    approvedAt: opt('approved_at'),
+    result: opt('result'),
+    measuredOutcome: opt('measured_outcome'),
+    mergedInto: opt('merged_into'),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    releasedAt: opt('released_at'),
+  };
+}
+
+function toSelfAssessment(row: Record<string, unknown>): SelfAssessmentRecord {
+  return {
+    id: String(row.id),
+    at: String(row.at),
+    actor: String(row.actor),
+    report: JSON.parse(String(row.report)) as SelfAssessmentReport,
+    created: JSON.parse(String(row.created)) as string[],
+    updated: JSON.parse(String(row.updated)) as string[],
   };
 }
 
