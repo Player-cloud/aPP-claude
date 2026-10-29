@@ -1,6 +1,7 @@
 // Small shared UI pieces built on the design tokens.
 import type { ReactNode } from 'react';
 import type { RunState } from '../shared/api.ts';
+import { parseInline, parseMarkdown, type Inline } from '../shared/markdown.ts';
 
 // live (cyan) is only for work that is really running (DEC-021).
 export type Tone = 'ok' | 'warn' | 'danger' | 'info' | 'live' | 'neutral';
@@ -93,3 +94,44 @@ export const formatTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 export const formatDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
+function Runs({ runs }: { runs: Inline[] }) {
+  return (
+    <>
+      {runs.map((r, i) => (r.kind === 'strong' ? <strong key={i}>{r.text}</strong> : r.kind === 'em' ? <em key={i}>{r.text}</em> : r.kind === 'code' ? <code key={i}>{r.text}</code> : r.text))}
+    </>
+  );
+}
+
+/** One line of Claude's text with its bold, italics and code shown as such. */
+export function InlineText({ text }: { text: string }) {
+  return <Runs runs={parseInline(text)} />;
+}
+
+/** Claude's text as paragraphs, headings and lists (v0.21.2). Built from elements, never from HTML. */
+export function Prose({ text, className }: { text: string; className?: string }) {
+  return (
+    <div className={className ? `prose ${className}` : 'prose'}>
+      {parseMarkdown(text).map((b, i) => {
+        if ('items' in b) {
+          const items = b.items.map((it, j) => (
+            <li key={j}>
+              <Runs runs={it} />
+            </li>
+          ));
+          return b.kind === 'ul' ? <ul key={i}>{items}</ul> : <ol key={i}>{items}</ol>;
+        }
+        return (
+          <p key={i} className={b.kind === 'h' ? 'prose-h' : undefined}>
+            {b.lines.map((l, j) => (
+              <span key={j}>
+                {j > 0 && <br />}
+                <Runs runs={l} />
+              </span>
+            ))}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
