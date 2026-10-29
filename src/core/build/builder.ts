@@ -31,6 +31,7 @@ import { detectChecks, normalizeChecks, ranNoTests, runCheck, type Check, type C
 import { MANDATORY_CHECKS, protectedApproved, protectedChanges, protectedFiles, TEST_CHECKS } from '../maintain/maintain.ts';
 import { addWorktree, commitWorktree, diffWorktree, git, inspectRepo, trackedFiles, type Diff } from './git.ts';
 import { reviewChange } from './review.ts';
+import { splitShipList } from '../../shared/report.ts';
 import { auditUi, describeAudit } from '../design/audit.ts';
 import { reviewUi } from '../design/review.ts';
 import { Preferences } from '../learn/preferences.ts';
@@ -228,6 +229,9 @@ export class Builder {
         { status: 'review', changedFiles: diff.files, risks },
         { type: 'build.verified', payload: { files: diff.files.length, risks: risks.map((r) => r.kind), checks: final.map((r) => `${r.checkId}:${r.status}`) } },
       );
+      // What is left before it ships becomes to-dos the person can tick off (M17 K).
+      const ship = splitShipList(this.ws.getBuild(buildId).agent?.summary ?? '').todos;
+      this.ws.syncTodos(buildId, [...ship.map((text) => ({ text, source: 'claude' as const })), ...risks.map((r) => ({ text: r.detail, source: 'review' as const }))]);
       this.writeReport(buildId);
       return this.detail(buildId);
     });
@@ -265,6 +269,7 @@ export class Builder {
     if (busy.has(buildId)) throw new ValidationError('Wait for the current step to finish.');
     if (build.status === 'completed' || build.status === 'abandoned') throw new ValidationError(`This work is already ${build.status}.`);
     this.ws.updateBuild(buildId, { status: 'abandoned', note: reason?.trim().slice(0, 4_000) || build.note }, { type: 'build.abandoned', payload: {} });
+    this.ws.dropTodos(buildId);
     if (build.worktree) this.writeReport(buildId);
     return this.detail(buildId);
   }

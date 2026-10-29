@@ -166,11 +166,42 @@ test('a version 1 database is migrated forward without losing data', (t) => {
   const p = ws.createProject({ name: 'Old' });
   ws.close();
   const raw = new DatabaseSync(appPaths(home).db);
-  raw.exec('DROP TABLE addon_reviews; DROP TABLE skill_proposals; DROP TABLE learning_sources; DROP TABLE preferences; DROP TABLE vault_notes; DROP TABLE known_good; DROP TABLE improvement_measurements; DROP INDEX projects_one_maintenance; ALTER TABLE projects DROP COLUMN kind; DROP TABLE updates; DROP TABLE update_checks; DROP TABLE cleanup_plans; DROP TABLE self_assessments; DROP TABLE improvements; DROP TABLE assessments; DROP TABLE design_refs; DROP TABLE release_exceptions; DROP TABLE release_check_runs; DROP TABLE releases; DROP TABLE settings; DROP TABLE tool_scans; DROP TABLE spend; DROP TABLE agent_tasks; DROP TABLE plan_docs; DROP TABLE check_runs; ALTER TABLE builds DROP COLUMN result_commit; DROP TABLE builds; ALTER TABLE projects DROP COLUMN repo_path; PRAGMA user_version = 1;');
+  raw.exec('DROP TABLE todos; DROP TABLE addon_reviews; DROP TABLE skill_proposals; DROP TABLE learning_sources; DROP TABLE preferences; DROP TABLE vault_notes; DROP TABLE known_good; DROP TABLE improvement_measurements; DROP INDEX projects_one_maintenance; ALTER TABLE projects DROP COLUMN kind; DROP TABLE updates; DROP TABLE update_checks; DROP TABLE cleanup_plans; DROP TABLE self_assessments; DROP TABLE improvements; DROP TABLE assessments; DROP TABLE design_refs; DROP TABLE release_exceptions; DROP TABLE release_check_runs; DROP TABLE releases; DROP TABLE settings; DROP TABLE tool_scans; DROP TABLE spend; DROP TABLE agent_tasks; DROP TABLE plan_docs; DROP TABLE check_runs; ALTER TABLE builds DROP COLUMN result_commit; DROP TABLE builds; ALTER TABLE projects DROP COLUMN repo_path; PRAGMA user_version = 1;');
   raw.close();
   ws = Workspace.open(home);
   assert.equal(ws.getProject(p.id).name, 'Old');
   assert.equal(ws.health().schemaVersion, SCHEMA_VERSION);
   ws.updateSetting('theme', 'system');
   ws.close();
+});
+
+test('M17-K: to-dos follow the latest list: new items open, unlisted open items clear, done stays done, none deleted', (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const ws = Workspace.open(home);
+  t.after(() => ws.close());
+  const p = ws.createProject({ name: 'P' });
+  const b = ws.createBuild({ projectId: p.id, kind: 'feature', title: 'T', goal: 'G', requirementIds: [], components: [], checks: [], repro: null });
+  const first = ws.syncTodos(b.id, [
+    { text: 'Add SMTP_HOST to .env', source: 'claude' },
+    { text: 'Try the page with an empty rota', source: 'claude' },
+    { text: 'Add SMTP_HOST to .env', source: 'claude' },
+  ]);
+  assert.equal(first.length, 2, 'duplicates are kept once');
+  ws.setTodoDone(first[0]!.id, true);
+  const second = ws.syncTodos(b.id, [{ text: 'Run the migration', source: 'claude' }]);
+  assert.deepEqual(
+    second.map((x) => [x.text, x.status]),
+    [
+      ['Add SMTP_HOST to .env', 'done'],
+      ['Try the page with an empty rota', 'cleared'],
+      ['Run the migration', 'open'],
+    ],
+  );
+  assert.throws(() => ws.setTodoDone(second[1]!.id, true), ValidationError);
+  ws.syncTodos(b.id, [{ text: 'Try the page with an empty rota', source: 'claude' }]);
+  assert.equal(ws.getTodo(second[1]!.id).status, 'open', 'listed again, open again');
+  ws.dropTodos(b.id);
+  assert.deepEqual(ws.listTodos({ buildId: b.id }).map((x) => x.status).sort(), ['done', 'dropped', 'dropped']);
+  assert.throws(() => (ws as unknown as { db: { exec(s: string): void } }).db.exec('DELETE FROM todos'), /never deleted/);
 });

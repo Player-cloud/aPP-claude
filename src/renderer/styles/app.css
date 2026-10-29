@@ -3792,3 +3792,33 @@ button.status-pill {
 .trouble p {
   margin: 0 0 var(--space-2);
 }
+
+/* ---- M17 K: to-dos kept from "Before it ships" (DEC-034) ---- */
+.todo-list.tracked li {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+}
+.todo-list.tracked input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent-fill);
+}
+.todo-list.tracked li[data-status="done"] .todo-text {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.todo-text {
+  cursor: default;
+}
+.todo-list.tracked .todo-text {
+  cursor: pointer;
+}
+.todo-from {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+.project-todos {
+  margin-top: var(--space-4);
+}

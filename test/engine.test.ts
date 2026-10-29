@@ -324,3 +324,44 @@ test('M17-M: every tool call on the engine passes the pause gate first', async (
   assert.equal(out.status, 'done');
   assert.equal(gated, 1);
 });
+
+test('M17-K: what is left before a change ships is kept as to-dos, ticked off, turned into a task, and dropped on undo', async (t) => {
+  const { home, cleanup } = tempHome();
+  const s = new AppService(home, '0.0.0-test');
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
+  const h = s.handlers;
+  const p = h.createProject({ name: 'Club HR' });
+  assert.ok(p.ok);
+  const b = await h.quickBuild({ projectId: p.value.id, goal: 'Add a page that lists members' });
+  assert.ok(b.ok);
+  await settle(h, b.value.id);
+  // No checks were found: the automatic review's point is kept as a to-do.
+  const todos = h.listTodos({ buildId: b.value.id });
+  assert.ok(todos.ok);
+  assert.ok(todos.value.every((x) => x.source === 'review' && x.status === 'open'));
+  // Keep the one about tests at the front for the rest of the test.
+  todos.value.sort((a) => (/nothing tested the change/.test(a.text) ? -1 : 1));
+  assert.match(todos.value[0]!.text, /nothing tested the change/);
+  assert.equal(h.listTodos({ status: 'nope' }).ok, false);
+  assert.equal(h.setTodoDone({ id: todos.value[0]!.id }).ok, false, 'done must be true or false');
+
+  const done = h.setTodoDone({ id: todos.value[0]!.id, done: true });
+  assert.ok(done.ok && done.value.status === 'done' && done.value.doneAt);
+  assert.equal((await h.todoToTask(todos.value[0]!.id)).ok, false, 'only an open to-do becomes a task');
+  assert.ok(h.setTodoDone({ id: todos.value[0]!.id, done: false }).ok);
+  const task = await h.todoToTask(todos.value[0]!.id);
+  assert.ok(task.ok, !task.ok ? task.error.message : '');
+  assert.equal(task.value.title.startsWith('No check commands were found'), true);
+  await settle(h, task.value.id);
+  const open = h.listTodos({ projectId: p.value.id, status: 'open' });
+  assert.ok(open.ok);
+  assert.equal(open.value.find((x) => x.id === todos.value[0]!.id)!.taskBuildId, task.value.id);
+
+  // Undoing a task drops its open to-dos.
+  assert.ok((await h.abandonBuild({ buildId: task.value.id })).ok);
+  const after = h.listTodos({ buildId: task.value.id });
+  assert.ok(after.ok && after.value.every((x) => x.status === 'dropped'));
+});

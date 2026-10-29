@@ -34,7 +34,7 @@ import type { SkillProposal } from './learn/skills.ts';
 import type { AddonReview } from './learn/addons.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -718,7 +718,61 @@ const MIGRATIONS: Record<number, string> = {
     CREATE TRIGGER addon_reviews_no_delete BEFORE DELETE ON addon_reviews
       BEGIN SELECT RAISE(ABORT, 'reviews are never deleted'); END;
   `,
+  17: `
+    -- M17 K (DEC-034): what is left before a task's change ships, kept as to-dos the
+    -- person ticks off or turns into a new task. A to-do is never deleted: an item
+    -- Claude no longer lists becomes 'cleared', and undoing the task drops its open ones.
+    CREATE TABLE todos (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      build_id TEXT NOT NULL REFERENCES builds(id),
+      text TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('claude','review')),
+      status TEXT NOT NULL CHECK (status IN ('open','done','cleared','dropped')),
+      task_build_id TEXT REFERENCES builds(id),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      done_at TEXT,
+      UNIQUE (build_id, text)
+    );
+    CREATE INDEX todos_project ON todos(project_id, status, created_at);
+    CREATE TRIGGER todos_no_delete BEFORE DELETE ON todos
+      BEGIN SELECT RAISE(ABORT, 'to-dos are never deleted'); END;
+  `,
 };
+
+export type TodoStatus = 'open' | 'done' | 'cleared' | 'dropped';
+
+/** Something left before a task's change ships (M17 K). */
+export interface Todo {
+  id: string;
+  projectId: string;
+  buildId: string;
+  text: string;
+  /** Claude's "Before it ships" list, or the automatic review's risks. */
+  source: 'claude' | 'review';
+  status: TodoStatus;
+  /** The task started from this to-do, if any. */
+  taskBuildId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  doneAt: string | null;
+}
+
+function toTodo(row: Record<string, unknown>): Todo {
+  return {
+    id: row.id as string,
+    projectId: row.project_id as string,
+    buildId: row.build_id as string,
+    text: row.text as string,
+    source: row.source as Todo['source'],
+    status: row.status as TodoStatus,
+    taskBuildId: (row.task_build_id as string | null) ?? null,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+    doneAt: (row.done_at as string | null) ?? null,
+  };
+}
 
 export type ReleaseStatus = 'draft' | 'checked' | 'prepared' | 'abandoned';
 
@@ -1451,6 +1505,84 @@ export class Workspace {
   listBuilds(projectId: string): Build[] {
     this.getProject(projectId);
     return (this.db.prepare('SELECT * FROM builds WHERE project_id = ? ORDER BY created_at DESC, id').all(projectId) as Record<string, unknown>[]).map(toBuild);
+  }
+
+  // ---- To-dos (M17 K, DEC-034) ----
+
+  /**
+   * Brings a task's to-dos in line with its latest list: new items are added,
+   * open items no longer listed are cleared, and done ones stay done.
+   */
+  syncTodos(buildId: string, items: { text: string; source: Todo['source'] }[]): Todo[] {
+    const build = this.getBuild(buildId);
+    const at = this.timestamp();
+    const wanted = new Map<string, Todo['source']>();
+    for (const it of items) {
+      const text = redactString(it.text.trim()).slice(0, 1_000);
+      if (text && !wanted.has(text)) wanted.set(text, it.source);
+    }
+    this.transaction(() => {
+      const existing = this.listTodos({ buildId });
+      const added: string[] = [];
+      for (const [text, source] of wanted) {
+        const had = existing.find((t) => t.text === text);
+        if (!had) {
+          this.db
+            .prepare('INSERT INTO todos (id, project_id, build_id, text, source, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            .run(`todo_${randomUUID()}`, build.projectId, buildId, text, source, 'open', at, at);
+          added.push(text);
+        } else if (had.status === 'cleared') {
+          this.db.prepare("UPDATE todos SET status = 'open', updated_at = ? WHERE id = ?").run(at, had.id);
+        }
+      }
+      const cleared = existing.filter((t) => t.status === 'open' && !wanted.has(t.text));
+      for (const t of cleared) this.db.prepare("UPDATE todos SET status = 'cleared', updated_at = ? WHERE id = ?").run(at, t.id);
+      if (added.length || cleared.length) this.record('todos.synced', build.projectId, null, { buildId, added: added.length, cleared: cleared.length });
+    });
+    return this.listTodos({ buildId });
+  }
+
+  listTodos(filter: { projectId?: string; buildId?: string; status?: TodoStatus } = {}): Todo[] {
+    const where: string[] = [];
+    const args: string[] = [];
+    if (filter.projectId) (where.push('project_id = ?'), args.push(filter.projectId));
+    if (filter.buildId) (where.push('build_id = ?'), args.push(filter.buildId));
+    if (filter.status) (where.push('status = ?'), args.push(filter.status));
+    const sql = `SELECT * FROM todos ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at, rowid`;
+    return (this.db.prepare(sql).all(...args) as Record<string, unknown>[]).map(toTodo);
+  }
+
+  getTodo(id: string): Todo {
+    const row = this.db.prepare('SELECT * FROM todos WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('To-do', id);
+    return toTodo(row);
+  }
+
+  /** Ticks a to-do off, or opens it again. */
+  setTodoDone(id: string, done: boolean): Todo {
+    const todo = this.getTodo(id);
+    if (todo.status === 'dropped' || todo.status === 'cleared') throw new ValidationError('This to-do is no longer open.');
+    const at = this.timestamp();
+    this.transaction(() => {
+      this.db.prepare('UPDATE todos SET status = ?, done_at = ?, updated_at = ? WHERE id = ?').run(done ? 'done' : 'open', done ? at : null, at, id);
+      this.record(done ? 'todo.done' : 'todo.reopened', todo.projectId, null, { todoId: id, buildId: todo.buildId });
+    });
+    return this.getTodo(id);
+  }
+
+  /** Records the task started from a to-do. */
+  linkTodoTask(id: string, taskBuildId: string): Todo {
+    const todo = this.getTodo(id);
+    this.transaction(() => {
+      this.db.prepare('UPDATE todos SET task_build_id = ?, updated_at = ? WHERE id = ?').run(taskBuildId, this.timestamp(), id);
+      this.record('todo.task_started', todo.projectId, null, { todoId: id, taskBuildId });
+    });
+    return this.getTodo(id);
+  }
+
+  /** Undoing a task drops its open to-dos; what was done stays done. */
+  dropTodos(buildId: string): void {
+    this.db.prepare("UPDATE todos SET status = 'dropped', updated_at = ? WHERE build_id = ? AND status IN ('open','cleared')").run(this.timestamp(), buildId);
   }
 
   /** Platform builds that implement an improvement or update (M13), newest first. */

@@ -35,12 +35,12 @@ import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
 import { runToolScan } from '../core/tools.ts';
 import { allowedTransitions, isRunState } from '../core/workflow.ts';
-import { moveCorruptStateAside, Workspace, type Fact, type WorkflowRun } from '../core/workspace.ts';
+import { moveCorruptStateAside, Workspace, type Build, type Fact, type TodoStatus, type WorkflowRun } from '../core/workspace.ts';
 import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'startPreview' | 'stopPreview' | 'abandonBuild' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
+type AsyncMethod = 'todoToTask' | 'startPreview' | 'stopPreview' | 'abandonBuild' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -420,6 +420,30 @@ export class AppService {
     });
   }
 
+  /** Starts a task from one sentence: the person approves the commands, then it runs in the background (M15). */
+  private async startQuick(projectId: string, goal: string): Promise<Build> {
+    this.agentEngine(); // Fails early when a budget is set but no key is stored.
+    const project = await this.ensureRepo(projectId);
+    const builder = this.builder();
+    const build = builder.quick(projectId, goal);
+    const setup = detectSetup(project.repoPath!);
+    const commands = [...(setup ? [setup] : []), ...build.checks.map((c) => c.command)];
+    if (commands.length) {
+      const approved = await this.confirmChecks({ title: build.title, commands, folder: project.repoPath! });
+      if (!approved) {
+        builder.abandon(build.id, 'The commands were not approved.');
+        throw new ValidationError('The commands were not approved, so nothing ran.');
+      }
+    }
+    this.launch(build.id, async (hooks, signal) => {
+      hooks.emit({ kind: 'phase', text: 'Setting up a separate copy of your code' });
+      await this.builder().start(build.id, { setup, hooks });
+      if (signal.aborted) return;
+      await this.agentThenVerify(build.id, hooks, signal, null);
+    });
+    return this.workspace().getBuild(build.id);
+  }
+
   close(): void {
     this.live.stopAll();
     void this.previews.stopAll();
@@ -648,28 +672,29 @@ export class AppService {
     quickBuild: (input) =>
       wrapAsync(async () => {
         const i = (input ?? {}) as Record<string, unknown>;
-        const projectId = str(i.projectId, 'Project id')!;
-        const goal = str(i.goal, 'What to build')!;
-        this.agentEngine(); // Fails early when a budget is set but no key is stored.
-        const project = await this.ensureRepo(projectId);
-        const builder = this.builder();
-        const build = builder.quick(projectId, goal);
-        const setup = detectSetup(project.repoPath!);
-        const commands = [...(setup ? [setup] : []), ...build.checks.map((c) => c.command)];
-        if (commands.length) {
-          const approved = await this.confirmChecks({ title: build.title, commands, folder: project.repoPath! });
-          if (!approved) {
-            builder.abandon(build.id, 'The commands were not approved.');
-            throw new ValidationError('The commands were not approved, so nothing ran.');
-          }
-        }
-        this.launch(build.id, async (hooks, signal) => {
-          hooks.emit({ kind: 'phase', text: 'Setting up a separate copy of your code' });
-          await this.builder().start(build.id, { setup, hooks });
-          if (signal.aborted) return;
-          await this.agentThenVerify(build.id, hooks, signal, null);
-        });
-        return this.workspace().getBuild(build.id);
+        return await this.startQuick(str(i.projectId, 'Project id')!, str(i.goal, 'What to build')!);
+      }),
+    // To-dos (M17 K, DEC-034): what is left before a change ships.
+    listTodos: (input) =>
+      wrap(() => {
+        const i = (input ?? {}) as Record<string, unknown>;
+        const status = str(i.status, 'Status', true);
+        if (status !== undefined && !['open', 'done', 'cleared', 'dropped'].includes(status)) throw new ValidationError('Unknown to-do status.');
+        return this.workspace().listTodos({ projectId: str(i.projectId, 'Project id', true), buildId: str(i.buildId, 'Build id', true), status: status as TodoStatus | undefined });
+      }),
+    setTodoDone: (input) =>
+      wrap(() => {
+        const i = obj(input, 'To-do');
+        if (typeof i.done !== 'boolean') throw new ValidationError('Say whether the to-do is done.');
+        return this.workspace().setTodoDone(str(i.id, 'To-do id')!, i.done);
+      }),
+    todoToTask: (id) =>
+      wrapAsync(async () => {
+        const todo = this.workspace().getTodo(str(id, 'To-do id')!);
+        if (todo.status !== 'open') throw new ValidationError('Only an open to-do can become a task.');
+        const build = await this.startQuick(todo.projectId, todo.text);
+        this.workspace().linkTodoTask(todo.id, build.id);
+        return build;
       }),
     followUpBuild: (input) =>
       wrapAsync(async () => {

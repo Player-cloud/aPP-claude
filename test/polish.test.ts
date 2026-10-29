@@ -203,7 +203,7 @@ test('M9: a version 9 database gains the new build kind, and existing builds and
       status TEXT NOT NULL CHECK (status IN ('draft','in_progress','review','completed','abandoned')), repo_path TEXT, branch TEXT, worktree TEXT, base_commit TEXT,
       agent TEXT, changed_files TEXT, risks TEXT, note TEXT, report_path TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, result_commit TEXT);
     INSERT INTO builds SELECT * FROM b9; DROP TABLE b9; CREATE INDEX builds_project ON builds(project_id, created_at);
-    DROP TABLE addon_reviews; DROP TABLE skill_proposals; DROP TABLE learning_sources; DROP TABLE preferences; DROP TABLE vault_notes; DROP TABLE known_good; DROP TABLE improvement_measurements; DROP INDEX projects_one_maintenance; ALTER TABLE projects DROP COLUMN kind;
+    DROP TABLE todos; DROP TABLE addon_reviews; DROP TABLE skill_proposals; DROP TABLE learning_sources; DROP TABLE preferences; DROP TABLE vault_notes; DROP TABLE known_good; DROP TABLE improvement_measurements; DROP INDEX projects_one_maintenance; ALTER TABLE projects DROP COLUMN kind;
     DROP TABLE updates; DROP TABLE update_checks; DROP TABLE cleanup_plans; DROP TABLE self_assessments; DROP TABLE improvements;
     PRAGMA user_version = 9;`);
   raw.close();

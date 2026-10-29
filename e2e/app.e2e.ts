@@ -1507,3 +1507,44 @@ test('M17-M: the work shows named stages and plain steps, can be paused and cont
     await app.close();
   }
 });
+
+test('M17-K: what is left before it ships is kept as to-dos on the project, ticked off or turned into a task', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 800);
+    await page.getByRole('complementary', { name: 'Getting around' }).getByRole('button', { name: 'Got it' }).click();
+    const composer = page.getByRole('form', { name: 'Start a task' });
+    await composer.getByLabel('What do you want to build?').fill('Add a page that lists members');
+    await composer.getByLabel('New project name').fill('Club HR');
+    await composer.getByRole('button', { name: 'Start' }).click();
+    const work = page.getByRole('article', { name: 'Add a page that lists members' });
+    const report = work.getByRole('region', { name: 'Report' });
+    await report.getByRole('heading', { name: 'Nothing changed' }).waitFor({ timeout: 30_000 });
+    // The list in the report can be ticked off.
+    const ships = report.getByRole('list', { name: 'Before it ships' });
+    const tested = ships.getByRole('checkbox', { name: /nothing tested the change/ });
+    await tested.click(); // saved, then shown ticked
+    await ships.locator('li[data-status="done"]').filter({ hasText: /nothing tested the change/ }).waitFor();
+    await tested.click();
+    await ships.locator('li[data-status="open"]').filter({ hasText: /nothing tested the change/ }).waitFor();
+    await report.getByRole('button', { name: 'Keep', exact: true }).click();
+    await report.getByRole('heading', { name: 'Kept' }).first().waitFor();
+
+    // Kept, the open points wait on the project page.
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Projects' }).getByRole('button', { name: 'Club HR' }).click();
+    const left = page.getByRole('region', { name: /Left to do/ });
+    await left.getByText(/From “Add a page that lists members”/).first().waitFor();
+    assert.equal(await left.getByRole('checkbox').count(), 2);
+    await shot(page, '53-project-todos-light-1280');
+    await left.getByRole('checkbox', { name: /^Nothing changed in the worktree/ }).click();
+    await page.waitForFunction(() => document.querySelectorAll('[aria-label="Left to do"] input[type=checkbox]').length === 1);
+    // The other becomes a new task of its own.
+    await left.getByRole('button', { name: /^Start a task for: No check commands were found/ }).click();
+    await page.getByRole('article', { name: /^No check commands were found/ }).getByRole('region', { name: 'Report' }).waitFor({ timeout: 30_000 });
+  } finally {
+    await app.close();
+  }
+});

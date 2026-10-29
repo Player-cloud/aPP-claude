@@ -7,7 +7,7 @@ import { PlanningPanel } from './PlanningPanel.tsx';
 import { BuildPanel } from './BuildPanel.tsx';
 import { ReleasePanel } from './ReleasePanel.tsx';
 import { AssessmentPanel } from './AssessmentPanel.tsx';
-import { Composer, WorkList, WorkView } from './BuildView.tsx';
+import { Composer, TodoItems, WorkList, WorkView } from './BuildView.tsx';
 import { Alert, Empty, formatDate, formatTime, needsPerson, StateBadge, stateLabel } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
@@ -292,6 +292,7 @@ export function ProjectDetail({ projectId, onLoaded, agent }: { projectId: strin
   const runs = useAsync(() => call(iap().listRuns(projectId)), [projectId]);
   const planning = useAsync(() => call(iap().getPlanning(projectId)), [projectId]);
   const builds = useAsync(() => call(iap().listBuilds(projectId)), [projectId]);
+  const todos = useAsync(() => call(iap().listTodos({ projectId, status: 'open' })), [projectId]);
   const releases = useAsync(() => call(iap().listReleases(projectId)), [projectId]);
   const assessments = useAsync(() => call(iap().listAssessments(projectId)), [projectId]);
   const references = useAsync(() => call(iap().listReferences({ projectId })), [projectId]);
@@ -323,7 +324,18 @@ export function ProjectDetail({ projectId, onLoaded, agent }: { projectId: strin
   const next = nextStep(p, planning.data, runs.data, assessments.data ? assessments.data.some((a) => a.status === 'completed') : null, builds.data);
   const assessmentPanel = <AssessmentPanel project={p} onChanged={() => void assessments.reload()} />;
 
-  if (openBuild) return <WorkView buildId={openBuild} onBack={() => setOpenBuild(null)} onChanged={() => void builds.reload()} />;
+  if (openBuild)
+    return (
+      <WorkView
+        buildId={openBuild}
+        onBack={() => setOpenBuild(null)}
+        onChanged={() => {
+          void builds.reload();
+          void todos.reload();
+        }}
+        onOpenTask={setOpenBuild}
+      />
+    );
 
   return (
     <>
@@ -335,6 +347,23 @@ export function ProjectDetail({ projectId, onLoaded, agent }: { projectId: strin
         <section id="project-work" className="project-work" aria-label="Tasks">
           <Composer projects={[p]} projectId={p.id} agent={agent ?? null} onStarted={(b) => setOpenBuild(b.id)} />
           {builds.data && builds.data.length > 0 && <WorkList builds={builds.data.map((b) => ({ ...b, projectName: p.name, running: false }))} onOpen={setOpenBuild} showProject={false} />}
+          {todos.data && todos.data.length > 0 && (
+            <section className="card project-todos" aria-labelledby="todos-title">
+              <h2 className="card-title" id="todos-title">
+                Left to do <span className="count-pill">{todos.data.length}</span>
+              </h2>
+              <TodoItems
+                todos={todos.data}
+                label="Left to do"
+                onChanged={() => void todos.reload()}
+                onOpenTask={(id) => {
+                  void builds.reload();
+                  setOpenBuild(id);
+                }}
+                taskTitle={(id) => builds.data?.find((b) => b.id === id)?.title}
+              />
+            </section>
+          )}
         </section>
       )}
       <PhaseStepper phases={phasesFor(planning.data, builds.data, runs.data, releases.data)} />

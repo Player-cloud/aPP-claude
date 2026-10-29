@@ -5,7 +5,7 @@
 // the numbers, the changed files and their diff, the commands that ran, what
 // is left before it ships, and Keep or Undo in one tap.
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { AgentStatus, Build, BuildDetail, ChangedFile, Diff, LiveEvent, LiveState, PreviewState, Project, RecentBuild } from '../../shared/api.ts';
+import type { AgentStatus, Build, BuildDetail, ChangedFile, Diff, LiveEvent, LiveState, PreviewState, Project, RecentBuild, Todo } from '../../shared/api.ts';
 import { describeStep, formatDuration, groupFiles, keepNote, makeReport, progressStages, statusLine, type ReportCommand, type ReportTone } from '../../shared/report.ts';
 import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
@@ -614,7 +614,90 @@ export function PreviewPane({ buildId, live }: { buildId: string; live: boolean 
 const STAT_TONE: Record<ReportTone, Tone> = { ok: 'ok', warn: 'warn', danger: 'danger', neutral: 'neutral' };
 
 /** One task: live progress while it runs, then the report. */
-export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBack: () => void; onChanged?: () => void }) {
+/**
+ * To-dos kept from "Before it ships" (M17 K): tick one off, ask Claude while
+ * the change is in review, or start a new task from it.
+ */
+export function TodoItems({
+  todos,
+  label,
+  onChanged,
+  ask,
+  onOpenTask,
+  taskTitle,
+}: {
+  todos: Todo[];
+  label: string;
+  onChanged: () => void;
+  ask?: (text: string) => void;
+  onOpenTask?: (buildId: string) => void;
+  /** The task each to-do came from, shown on the project page. */
+  taskTitle?: (buildId: string) => string | undefined;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const run = async (id: string, fn: () => Promise<unknown>) => {
+    setBusy(id);
+    setError(null);
+    try {
+      await fn();
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <>
+      <ul className="todo-list tracked" aria-label={label}>
+        {todos.map((t) => {
+          const from = taskTitle?.(t.buildId);
+          return (
+            <li key={t.id} data-status={t.status}>
+              <input
+                type="checkbox"
+                id={`todo-${t.id}`}
+                checked={t.status === 'done'}
+                disabled={busy !== null}
+                onChange={(e) => void run(t.id, () => call(iap().setTodoDone({ id: t.id, done: e.currentTarget.checked })))}
+              />
+              <label className="todo-text" htmlFor={`todo-${t.id}`}>
+                {t.text}
+                {from && <span className="todo-from">From “{from}”</span>}
+              </label>
+              {t.status === 'open' &&
+                (ask ? (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => ask(t.text)} aria-label={`Ask Claude to handle: ${t.text}`}>
+                    Ask Claude
+                  </button>
+                ) : t.taskBuildId ? (
+                  onOpenTask && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => onOpenTask(t.taskBuildId!)} aria-label={`Open the task for: ${t.text}`}>
+                      Open task
+                    </button>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={busy !== null}
+                    aria-label={`Start a task for: ${t.text}`}
+                    onClick={() => void run(t.id, async () => onOpenTask?.((await call(iap().todoToTask(t.id))).id))}
+                  >
+                    New task
+                  </button>
+                ))}
+            </li>
+          );
+        })}
+      </ul>
+      {error && <Alert tone="danger">{error}</Alert>}
+    </>
+  );
+}
+
+export function WorkView({ buildId, onBack, onChanged, onOpenTask }: { buildId: string; onBack: () => void; onChanged?: () => void; onOpenTask?: (buildId: string) => void }) {
   const [detail, setDetail] = useState<BuildDetail | null>(null);
   const [diff, setDiff] = useState<Diff | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -622,6 +705,7 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
   const [note, setNote] = useState('');
   const [noteOpen, setNoteOpen] = useState(false);
   const [followUp, setFollowUp] = useState('');
+  const [todos, setTodos] = useState<Todo[] | null>(null);
   const followRef = useRef<HTMLInputElement>(null);
   const changed = useRef(onChanged);
   changed.current = onChanged;
@@ -631,6 +715,7 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
       const d = await call(iap().getBuild(buildId));
       setDetail(d);
       setDiff(d.build.worktree && d.build.status !== 'draft' && d.build.status !== 'abandoned' ? await call(iap().buildDiff(buildId)) : null);
+      setTodos((await call(iap().listTodos({ buildId }))).filter((t) => t.status === 'open' || t.status === 'done'));
       changed.current?.();
     } catch (e) {
       setError((e as Error).message);
@@ -641,6 +726,7 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
   useEffect(() => {
     setDetail(null);
     setDiff(null);
+    setTodos(null);
     setNote('');
     setNoteOpen(false);
     void load();
@@ -809,7 +895,9 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
                 <h3 className="report-title" id={`ships-${buildId}`}>
                   Before it ships
                 </h3>
-                {report.todos.length ? (
+                {todos && todos.length > 0 ? (
+                  <TodoItems todos={todos} label="Before it ships" onChanged={() => void load()} ask={b!.status === 'review' ? ask : undefined} onOpenTask={onOpenTask} />
+                ) : report.todos.length ? (
                   <ul className="todo-list" aria-label="Before it ships">
                     {report.todos.map((t, i) => (
                       <li key={i}>
@@ -942,7 +1030,7 @@ export function BuildHome({ projects, agent, onProjectsChanged, openBuild, onOpe
     return () => clearInterval(t);
   }, [openBuild, builds, reload]);
 
-  if (openBuild) return <WorkView buildId={openBuild} onBack={() => onOpenBuild(null)} />;
+  if (openBuild) return <WorkView buildId={openBuild} onBack={() => onOpenBuild(null)} onOpenTask={onOpenBuild} />;
   const empty = builds !== null && builds.length === 0;
   return (
     <div className="build-home">
