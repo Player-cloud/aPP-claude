@@ -1441,3 +1441,69 @@ test('M17-N: text is readable on both skies, the tour explains the rail once, an
     await app.close();
   }
 });
+
+test('M17-M: the work shows named stages and plain steps, can be paused and continued, and the report says what went wrong', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 800);
+    await page.getByRole('complementary', { name: 'Getting around' }).getByRole('button', { name: 'Got it' }).click();
+    const composer = page.getByRole('form', { name: 'Start a task' });
+    await composer.getByLabel('What do you want to build?').fill('Add a page that lists members');
+    await composer.getByLabel('New project name').fill('Club HR');
+    await composer.getByRole('button', { name: 'Start' }).click();
+    let work = page.getByRole('article', { name: 'Add a page that lists members' });
+    let report = work.getByRole('region', { name: 'Report' });
+    await report.getByRole('heading', { name: 'Nothing changed' }).waitFor({ timeout: 30_000 });
+    // The steps read as plain words, not tool names.
+    await report.getByText(/How Claude did it/).click();
+    await report.getByRole('list', { name: /What Claude (is doing|did)/ }).getByText(/^Looked at the files in/).first().waitFor();
+
+    // Give the project a slow test, so there is time to pause.
+    const worktree = (await report.locator('.kv-list dd.mono').last().textContent())!.trim();
+    const repo = join(execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: worktree, encoding: 'utf8' }).trim(), '..');
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "setTimeout(() => {}, 4000)"' } }));
+    execFileSync('git', ['add', 'package.json'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'slow test'], { cwd: repo });
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+
+    await work.getByRole('button', { name: '← All work' }).click();
+    await composer.getByLabel('What do you want to build?').fill('Add a holiday report');
+    await composer.getByRole('button', { name: 'Start' }).click();
+    work = page.getByRole('article', { name: 'Add a holiday report' });
+    const stages = work.getByRole('list', { name: 'Stages' });
+    await stages.locator('[aria-current="step"]').filter({ hasText: 'Getting ready' }).waitFor({ timeout: 15_000 });
+    await work.getByRole('button', { name: 'Pause' }).click();
+    await work.getByRole('status').filter({ hasText: /^Paused/ }).waitFor();
+    await work.getByText('You paused the work. Claude waits before its next step.').waitFor();
+    // The check finishes, then Claude waits at its first step.
+    await stages.locator('[aria-current="step"]').filter({ hasText: 'Understanding the code' }).waitFor({ timeout: 15_000 });
+    await page.waitForTimeout(1_500);
+    assert.equal(await work.getByRole('button', { name: 'Continue' }).count(), 1, 'still paused');
+    assert.equal(await work.getByText(/^Looked at the files in/).count(), 0, 'no step taken while paused');
+    await shot(page, '51-build-paused-light-1280');
+    await work.getByRole('button', { name: 'Continue' }).click();
+    report = work.getByRole('region', { name: 'Report' });
+    await report.getByRole('heading', { name: 'Nothing changed' }).waitFor({ timeout: 30_000 });
+
+    // A failing check gets a plain explanation and a ready request for Claude.
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(1)"' } }));
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-am', 'failing test'], { cwd: repo });
+    await work.getByRole('button', { name: '← All work' }).click();
+    await composer.getByLabel('What do you want to build?').fill('Add a rota page');
+    await composer.getByRole('button', { name: 'Start' }).click();
+    work = page.getByRole('article', { name: 'Add a rota page' });
+    report = work.getByRole('region', { name: 'Report' });
+    await report.getByRole('heading', { name: /1 of 1 check is failing/ }).waitFor({ timeout: 30_000 });
+    const trouble = report.getByRole('region', { name: 'What went wrong' });
+    await trouble.getByText('The test check failed after the change.').waitFor();
+    await trouble.getByRole('button', { name: 'Ask Claude to fix it' }).click();
+    assert.match(await work.getByLabel('What to change').inputValue(), /^Fix the failing test check/);
+    await shot(page, '52-build-trouble-light-1280');
+  } finally {
+    await app.close();
+  }
+});

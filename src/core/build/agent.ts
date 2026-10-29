@@ -88,6 +88,7 @@ export async function runBuildAgent(
   });
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
+    await input.hooks?.gate?.(input.signal);
     if (input.signal?.aborted) return end('failed', 'Cancelled.');
     const request = { purpose: 'build' as const, taskTitle: input.title, instructions: input.instructions, maxOutputTokens: MAX_OUTPUT_TOKENS, loop: { tools: BUILD_TOOLS, turns } };
     // The history grows every turn, so one run is also capped on its own.

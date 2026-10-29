@@ -2934,7 +2934,7 @@ button.status-pill {
 }
 .tl-step {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr);
   gap: var(--space-2);
   align-items: center;
   color: var(--text-muted);
@@ -2954,10 +2954,12 @@ button.status-pill {
 .tl-step[data-ok="false"] .tl-result {
   color: var(--danger);
 }
-.tl-target {
+.tl-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tl-target {
   color: var(--text);
 }
 .tl-note {
@@ -3721,4 +3723,72 @@ button.status-pill {
   border-radius: var(--radius-sm, 6px);
   background: var(--surface-hover);
   color: var(--accent-ink);
+}
+
+/* ---- M17 M: readable progress (DEC-034) ---- */
+.progress-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.progress-stages li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.progress-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+}
+.progress-stages li[data-state="done"] {
+  color: var(--text);
+}
+.progress-stages li[data-state="done"] .progress-dot {
+  border-color: var(--ok);
+  background: var(--ok);
+  color: var(--surface);
+}
+.progress-stages li[data-state="current"] {
+  color: var(--text);
+  font-weight: 600;
+}
+.progress-stages li[data-state="current"] .progress-dot {
+  border-color: var(--accent-fill);
+  box-shadow: inset 0 0 0 3px var(--surface), inset 0 0 0 9px var(--accent-fill);
+}
+.progress-stages li[data-state="stopped"] .progress-dot {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .progress-stages li[data-state="current"] .progress-dot {
+    animation: progress-pulse 1.6s ease-in-out infinite;
+  }
+}
+@keyframes progress-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+.trouble {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.trouble p {
+  margin: 0 0 var(--space-2);
 }

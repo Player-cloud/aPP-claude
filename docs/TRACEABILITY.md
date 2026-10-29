@@ -288,3 +288,6 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M17-AC2 | Tab reaches every control on Build and each shows a visible change when focused; Ctrl K opens the launcher and Escape closes it | Verified | `e2e/app.e2e.ts` M17-N |
 | M17-AC3 | A first-run tour says what each rail item is for, and Got it hides it for good | Verified | `e2e/app.e2e.ts` M17-N (survives a restart), screenshot `50-tour-light-1280`; `workspace.test.ts` (setting `tour`) |
 | M17-AC4 | The Keep/Undo bar is solid, and an empty checks count says whether checks are not set up or did not run | Verified | `e2e/app.e2e.ts` M15 ("None set up") |
+| M17-AC5 | While Claude works, named stages show where it is, and each step reads as plain words | Verified | `report.test.ts` (describeStep, progressStages); `e2e/app.e2e.ts` M17-M, screenshot `51-build-paused-light-1280` |
+| M17-AC6 | Pause holds the work before its next step on both engines and the checks, Continue resumes it, and Stop ends a paused run | Verified | `engine.test.ts` M17-M (gate, PreToolUse hook); `e2e/app.e2e.ts` M17-M (no step taken while paused) |
+| M17-AC7 | When work stops early or a check fails, the report says what went wrong and what to do, with a ready request for Claude | Verified | `report.test.ts` (trouble); `e2e/app.e2e.ts` M17-M, screenshot `52-build-trouble-light-1280` |

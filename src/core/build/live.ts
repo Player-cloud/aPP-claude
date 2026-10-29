@@ -16,6 +16,8 @@ export type LiveEvent =
   /** Claude asks to do something that needs the person's OK. */
   | { seq: number; at: string; kind: 'ask'; approvalId: string; tool: string; detail: string }
   | { seq: number; at: string; kind: 'answer'; approvalId: string; allowed: boolean }
+  /** The person paused or continued the work (M17 M). */
+  | { seq: number; at: string; kind: 'pause'; paused: boolean }
   /** The work stopped: finished, failed or cancelled. */
   | { seq: number; at: string; kind: 'end'; status: 'review' | 'failed' | 'stopped'; text: string };
 
@@ -27,6 +29,8 @@ export interface LiveState {
   events: LiveEvent[];
   /** The question waiting for the person, if any. */
   pending: { approvalId: string; tool: string; detail: string } | null;
+  /** True while the person has paused the work: Claude waits before its next step. */
+  paused: boolean;
   /** Spend reported so far by the running agent. */
   costUsd: number;
 }
@@ -37,6 +41,8 @@ export interface AgentHooks {
   /** Resolves true when the person allows it. Never resolves true on its own. */
   ask(tool: string, detail: string, signal?: AbortSignal): Promise<boolean>;
   cost(usd: number): void;
+  /** Resolves when the work may take its next step: at once, or when the person continues or stops a paused run. */
+  gate?(signal?: AbortSignal): Promise<void>;
 }
 
 /** How long a question waits before it counts as "no". */
@@ -47,6 +53,8 @@ interface Entry {
   state: LiveState;
   controller: AbortController;
   waiting: Map<string, (allowed: boolean) => void>;
+  /** Callers held by a pause, released on continue or stop. */
+  held: (() => void)[];
 }
 
 export class LiveRuns {
@@ -58,9 +66,10 @@ export class LiveRuns {
     const old = this.runs.get(buildId);
     if (old?.state.running) throw new Error('This work is already running.');
     const entry: Entry = {
-      state: { buildId, running: true, events: old?.state.events ?? [], pending: null, costUsd: 0 },
+      state: { buildId, running: true, events: old?.state.events ?? [], pending: null, paused: false, costUsd: 0 },
       controller: new AbortController(),
       waiting: new Map(),
+      held: [],
     };
     this.runs.set(buildId, entry);
     return entry.controller.signal;
@@ -86,7 +95,41 @@ export class LiveRuns {
         const entry = this.runs.get(buildId);
         if (entry) entry.state.costUsd = usd;
       },
+      gate: (signal) => this.gate(buildId, signal),
     };
+  }
+
+  /** Holds the caller while the work is paused. */
+  gate(buildId: string, signal?: AbortSignal): Promise<void> {
+    const entry = this.runs.get(buildId);
+    if (!entry?.state.paused || !entry.state.running || signal?.aborted || entry.controller.signal.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      entry.held.push(resolve);
+      signal?.addEventListener('abort', () => resolve(), { once: true });
+    });
+  }
+
+  /** Pauses running work before its next step. Returns false when it is not running or already paused. */
+  pause(buildId: string): boolean {
+    const entry = this.runs.get(buildId);
+    if (!entry?.state.running || entry.state.paused) return false;
+    entry.state.paused = true;
+    this.emit(buildId, { kind: 'pause', paused: true });
+    return true;
+  }
+
+  /** Lets paused work carry on. */
+  resume(buildId: string): boolean {
+    const entry = this.runs.get(buildId);
+    if (!entry?.state.running || !entry.state.paused) return false;
+    entry.state.paused = false;
+    this.emit(buildId, { kind: 'pause', paused: false });
+    this.release(entry);
+    return true;
+  }
+
+  private release(entry: Entry): void {
+    for (const go of entry.held.splice(0)) go();
   }
 
   ask(buildId: string, tool: string, detail: string, signal?: AbortSignal): Promise<boolean> {
@@ -122,6 +165,8 @@ export class LiveRuns {
     const entry = this.runs.get(buildId);
     if (!entry?.state.running) return false;
     entry.controller.abort();
+    entry.state.paused = false;
+    this.release(entry);
     return true;
   }
 
@@ -137,6 +182,8 @@ export class LiveRuns {
     for (const settle of [...entry.waiting.values()]) settle(false);
     entry.state.running = false;
     entry.state.pending = null;
+    entry.state.paused = false;
+    this.release(entry);
   }
 
   /** Events after `since` (a sequence number), so a view can poll cheaply. */

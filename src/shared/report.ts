@@ -27,6 +27,15 @@ export interface Report {
   commands: ReportCommand[];
   /** Claude's own list, then what the automatic review found. */
   todos: string[];
+  /** When something went wrong: what happened, what the person can do, and what to ask Claude (M17 M). */
+  trouble: Trouble | null;
+}
+
+export interface Trouble {
+  what: string;
+  next: string;
+  /** A ready request for Claude, or null when asking Claude would not help. */
+  ask: string | null;
 }
 
 const SHIP_HEADING = /^\s*(?:#{1,4}\s*|\*\*)?before (?:it|this) ships\b[^\n]*$/im;
@@ -116,6 +125,23 @@ export function makeReport(build: Build, checkRuns: CheckRun[], files: ChangedFi
     tone = 'ok';
   }
 
+  let trouble: Trouble | null = null;
+  if (build.status === 'review' && agent && agent.status !== 'done') {
+    const first = agent.summary.split('\n')[0]!.trim();
+    trouble = {
+      what: first || 'Claude stopped before it finished.',
+      next: agent.resolution ?? 'Look at what it changed so far, then ask it to carry on or undo the change.',
+      ask: agent.status === 'blocked' ? null : 'Carry on from where you stopped and finish the task.',
+    };
+  } else if (build.status === 'review' && failing > 0) {
+    const ids = checks.filter((c) => c.status !== 'passed').map((c) => c.checkId);
+    trouble = {
+      what: `The ${ids.join(', ')} ${ids.length === 1 ? 'check' : 'checks'} failed after the change.`,
+      next: 'Look at the output under Commands, then ask Claude to fix it, or undo the change.',
+      ask: `Fix the failing ${ids.join(', ')} ${ids.length === 1 ? 'check' : 'checks'} without weakening the tests.`,
+    };
+  }
+
   return {
     headline,
     tone,
@@ -127,6 +153,7 @@ export function makeReport(build: Build, checkRuns: CheckRun[], files: ChangedFi
     costUsd: agent?.costUsd ?? 0,
     commands,
     todos,
+    trouble,
   };
 }
 
@@ -168,8 +195,9 @@ export function formatDuration(ms: number): string {
 }
 
 /** One line for what is happening now, like "Adding the members page · 3 of 5 done · 12 steps". */
-export function statusLine(events: LiveEvent[], pending: LiveState['pending']): { text: string; waiting: boolean } {
+export function statusLine(events: LiveEvent[], pending: LiveState['pending'], paused = false): { text: string; waiting: boolean } {
   if (pending) return { text: 'Waiting for you: Claude wants to run a command', waiting: true };
+  if (paused) return { text: 'Paused: Claude waits before its next step until you continue', waiting: true };
   const steps = events.filter((e) => e.kind === 'step').length;
   let plan: Extract<LiveEvent, { kind: 'plan' }> | null = null;
   let phase = '';
@@ -187,4 +215,70 @@ export function statusLine(events: LiveEvent[], pending: LiveState['pending']): 
   }
   if (steps) parts.push(`${steps} ${steps === 1 ? 'step' : 'steps'}`);
   return { text: parts.join(' · '), waiting: false };
+}
+
+// ---- Readable progress (M17 M, DEC-034) ----
+
+const VERBS: Record<string, [past: string, present: string]> = {
+  Read: ['Read', 'read'],
+  read_file: ['Read', 'read'],
+  list_files: ['Looked at the files in', 'look at the files in'],
+  Glob: ['Looked for files matching', 'look for files matching'],
+  Grep: ['Searched the code for', 'search the code for'],
+  search: ['Searched the code for', 'search the code for'],
+  Edit: ['Changed', 'change'],
+  Write: ['Wrote', 'write'],
+  write_file: ['Wrote', 'write'],
+  Bash: ['Ran', 'run'],
+  run_check: ['Ran the check', 'run the check'],
+  Check: ['Passed the check', 'pass the check'],
+  Setup: ['Installed dependencies with', 'install dependencies with'],
+};
+
+/** A step in plain words: "Read src/members.ts", "Couldn't run npm install". */
+export function describeStep(step: { tool: string; target: string; ok: boolean }): { verb: string; object: string } {
+  const v = VERBS[step.tool];
+  let object = step.target;
+  if (step.tool === 'Check') object = step.target.split(':')[0]!.trim();
+  if (step.tool === 'list_files' && !object) object = 'the project';
+  if (!v) return { verb: step.ok ? step.tool : `${step.tool} failed:`, object };
+  if (step.ok) return { verb: v[0], object };
+  if (step.tool === 'Check') return { verb: 'The check failed:', object };
+  if (step.tool === 'Bash') return { verb: 'Was not allowed to run', object };
+  return { verb: `Couldn't ${v[1]}`, object };
+}
+
+export type StageId = 'setup' | 'understand' | 'change' | 'check' | 'done';
+export const STAGES: { id: StageId; label: string }[] = [
+  { id: 'setup', label: 'Getting ready' },
+  { id: 'understand', label: 'Understanding the code' },
+  { id: 'change', label: 'Changing files' },
+  { id: 'check', label: 'Checking' },
+  { id: 'done', label: 'Ready for you' },
+];
+
+export type StageState = 'done' | 'current' | 'todo' | 'stopped';
+
+/** Where the work is, as named stages instead of a log. */
+export function progressStages(events: LiveEvent[]): { id: StageId; label: string; state: StageState }[] {
+  let at = 0;
+  let ended: 'review' | 'failed' | 'stopped' | null = null;
+  for (const e of events) {
+    if (e.kind === 'phase') {
+      // A follow-up starts the stages again from Claude's work.
+      if (/^Claude is working/.test(e.text)) {
+        at = 1;
+        ended = null;
+      } else if (/^Checking the result/.test(e.text)) at = Math.max(at, 3);
+    } else if (e.kind === 'step' && e.ok && (e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'write_file')) {
+      at = Math.max(at, 2);
+    } else if (e.kind === 'end') {
+      ended = e.status;
+      if (e.status === 'review') at = 4;
+    }
+  }
+  return STAGES.map((st, i) => ({
+    ...st,
+    state: ended === 'review' || i < at ? 'done' : i === at ? (ended ? 'stopped' : 'current') : 'todo',
+  }));
 }

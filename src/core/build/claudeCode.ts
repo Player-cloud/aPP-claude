@@ -203,6 +203,20 @@ export async function runClaudeCode(query: QueryFn, input: EngineInput): Promise
     env: engineEnv(input.apiKey, input.configDir),
     systemPrompt: { type: 'preset', preset: 'claude_code', append: RULES + projectNotes(input.worktree) },
     canUseTool: (tool: string, args: Record<string, unknown>, opts: { signal?: AbortSignal }) => decide(input, tool, args, opts?.signal),
+    // Pause (M17 M): every tool call, reading included, waits here while the person has paused the work.
+    hooks: {
+      PreToolUse: [
+        {
+          timeout: 24 * 60 * 60,
+          hooks: [
+            async (_input: unknown, _id: string | undefined, opts: { signal: AbortSignal }) => {
+              await input.hooks?.gate?.(opts.signal);
+              return { continue: true };
+            },
+          ],
+        },
+      ],
+    },
   };
   if (input.executable) options.pathToClaudeCodeExecutable = input.executable;
 

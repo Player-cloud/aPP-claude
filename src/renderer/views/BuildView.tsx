@@ -6,7 +6,7 @@
 // is left before it ships, and Keep or Undo in one tap.
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { AgentStatus, Build, BuildDetail, ChangedFile, Diff, LiveEvent, LiveState, PreviewState, Project, RecentBuild } from '../../shared/api.ts';
-import { formatDuration, groupFiles, keepNote, makeReport, statusLine, type ReportCommand, type ReportTone } from '../../shared/report.ts';
+import { describeStep, formatDuration, groupFiles, keepNote, makeReport, progressStages, statusLine, type ReportCommand, type ReportTone } from '../../shared/report.ts';
 import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
 import { Alert, Badge, relativeTime, type Tone } from '../ui.tsx';
@@ -187,7 +187,7 @@ export function WorkList({ builds, onOpen, showProject = true }: { builds: Recen
 /** Follows live progress: polls while the work runs, and says when it stops. */
 function useLive(buildId: string, onEnded: () => void) {
   const [events, setEvents] = useState<LiveEvent[]>([]);
-  const [state, setState] = useState<Pick<LiveState, 'running' | 'pending' | 'costUsd'> | null>(null);
+  const [state, setState] = useState<Pick<LiveState, 'running' | 'pending' | 'paused' | 'costUsd'> | null>(null);
   const since = useRef(0);
   const ended = useRef(onEnded);
   ended.current = onEnded;
@@ -212,12 +212,12 @@ function useLive(buildId: string, onEnded: () => void) {
             since.current = live.events.at(-1)!.seq;
             setEvents((prev) => [...prev, ...live.events]);
           }
-          setState({ running: live.running, pending: live.pending, costUsd: live.costUsd });
+          setState({ running: live.running, pending: live.pending, paused: live.paused, costUsd: live.costUsd });
           if (wasRunning && !live.running) ended.current();
           wasRunning = live.running;
           if (live.running) timer = setTimeout(poll, 600);
         } else {
-          setState({ running: false, pending: null, costUsd: 0 });
+          setState({ running: false, pending: null, paused: false, costUsd: 0 });
         }
       } catch {
         if (!cancelled) timer = setTimeout(poll, 2_000);
@@ -233,21 +233,58 @@ function useLive(buildId: string, onEnded: () => void) {
   return { events, state, restart: () => setTick((t) => t + 1) };
 }
 
-const TOOL: Record<string, { icon: string; done: string }> = {
-  Read: { icon: 'R', done: 'read' },
-  read_file: { icon: 'R', done: 'read' },
-  list_files: { icon: 'L', done: 'listed' },
-  Glob: { icon: 'F', done: 'found files' },
-  Grep: { icon: 'S', done: 'searched' },
-  search: { icon: 'S', done: 'searched' },
-  Edit: { icon: 'E', done: 'edited' },
-  Write: { icon: 'W', done: 'written' },
-  write_file: { icon: 'W', done: 'written' },
-  Bash: { icon: '$', done: 'ran' },
-  run_check: { icon: '✓', done: 'ran check' },
-  Check: { icon: '✓', done: 'passed' },
-  Setup: { icon: '↓', done: 'installed' },
+const TOOL_ICON: Record<string, string> = {
+  Read: 'R',
+  read_file: 'R',
+  list_files: 'L',
+  Glob: 'F',
+  Grep: 'S',
+  search: 'S',
+  Edit: 'E',
+  Write: 'W',
+  write_file: 'W',
+  Bash: '$',
+  run_check: '✓',
+  Check: '✓',
+  Setup: '↓',
 };
+
+/** One step in plain words (M17 M): "Read src/members.ts", "Was not allowed to run npm install". */
+function StepLine({ step }: { step: { tool: string; target: string; ok: boolean } }) {
+  const { verb, object } = describeStep(step);
+  return (
+    <>
+      <span className="tl-icon" aria-hidden="true">
+        {step.ok ? (TOOL_ICON[step.tool] ?? '·') : '!'}
+      </span>
+      <span className="tl-text">
+        {verb}{' '}
+        {object && (
+          <span className="mono tl-target" title={object}>
+            {object}
+          </span>
+        )}
+      </span>
+    </>
+  );
+}
+
+/** Where the work is, as named stages (M17 M). */
+function StageBar({ events }: { events: LiveEvent[] }) {
+  return (
+    <ol className="progress-stages" aria-label="Stages">
+      {progressStages(events).map((st) => (
+        <li key={st.id} data-state={st.state} aria-current={st.state === 'current' ? 'step' : undefined}>
+          <span className="progress-dot" aria-hidden="true">
+            {st.state === 'done' ? '✓' : st.state === 'stopped' ? '!' : ''}
+          </span>
+          {st.label}
+          {st.state === 'stopped' && <span className="visually-hidden"> (stopped here)</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 function Timeline({ events, pending, buildId, onAnswered }: { events: LiveEvent[]; pending: LiveState['pending']; buildId: string; onAnswered: () => void }) {
   const [error, setError] = useState<string | null>(null);
@@ -292,21 +329,19 @@ function Timeline({ events, pending, buildId, onAnswered }: { events: LiveEvent[
                 </ul>
               </li>
             );
-          case 'step': {
-            const t = TOOL[e.tool] ?? { icon: '·', done: e.tool };
+          case 'step':
             return (
               <li key={e.seq} className="tl-step" data-ok={e.ok}>
-                <span className="tl-icon" aria-hidden="true">
-                  {e.ok ? t.icon : '!'}
-                </span>
-                <span className="mono tl-target" title={e.target}>
-                  {e.target || e.tool}
-                </span>
-                <span className="tl-result">{e.ok ? t.done : e.tool === 'Check' ? e.note || 'failed' : 'refused'}</span>
-                {!e.ok && e.note && e.tool !== 'Check' && <span className="tl-note">{e.note}</span>}
+                <StepLine step={e} />
+                {!e.ok && e.note && <span className="tl-note">{e.note}</span>}
               </li>
             );
-          }
+          case 'pause':
+            return (
+              <li key={e.seq} className="tl-answer">
+                {e.paused ? 'You paused the work. Claude waits before its next step.' : 'You let Claude carry on.'}
+              </li>
+            );
           case 'ask': {
             const open = pending?.approvalId === e.approvalId;
             return (
@@ -354,18 +389,11 @@ function RecordedSteps({ build }: { build: Build }) {
   return (
     <ol className="timeline" aria-label="What Claude did">
       <li className="tl-phase">Claude worked on this {build.agent.model === 'simulated' ? '(simulated)' : ''}</li>
-      {build.agent.steps.map((s, i) => {
-        const t = TOOL[s.tool] ?? { icon: '·', done: s.tool };
-        return (
-          <li key={i} className="tl-step" data-ok={s.ok}>
-            <span className="tl-icon" aria-hidden="true">
-              {s.ok ? t.icon : '!'}
-            </span>
-            <span className="mono tl-target">{s.target || s.tool}</span>
-            <span className="tl-result">{s.ok ? t.done : 'refused'}</span>
-          </li>
-        );
-      })}
+      {build.agent.steps.map((s, i) => (
+        <li key={i} className="tl-step" data-ok={s.ok}>
+          <StepLine step={s} />
+        </li>
+      ))}
     </ol>
   );
 }
@@ -620,7 +648,8 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
 
   const running = live.state?.running ?? false;
   const b = detail?.build;
-  const status = b ? workStatus(b, running) : null;
+  const paused = live.state?.paused ?? false;
+  const status = b ? (running && paused ? { label: 'Paused', tone: 'warn' as const } : workStatus(b, running)) : null;
   const reportable = b && (b.agent !== null || b.status === 'review' || b.status === 'completed' || b.status === 'abandoned');
   const report = b && detail && !running && reportable ? makeReport(b, detail.checkRuns, diff?.files ?? null) : null;
 
@@ -650,7 +679,7 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
       b && <RecordedSteps build={b} />
     );
   const steps = b?.agent?.steps.length ?? live.events.filter((e) => e.kind === 'step').length;
-  const now = running ? statusLine(live.events, live.state?.pending ?? null) : null;
+  const now = running ? statusLine(live.events, live.state?.pending ?? null, paused) : null;
 
   return (
     <article className="work-view" aria-label={b?.title ?? 'Task'}>
@@ -672,6 +701,17 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
           {status && <Badge tone={status.tone}>{status.label}</Badge>}
           {live.state && live.state.costUsd > 0 && <span className="pill">${live.state.costUsd.toFixed(2)}</span>}
           {running && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => void act(paused ? 'resume' : 'pause', () => call(paused ? iap().resumeBuild(buildId) : iap().pauseBuild(buildId)).then(() => live.restart()))}
+              disabled={busy !== null}
+              title={paused ? undefined : 'Claude finishes what it is doing, then waits before its next step.'}
+            >
+              {paused ? 'Continue' : 'Pause'}
+            </button>
+          )}
+          {running && (
             <button type="button" className="btn btn-sm" onClick={() => void act('stop', () => call(iap().stopBuild(buildId)))} disabled={busy !== null}>
               Stop
             </button>
@@ -679,6 +719,8 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
         </div>
       </div>
       {error && <Alert tone="danger">{error}</Alert>}
+
+      {running && <StageBar events={live.events} />}
 
       {!report ? (
         <div className="work-live">
@@ -700,6 +742,24 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
             </h2>
             {report.summary && <p className="report-summary">{report.summary}</p>}
           </header>
+
+          {report.trouble && (
+            <section className="trouble" aria-labelledby={`trouble-${buildId}`}>
+              <h3 className="report-title" id={`trouble-${buildId}`}>
+                What went wrong
+              </h3>
+              <p>{report.trouble.what}</p>
+              <h3 className="report-title">What you can do</h3>
+              <p>{report.trouble.next}</p>
+              {report.trouble.ask && (
+                <div className="btn-row">
+                  <button type="button" className="btn btn-sm" onClick={() => ask(report.trouble!.ask!)}>
+                    Ask Claude to fix it
+                  </button>
+                </div>
+              )}
+            </section>
+          )}
 
           <dl className="stat-row" aria-label="At a glance">
             <div data-tone={report.checks.total === 0 ? 'neutral' : STAT_TONE[report.checks.passed === report.checks.total ? 'ok' : 'danger']}>

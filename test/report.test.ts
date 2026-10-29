@@ -1,7 +1,7 @@
 // M16 (DEC-033): the finished task as a report.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatDuration, groupFiles, keepNote, makeReport, splitShipList, statusLine } from '../src/shared/report.ts';
+import { describeStep, formatDuration, groupFiles, keepNote, makeReport, progressStages, splitShipList, statusLine } from '../src/shared/report.ts';
 import type { Build, CheckRun, LiveEvent } from '../src/shared/api.ts';
 
 const build = (over: Partial<Build> = {}): Build =>
@@ -117,4 +117,46 @@ test('statusLine says what is happening now in one line', () => {
   ];
   assert.deepEqual(statusLine(events, null), { text: 'Write a test · 1 of 3 done · 2 steps', waiting: false });
   assert.equal(statusLine(events, { approvalId: 'x', detail: 'npm ci' } as never).waiting, true);
+});
+
+test('M17-M: steps read as plain words, and the work shows as named stages', () => {
+  assert.deepEqual(describeStep({ tool: 'Read', target: 'src/a.ts', ok: true }), { verb: 'Read', object: 'src/a.ts' });
+  assert.deepEqual(describeStep({ tool: 'Grep', target: 'rota', ok: true }), { verb: 'Searched the code for', object: 'rota' });
+  assert.deepEqual(describeStep({ tool: 'Bash', target: 'npm install', ok: false }), { verb: 'Was not allowed to run', object: 'npm install' });
+  assert.deepEqual(describeStep({ tool: 'Check', target: 'test: npm test', ok: false }), { verb: 'The check failed:', object: 'test' });
+  assert.deepEqual(describeStep({ tool: 'Edit', target: '.git/config', ok: false }), { verb: "Couldn't change", object: '.git/config' });
+  assert.deepEqual(describeStep({ tool: 'list_files', target: '', ok: true }), { verb: 'Looked at the files in', object: 'the project' });
+
+  const ev = (e: Record<string, unknown>, seq: number) => ({ seq, at: '', ...e }) as unknown as LiveEvent;
+  const states = (events: LiveEvent[]) => progressStages(events).map((s) => s.state);
+  assert.deepEqual(states([]), ['current', 'todo', 'todo', 'todo', 'todo']);
+  const working = [ev({ kind: 'phase', text: 'Setting up a separate copy of your code' }, 1), ev({ kind: 'phase', text: 'Claude is working' }, 2), ev({ kind: 'step', tool: 'Read', target: 'a', ok: true, note: '' }, 3)];
+  assert.deepEqual(states(working), ['done', 'current', 'todo', 'todo', 'todo']);
+  const editing = [...working, ev({ kind: 'step', tool: 'Edit', target: 'a', ok: true, note: '' }, 4)];
+  assert.deepEqual(states(editing), ['done', 'done', 'current', 'todo', 'todo']);
+  const checking = [...editing, ev({ kind: 'phase', text: 'Checking the result' }, 5)];
+  assert.deepEqual(states(checking), ['done', 'done', 'done', 'current', 'todo']);
+  assert.deepEqual(states([...checking, ev({ kind: 'end', status: 'review', text: '' }, 6)]), ['done', 'done', 'done', 'done', 'done']);
+  assert.deepEqual(states([...editing, ev({ kind: 'end', status: 'stopped', text: '' }, 6)]), ['done', 'done', 'stopped', 'todo', 'todo']);
+  // A follow-up starts again from Claude's work.
+  const again = [...checking, ev({ kind: 'end', status: 'review', text: '' }, 6), ev({ kind: 'phase', text: 'Claude is working on your follow-up' }, 7)];
+  assert.deepEqual(states(again), ['done', 'current', 'todo', 'todo', 'todo']);
+
+  assert.equal(statusLine(working, null, true).waiting, true);
+  assert.match(statusLine(working, null, true).text, /^Paused/);
+});
+
+test('M17-M: when something goes wrong the report says what happened and what to do', () => {
+  const files = [{ path: 'a.ts', status: 'modified' as const, added: 1, removed: 1 }];
+  assert.equal(makeReport(build(), [], files).trouble, null);
+  const failing = makeReport(build(), [run('test', 'verify', 'failed', 1), run('lint', 'verify', 'passed', 2)], files).trouble!;
+  assert.match(failing.what, /The test check failed/);
+  assert.match(failing.ask!, /Fix the failing test check/);
+  const stopped = makeReport(build({ agent: { ...build().agent!, status: 'turn_limit', summary: 'Claude stopped after 80 turns without finishing.', resolution: 'Ask for the rest as a smaller task.' } }), [], files).trouble!;
+  assert.equal(stopped.what, 'Claude stopped after 80 turns without finishing.');
+  assert.equal(stopped.next, 'Ask for the rest as a smaller task.');
+  assert.ok(stopped.ask);
+  const blocked = makeReport(build({ agent: { ...build().agent!, status: 'blocked', summary: 'Over budget.', resolution: 'Raise the budget.' } }), [], files).trouble!;
+  assert.equal(blocked.ask, null, 'asking Claude again would not help');
+  assert.equal(makeReport(build({ status: 'completed' }), [run('test', 'verify', 'failed', 1)], files).trouble, null, 'nothing to fix once kept');
 });

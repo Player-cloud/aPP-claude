@@ -275,3 +275,52 @@ test('M15: with real calls on, the task runs on Claude Code\'s engine, asks befo
   await settle(h, b.value.id);
   assert.ok(/asks for this next:\nAlso export a count/.test(prompt));
 });
+
+test('M17-M: pause holds the next step until the person continues, and stop lets it go', async () => {
+  const live = new LiveRuns();
+  live.begin('b1');
+  const hooks = live.hooks('b1');
+  await hooks.gate!(); // not paused: goes straight on
+  assert.ok(live.pause('b1'));
+  assert.equal(live.pause('b1'), false, 'already paused');
+  assert.equal(live.get('b1')!.paused, true);
+  let passed = false;
+  const held = hooks.gate!().then(() => (passed = true));
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(passed, false, 'a paused run waits');
+  assert.ok(live.resume('b1'));
+  await held;
+  assert.equal(live.resume('b1'), false, 'not paused any more');
+
+  live.pause('b1');
+  const second = hooks.gate!();
+  live.stop('b1');
+  await second; // stopping releases a paused run so it can end
+  live.end('b1', 'stopped', 'Stopped.');
+  assert.equal(live.get('b1')!.paused, false);
+  assert.equal(live.pause('b1'), false, 'cannot pause work that is not running');
+  assert.deepEqual(
+    live.get('b1')!.events.filter((e) => e.kind === 'pause').map((e) => (e as { paused: boolean }).paused),
+    [true, false, true],
+  );
+});
+
+test('M17-M: every tool call on the engine passes the pause gate first', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const wt = repo(join(home, 'wt'));
+  let gated = 0;
+  const rec = recorder();
+  rec.hooks.gate = async () => {
+    gated++;
+  };
+  const query: QueryFn = async function* ({ options }) {
+    const pre = (options.hooks as { PreToolUse: { hooks: ((i: unknown, id: string, o: { signal: AbortSignal }) => Promise<unknown>)[] }[] }).PreToolUse;
+    assert.equal(pre.length, 1);
+    assert.deepEqual(await pre[0]!.hooks[0]!({}, 'tool_1', { signal: new AbortController().signal }), { continue: true });
+    yield { type: 'result', subtype: 'success', result: 'Done.', total_cost_usd: 0.01 };
+  };
+  const out = await runClaudeCode(query, { title: 'x', instructions: 'x', worktree: wt, checks: [], apiKey: 'k', maxCostUsd: 1, configDir: home, hooks: rec.hooks });
+  assert.equal(out.status, 'done');
+  assert.equal(gated, 1);
+});
