@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempHome } from './helpers.ts';
 import { decide, engineEnv, insideWorktree, runClaudeCode, type QueryFn } from '../src/core/build/claudeCode.ts';
@@ -456,4 +456,48 @@ test('M18-6: pages are captured from the task and from a copy of the code before
   // The copy of the code before the change is gone, and the person's checkout was never touched.
   assert.equal(execFileSync('git', ['worktree', 'list'], { cwd: repoPath, encoding: 'utf8' }).includes('-base'), false);
   assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: repoPath, encoding: 'utf8' }).trim(), '');
+});
+
+test('M18-6: a dev-server project gets "before" pictures by borrowing the task\'s installed packages, which stay untouched', async (t) => {
+  const { home, cleanup } = tempHome();
+  const capturePage = async (url: string, size: { width: number; height: number }) => {
+    const html = await (await fetch(url)).text();
+    return `data:image/png;base64,${Buffer.from(`${size.width}:${html}`).toString('base64')}`;
+  };
+  const s = new AppService(home, '0.0.0-test', { capturePage, confirmPreview: async () => true });
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
+  const h = s.handlers;
+  const repoPath = repo(join(home, 'app'));
+  // The server needs a package that only an install provides; it is never committed.
+  const server = (v: string) => `const g = require('greeting');\nrequire('node:http').createServer((q, r) => r.end('<h1>' + g + ' ${v}</h1>')).listen(Number(process.env.PORT), '127.0.0.1');\n`;
+  writeFileSync(join(repoPath, 'package.json'), JSON.stringify({ name: 'app', scripts: { dev: 'node server.js' } }));
+  writeFileSync(join(repoPath, 'server.js'), server('v1'));
+  writeFileSync(join(repoPath, '.gitignore'), 'node_modules\n');
+  execFileSync('git', ['add', '-A'], { cwd: repoPath });
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'server'], { cwd: repoPath });
+  const p = h.createProject({ name: 'App' });
+  assert.ok(p.ok);
+  assert.ok((await h.setProjectRepo({ projectId: p.value.id, path: repoPath })).ok);
+  const b = await h.quickBuild({ projectId: p.value.id, goal: 'Change the greeting page' });
+  assert.ok(b.ok);
+  await settle(h, b.value.id);
+  const wt = (h.getBuild(b.value.id) as { ok: true; value: { build: { worktree: string } } }).value.build.worktree;
+  // Stand in for the task's install and Claude's change.
+  mkdirSync(join(wt, 'node_modules', 'greeting'), { recursive: true });
+  writeFileSync(join(wt, 'node_modules', 'greeting', 'index.js'), "module.exports = 'Hello';\n");
+  writeFileSync(join(wt, 'server.js'), server('v2'));
+
+  const set = await h.capturePages(b.value.id);
+  assert.ok(set.ok, !set.ok ? set.error.message : '');
+  assert.equal(set.value.beforeNote, null, 'the version before the change started');
+  assert.deepEqual(set.value.routes[0]!.shots.desktop, { before: 'home-desktop-before.png', after: 'home-desktop-after.png', changed: true });
+  const before = h.pageShot({ buildId: b.value.id, name: 'home-desktop-before.png' });
+  assert.ok(before.ok && Buffer.from(before.value.split(',')[1]!, 'base64').toString() === '1280:<h1>Hello v1</h1>');
+  // Removing the copy removed only the link: the task's packages are still there.
+  assert.ok(existsSync(join(wt, 'node_modules', 'greeting', 'index.js')));
+  assert.equal(execFileSync('git', ['worktree', 'list'], { cwd: repoPath, encoding: 'utf8' }).includes('-base'), false);
+  await h.stopPreview(b.value.id);
 });
