@@ -6,8 +6,8 @@ import { useAsync } from '../useAsync.ts';
 import { AiUsageCard } from './AiUsageCard.tsx';
 
 const THEMES: { id: Settings['theme']; label: string }[] = [
-  { id: 'dark', label: 'Dark' },
   { id: 'light', label: 'Light' },
+  { id: 'dark', label: 'Dark' },
   { id: 'system', label: 'Match system' },
 ];
 

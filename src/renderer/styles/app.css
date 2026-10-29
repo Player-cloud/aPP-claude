@@ -146,12 +146,10 @@ body {
   background: var(--glass-inset-hover);
   color: var(--text);
 }
-/* Active: glowing glass pill with an indicator bar on the rail's edge (reference 03). */
+/* Active: a soft pill with an indicator bar on the rail's edge (quieted in M16). */
 .rail-item[aria-current="page"] {
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   background: var(--accent-soft);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 30%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  color: var(--text);
+  color: var(--accent);
 }
 .rail-item[aria-current="page"]::before {
   content: "";
@@ -162,7 +160,6 @@ body {
   width: 3px;
   border-radius: var(--radius-pill);
   background: var(--accent);
-  box-shadow: 0 0 10px var(--accent);
 }
 .rail-tip {
   position: absolute;
@@ -209,8 +206,8 @@ body {
 .side-title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: 700;
+  font-size: var(--text-lg);
+  font-weight: 650;
   letter-spacing: -0.02em;
 }
 .icon-btn {
@@ -369,6 +366,23 @@ body {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  background: var(--main-bg);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+/* Inside the work surface the top bar is part of the panel, not a box of its own. */
+.main > .topbar {
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .topbar {
@@ -443,10 +457,10 @@ body {
 .page-title {
   margin: 0 0 var(--space-2);
   font-family: var(--font-display);
-  font-size: clamp(1.75rem, 1.2rem + 1.3vw, 2.375rem);
-  font-weight: 700;
-  line-height: 1.15;
-  letter-spacing: -0.025em;
+  font-size: clamp(1.5rem, 1.2rem + 0.6vw, 1.875rem);
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
 }
 .page-title .accent {
   background: linear-gradient(120deg, var(--accent) 0%, var(--accent-strong) 50%, var(--blue) 120%);

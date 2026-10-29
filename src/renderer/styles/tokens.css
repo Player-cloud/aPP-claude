@@ -1,9 +1,11 @@
 /*
  * Design tokens (FR-DESIGN-004). Every colour, size and duration used by the
- * UI comes from here. Direction (DEC-021): "Iterative Studio" smoked glass on
- * a midnight base, after joshua's design document (v1.0 proposal). It refines
- * DEC-015: violet for selection and primary actions, blue for progress, cyan
- * only for work that is really running, amber for review, coral for risk.
+ * UI comes from here. Direction (DEC-021, quieted by DEC-033 in M16): frosted
+ * glass over a sky, a day sky for the light theme and a night sky for the
+ * dark one, after Zephium. The chrome stays quiet: no glows or gradients,
+ * faint borders, colour from the work itself. Blue-violet for selection and
+ * primary actions, blue for progress, cyan only for work that is really
+ * running, amber for review, coral for risk.
  * Themes: [data-theme="dark"] (default), [data-theme="light"]; "system" is
  * resolved in the renderer from prefers-color-scheme.
  */
@@ -44,8 +46,8 @@
   --panel-width: 320px;
   --topbar-height: 60px;
 
-  --glass-blur: 18px;
-  --glass-saturate: 125%;
+  --glass-blur: 24px;
+  --glass-saturate: 150%;
 
   /* Motion: micro, fast, panel, layout, workflow. Ambient drift is not used. */
   --duration-micro: 120ms;
@@ -60,30 +62,30 @@
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #080a12;
-  --bg-elevated: #0d1120;
-  --rail: #0d1120;
-  --surface: #171d2d;
-  --surface-hover: #29324a;
-  --surface-selected: #2c2a4f;
-  --border: rgba(212, 225, 255, 0.14);
-  --border-strong: rgba(221, 232, 255, 0.25);
+  --bg: #0a1024;
+  --bg-elevated: #111a33;
+  --rail: #111a33;
+  --surface: #16203b;
+  --surface-hover: #22305a;
+  --surface-selected: #25336a;
+  --border: rgba(200, 215, 255, 0.1);
+  --border-strong: rgba(200, 215, 255, 0.2);
 
-  --text: #f4f6fc;
-  --text-muted: #a5aec4;
-  --text-subtle: #8490a9;
+  --text: #f2f5fc;
+  --text-muted: #aab4cc;
+  --text-subtle: #8a95b0;
 
-  --accent: #8b6cff;
-  --accent-strong: #9d82ff;
+  --accent: #7c8cff;
+  --accent-strong: #97a4ff;
   --accent-text: #ffffff;
-  --accent-soft: rgba(139, 108, 255, 0.16);
-  --accent-gradient: linear-gradient(135deg, #7b5cff 0%, #8b6cff 100%);
+  --accent-soft: rgba(124, 140, 255, 0.18);
+  --accent-gradient: #6f7ff5;
   --teal: #53ded8;
   --blue: #5ca8ff;
   --cyan: #53ded8;
   --cyan-soft: rgba(83, 222, 216, 0.12);
 
-  --focus: #b7a6ff;
+  --focus: #aab6ff;
 
   --ok: #56d7a0;
   --ok-soft: rgba(86, 215, 160, 0.14);
@@ -100,58 +102,59 @@
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   --shadow-e3: 0 18px 50px rgba(0, 0, 0, 0.26);
 
-  /* Layer 0, atmosphere: near-black with two low-opacity light fields. */
+  /* Layer 0, atmosphere: a night sky, darkened a little under the work. */
   --backdrop:
-    radial-gradient(900px 560px at 72% -12%, rgba(139, 108, 255, 0.16), transparent 64%),
-    radial-gradient(760px 600px at -4% 108%, rgba(92, 168, 255, 0.1), transparent 62%),
-    linear-gradient(180deg, #0b0e18 0%, #080a12 100%);
+    linear-gradient(180deg, rgba(6, 10, 24, 0.35) 0%, rgba(6, 10, 24, 0.15) 100%),
+    url("sky/sky-night.webp") center / cover no-repeat;
   /* Shell chrome is translucent; dense content stays mostly opaque. */
-  --glass-bg: rgba(22, 28, 45, 0.82);
-  --glass-bg-strong: rgba(25, 31, 49, 0.92);
-  --content-bg: rgba(25, 31, 49, 0.92);
-  --raised-bg: rgba(32, 40, 61, 0.96);
-  --glass-inset: rgba(255, 255, 255, 0.035);
-  --glass-inset-hover: rgba(255, 255, 255, 0.07);
-  --glass-border: rgba(212, 225, 255, 0.12);
-  --glass-border-strong: rgba(221, 232, 255, 0.22);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --glass-shadow: 0 18px 50px rgba(0, 0, 0, 0.26);
-  --glow: 0 6px 22px rgba(139, 108, 255, 0.35);
-  --field-bg: rgba(8, 10, 18, 0.5);
+  --glass-bg: rgba(14, 21, 42, 0.58);
+  --glass-bg-strong: rgba(14, 21, 42, 0.72);
+  --content-bg: rgba(17, 25, 48, 0.8);
+  --raised-bg: rgba(22, 31, 58, 0.88);
+  --glass-inset: rgba(255, 255, 255, 0.04);
+  --glass-inset-hover: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(200, 215, 255, 0.1);
+  --glass-border-strong: rgba(200, 215, 255, 0.18);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+  --glow: none;
+  --field-bg: rgba(6, 10, 24, 0.42);
   --pill-bg: rgba(255, 255, 255, 0.06);
 
   /* The context panel next to the rail. */
-  --side-bg: rgba(17, 22, 38, 0.94);
-  --side-active: rgba(139, 108, 255, 0.18);
-  --tree-line: rgba(212, 225, 255, 0.14);
+  --side-bg: rgba(14, 21, 42, 0.58);
+  /* The work surface: one large frosted panel, nearly opaque so text reads. */
+  --main-bg: rgba(13, 19, 37, 0.86);
+  --side-active: rgba(124, 140, 255, 0.2);
+  --tree-line: rgba(200, 215, 255, 0.14);
 }
 
 [data-theme="light"] {
   color-scheme: light;
-  --bg: #f3f2f8;
+  --bg: #e9f1fb;
   --bg-elevated: #ffffff;
   --rail: #ffffff;
   --surface: #ffffff;
-  --surface-hover: #f2f0fa;
-  --surface-selected: #ece7ff;
-  --border: #e4e2ee;
-  --border-strong: #cfcce0;
+  --surface-hover: #eef3fb;
+  --surface-selected: #e3eafe;
+  --border: rgba(30, 50, 90, 0.09);
+  --border-strong: rgba(30, 50, 90, 0.16);
 
-  --text: #17151f;
-  --text-muted: #565366;
-  --text-subtle: #706c82;
+  --text: #162033;
+  --text-muted: #4c586f;
+  --text-subtle: #677389;
 
-  --accent: #7046e8;
-  --accent-strong: #8b5cf6;
+  --accent: #4255d6;
+  --accent-strong: #5568e8;
   --accent-text: #ffffff;
-  --accent-soft: rgba(112, 70, 232, 0.12);
-  --accent-gradient: linear-gradient(135deg, #6d4ce6 0%, #a855f7 100%);
+  --accent-soft: rgba(66, 85, 214, 0.1);
+  --accent-gradient: #4255d6;
   --teal: #0f8f88;
   --blue: #1d6fc4;
   --cyan: #0f8f88;
   --cyan-soft: rgba(15, 143, 136, 0.1);
 
-  --focus: #7046e8;
+  --focus: #4255d6;
 
   --ok: #13865a;
   --ok-soft: rgba(19, 134, 90, 0.12);
@@ -167,46 +170,33 @@
   --shadow: 0 8px 24px rgba(22, 26, 46, 0.08);
   --shadow-e3: 0 18px 44px rgba(22, 26, 46, 0.12);
 
+  /* A day sky, lightened a little under the work. */
   --backdrop:
-    radial-gradient(900px 600px at 70% -16%, rgba(170, 140, 255, 0.32), transparent 62%),
-    radial-gradient(800px 640px at 0% 110%, rgba(120, 200, 230, 0.26), transparent 62%),
-    linear-gradient(180deg, #f6f5fb 0%, #eeedf6 100%);
-  --glass-bg: rgba(255, 255, 255, 0.62);
-  --glass-bg-strong: rgba(255, 255, 255, 0.78);
-  --content-bg: rgba(255, 255, 255, 0.9);
-  --raised-bg: #ffffff;
-  --glass-inset: rgba(255, 255, 255, 0.6);
-  --glass-inset-hover: rgba(255, 255, 255, 0.9);
-  --glass-border: rgba(255, 255, 255, 0.8);
-  --glass-border-strong: rgba(80, 60, 150, 0.16);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.95);
-  --glass-shadow: 0 18px 44px rgba(60, 40, 130, 0.1);
-  --glow: 0 6px 22px rgba(112, 70, 232, 0.32);
-  --field-bg: rgba(255, 255, 255, 0.75);
-  --pill-bg: rgba(112, 70, 232, 0.07);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.05) 100%),
+    url("sky/sky-day.webp") center / cover no-repeat;
+  --glass-bg: rgba(255, 255, 255, 0.56);
+  --glass-bg-strong: rgba(255, 255, 255, 0.7);
+  --content-bg: rgba(255, 255, 255, 0.82);
+  --raised-bg: rgba(255, 255, 255, 0.92);
+  --glass-inset: rgba(255, 255, 255, 0.45);
+  --glass-inset-hover: rgba(255, 255, 255, 0.75);
+  --glass-border: rgba(255, 255, 255, 0.6);
+  --glass-border-strong: rgba(30, 50, 90, 0.12);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --glass-shadow: 0 10px 30px rgba(30, 60, 120, 0.1);
+  --glow: none;
+  --field-bg: rgba(255, 255, 255, 0.6);
+  --pill-bg: rgba(30, 50, 90, 0.06);
 
-  --side-bg: rgba(22, 16, 40, 0.92);
-  --side-active: rgba(139, 92, 246, 0.9);
-  --tree-line: rgba(255, 255, 255, 0.16);
-}
-
-/* In the light theme the context panel is deep violet glass (reference 06),
-   so its contents use dark-theme text colours. */
-[data-theme="light"] .side {
-  --text: #f3f0ff;
-  --text-muted: #c4bce0;
-  --text-subtle: #9a92bd;
-  --glass-inset: rgba(255, 255, 255, 0.06);
-  --glass-inset-hover: rgba(255, 255, 255, 0.1);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --glass-border-strong: rgba(255, 255, 255, 0.18);
-  --field-bg: rgba(255, 255, 255, 0.07);
-  --pill-bg: rgba(255, 255, 255, 0.1);
-  --focus: #c9b8ff;
+  --side-bg: rgba(255, 255, 255, 0.5);
+  --main-bg: rgba(246, 248, 252, 0.9);
+  --side-active: rgba(66, 85, 214, 0.12);
+  --tree-line: rgba(30, 50, 90, 0.12);
 }
 
 /* Glass off (setting) or the OS asks for less transparency: solid surfaces, no blur. */
 [data-glass="off"] {
+  --main-bg: var(--bg);
   --glass-blur: 0px;
   --glass-saturate: 100%;
   --glass-bg: var(--surface);
@@ -214,7 +204,7 @@
   --content-bg: var(--surface);
 }
 [data-glass="off"][data-theme="light"] {
-  --side-bg: #1a1430;
+  --side-bg: var(--surface);
 }
 [data-glass="off"]:not([data-theme="light"]) {
   --side-bg: var(--rail);

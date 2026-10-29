@@ -119,22 +119,26 @@ test('M2-AC6: theme preference applies immediately and persists', async (t) => {
   let { app, page } = await launch(home);
   try {
     await resize(app, 1280, 800);
-    assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+    // The day sky is the default (M16); the night sky is one click away.
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await shot(page, '04-settings-light-1280');
+    await page.getByRole('radio', { name: 'Dark' }).check();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+    await shot(page, '04-settings-night-1280');
     await page.getByRole('radio', { name: 'Light' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
-    await shot(page, '04-settings-light-1280');
     await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await shot(page, '05-projects-empty-light-1280');
 
     // Frosted glass is on by default and can be switched to solid panels.
     assert.equal(await page.evaluate(() => document.documentElement.dataset.glass), 'on');
     const blur = () => page.locator('.rail').evaluate((el) => getComputedStyle(el).backdropFilter);
-    assert.match(await blur(), /blur\(18px\)/);
+    assert.match(await blur(), /blur\(24px\)/);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('radio', { name: 'Solid panels' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.glass === 'off');
-    assert.doesNotMatch(await blur(), /blur\(18px\)/);
+    assert.doesNotMatch(await blur(), /blur\(24px\)/);
     await shot(page, '07-settings-solid-light-1280');
     await page.getByRole('radio', { name: 'Frosted glass' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.glass === 'on');

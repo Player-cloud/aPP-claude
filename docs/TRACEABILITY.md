@@ -272,3 +272,4 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M16-AC3 | The commands that ran show as a terminal with pass or fail and check times | Verified | `report.test.ts` "makeReport counts…" |
 | M16-AC4 | "Before it ships" lists Claude's own closing list and the review's risks, each with Ask Claude | Verified | `report.test.ts` "splitShipList…", "makeReport headlines…"; `e2e/app.e2e.ts` M15 |
 | M16-AC5 | Keep and Undo are one tap; a change with open risks kept without a note still records what was open | Verified | `report.test.ts` "keepNote…"; `e2e/app.e2e.ts` M15 |
+| M16-AC6 | Both themes sit on a sky (day for Light, night for Dark), the work area is one frosted panel, there are no glows, and Light is the default | Verified | `workspace.test.ts` defaults; `e2e/app.e2e.ts` M2-AC6, screenshots `04-settings-light-1280`, `04-settings-night-1280`, `36-build-review-dark-1280` |
