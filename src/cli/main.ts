@@ -93,6 +93,7 @@ Build work (each feature or bug fix gets its own git worktree and branch; nothin
   build start <buildId> --confirm             Create the worktree and run the checks once (--confirm approves the commands)
   build agent <buildId>                       Let the agent change the worktree (simulated unless real calls are on)
   build verify <buildId>                      Run the checks again and review the diff
+  build review <buildId>                      Claude's independent review of the verified change (simulated unless real calls are on)
   build done <buildId> [--note <why the remaining risks are acceptable>]
   build abandon <buildId> [--note <why>]
   build list <projectId> | build show <buildId> | build diff <buildId>
@@ -1023,9 +1024,10 @@ Not saved. Save it to the Vault inbox with: iap wrapup --save${values.hours ? ` 
         return 0;
       }
       case 'build agent':
-      case 'build verify': {
+      case 'build verify':
+      case 'build review': {
         const id = need(rest[0], 'buildId');
-        const d = sub === 'agent' ? await new Builder(ws, agentModel(ws)).runAgent(id) : await new Builder(ws, new SimulatedModel()).verify(id);
+        const d = sub === 'agent' ? await new Builder(ws, agentModel(ws)).runAgent(id) : sub === 'review' ? await new Builder(ws, agentModel(ws)).review(id) : await new Builder(ws, new SimulatedModel()).verify(id);
         print(d, () => describeBuild(d, out));
         return 0;
       }
@@ -1393,6 +1395,11 @@ function describeBuild({ build: b, checkRuns }: BuildDetail, out: Out): void {
   for (const r of checkRuns) out(`  ${r.phase.padEnd(8)} ${r.checkId.padEnd(12)} ${r.status.padEnd(9)} exit ${r.exitCode ?? '-'}  ${r.command}`);
   if (b.agent) out(`  agent (${b.agent.model}): ${b.agent.status}, ${b.agent.steps.length} tool calls, files written: ${b.agent.filesWritten.join(', ') || 'none'}`);
   if (b.changedFiles) out(`  changed: ${b.changedFiles.map((f) => `${f.path} (+${f.added} -${f.removed})`).join(', ') || 'nothing'}`);
+  for (const h of b.helpers ?? []) {
+    if (h.id === 'scan') continue;
+    out(`  ${h.label.toLowerCase()}: ${h.summary}${h.costUsd ? ` ($${h.costUsd.toFixed(2)})` : ''}`);
+    for (const f of h.findings.filter((x) => x.severity === 'high' || x.severity === 'medium').slice(0, 10)) out(`    ${f.severity} ${f.title}${f.file ? ` ${f.file}${f.line ? `:${f.line}` : ''}` : ''}${f.fix ? `. Fix: ${f.fix}` : ''}`);
+  }
   if (b.risks) for (const r of b.risks) out(`  risk ${r.kind}: ${r.detail}`);
   if (b.risks && !b.risks.length) out('  No risks found by the review.');
   if (b.reportPath) out(`  report: ${b.reportPath}`);

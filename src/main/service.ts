@@ -39,13 +39,14 @@ import { appPaths } from '../core/paths.ts';
 import { runToolScan } from '../core/tools.ts';
 import { allowedTransitions, isRunState } from '../core/workflow.ts';
 import { searchWork } from '../core/search.ts';
+import { simplifyRequest, simplifyTargets } from '../shared/report.ts';
 import { runStats } from '../core/iterate/runs.ts';
 import { moveCorruptStateAside, Workspace, type Build, type Fact, type TodoStatus, type WorkflowRun } from '../core/workspace.ts';
 import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'capturePages' | 'todoToTask' | 'startPreview' | 'stopPreview' | 'abandonBuild' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
+type AsyncMethod = 'capturePages' | 'todoToTask' | 'startPreview' | 'stopPreview' | 'abandonBuild' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'reviewBuild' | 'simplifyBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -738,6 +739,18 @@ export class AppService {
         if (build.status !== 'review' && build.status !== 'in_progress') throw new ValidationError(`This work is ${build.status.replace('_', ' ')}; start a new task instead.`);
         this.agentEngine();
         this.launch(id, (hooks, signal) => this.agentThenVerify(id, hooks, signal, text));
+        return this.workspace().getBuild(id);
+      }),
+    reviewBuild: (buildId) => wrapAsync(() => this.builder(this.agentModel()).review(str(buildId, 'Build id')!)),
+    simplifyBuild: (buildId) =>
+      wrapAsync(async () => {
+        const id = str(buildId, 'Build id')!;
+        const build = this.workspace().getBuild(id);
+        if (build.status !== 'review' || !build.helpers) throw new ValidationError('Verify the change before simplifying it.');
+        const targets = simplifyTargets(build.helpers);
+        if (!targets.length) throw new ValidationError('Nothing to simplify: the review found no repeated, long or deeply nested code.');
+        this.agentEngine();
+        this.launch(id, (hooks, signal) => this.agentThenVerify(id, hooks, signal, simplifyRequest(targets)));
         return this.workspace().getBuild(id);
       }),
     buildLive: (input) =>

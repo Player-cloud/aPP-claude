@@ -142,13 +142,13 @@ test('M13: an approved improvement becomes bounded platform work that a failed e
 
   // A platform release always runs the release checks, is pre-planned, and takes no exceptions.
   const releaser = new Releaser(ws, { checkTimeoutMs: 120_000 });
-  const r = releaser.create(project!.id, { version: '0.21.3', plan: {}, checks: [], buildIds: [draft.id] });
+  const r = releaser.create(project!.id, { version: '0.22.1', plan: {}, checks: [], buildIds: [draft.id] });
   assert.deepEqual(r.checks.map((c) => c.id), RELEASE_CHECKS.map((c) => c.id));
   assert.match(r.plan.rollback, new RegExp(`known-good version ${VERSION.replace(/\./g, '\\.')}`));
   assert.match(r.plan.rollback, /iap recover --from/);
   assert.ok(r.plan.target && r.plan.healthCheck && r.plan.monitoring);
   assert.throws(() => releaser.addException(r.id, 'tests', 'We are sure it is fine.', 'We will watch it closely.'), /takes no exceptions/);
-  assert.throws(() => releaser.create(project!.id, { version: '0.21.4', plan: {}, checks: [{ id: 'audit', command: 'echo fine' }], buildIds: [] }), /mandatory/);
+  assert.throws(() => releaser.create(project!.id, { version: '0.22.2', plan: {}, checks: [{ id: 'audit', command: 'echo fine' }], buildIds: [] }), /mandatory/);
 
   // The ship-check itself needs the network for "npm audit"; its gates are covered in the next test.
   // Here the release is marked prepared directly, to test the backlog rule that depends on it.
@@ -156,14 +156,14 @@ test('M13: an approved improvement becomes bounded platform work that a failed e
   const released = backlog.move(item.id, { to: 'released' });
   assert.equal(released.status, 'released');
   assert.equal(released.measuredOutcome, null, 'platform work is measured after release, not declared at release');
-  assert.deepEqual(backlog.detail(item.id).releases.map((x) => x.version), ['0.21.3']);
+  assert.deepEqual(backlog.detail(item.id).releases.map((x) => x.version), ['0.22.1']);
 
   // Known-good only from the version that is actually running.
-  assert.throws(() => maintenance.markKnownGood(r.id, 'Opened it and the projects load.'), /running 0\.21\.2\. Install 0\.21\.3/);
-  const upgraded = new Maintenance(ws, builder, '0.21.3');
+  assert.throws(() => maintenance.markKnownGood(r.id, 'Opened it and the projects load.'), /running 0\.22\.0\. Install 0\.22\.1/);
+  const upgraded = new Maintenance(ws, builder, '0.22.1');
   assert.throws(() => upgraded.markKnownGood(r.id, 'ok'), /at least 10/);
   const kg = upgraded.markKnownGood(r.id, 'Opened it: Settings says healthy and the projects load.');
-  assert.equal(kg.version, '0.21.3');
+  assert.equal(kg.version, '0.22.1');
   assert.equal(kg.commit, d.build.resultCommit);
   assert.throws(() => upgraded.markKnownGood(r.id, 'Opened it again and it is fine.'), /already recorded/);
 
@@ -192,7 +192,7 @@ test('M13: a detector item is measured from the self-assessment record after rel
   backlog.move(item.id, { to: 'in_progress' });
   backlog.move(item.id, { to: 'verified', result: 'Changed by hand.' });
   assert.throws(() => backlog.move(item.id, { to: 'released' }), /measured outcome/, 'without platform work the M10 rule stays');
-  backlog.move(item.id, { to: 'released', measuredOutcome: 'Released in 0.21.3; measuring with the self-assessment.' });
+  backlog.move(item.id, { to: 'released', measuredOutcome: 'Released in 0.22.1; measuring with the self-assessment.' });
   const releasedAt = ws.getImprovement(item.id).releasedAt!;
 
   const report = (at: string, occurrences: { id: string; at: string; label: string }[]) => ({
@@ -231,7 +231,7 @@ test('M13: platform release gates check approved items and protected changes ins
   const build = (over: Partial<IncludedBuild> = {}): IncludedBuild => ({
     id: 'b1', title: 'IMP-1: Fix sums', kind: 'bugfix', status: 'completed', requirementIds: [], risks: [], note: null, merged: true, branch: 'iap/fix-1',
     verify: [{ checkId: 'unit', command: 'npm test', status: 'passed', exitCode: 0, durationMs: 1, output: '# tests 3', startedAt: '' }],
-    source: { type: 'improvement', id: 'imp_1', ref: 'IMP-1', title: 'Fix sums' }, protectedFiles: [], protectedApproved: true, ...over,
+    source: { type: 'improvement', id: 'imp_1', ref: 'IMP-1', title: 'Fix sums' }, protectedFiles: [], protectedApproved: true, reviews: { ran: ['review', 'security'], serious: [] }, ...over,
   });
   const input = (over: Partial<GateInput> = {}): GateInput => ({
     spec: null, specOutdated: false, builds: [build()], checks: { defined: 1, results: [{ checkId: 'unit', command: 'npm test', status: 'passed', exitCode: 0, durationMs: 1, output: '# tests 3', startedAt: '' }] },

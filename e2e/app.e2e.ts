@@ -1058,7 +1058,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.21.2', { exact: true }).waitFor();
+    await kg.getByText('0.22.0', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.
@@ -1353,7 +1353,16 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     await report.getByRole('region', { name: 'Security' }).getByText('Nothing risky found in the added lines.').waitFor();
     await report.getByRole('region', { name: 'Tests' }).getByText('No checks ran.').waitFor();
     await report.getByRole('region', { name: 'Spec drift' }).getByText(/^Compared with the ask/).waitFor();
-    await report.getByRole('region', { name: 'Claude' }).getByText('4 · Free').waitFor();
+    // The helpers ran when the task was verified, before the stand-in edit above.
+    await report.getByRole('region', { name: 'Code review' }).getByText('Nothing to change in the added code.').waitFor();
+    await report.getByRole('region', { name: 'Claude' }).getByText('5 · Free').waitFor();
+    // M19: a second opinion from Claude is asked for, never automatic; without real calls it says it is simulated.
+    const reviews = report.getByRole('region', { name: 'Reviews' });
+    assert.equal(await reviews.getByRole('button', { name: 'Simplify' }).count(), 0, 'nothing repeated, long or nested to simplify');
+    await reviews.getByRole('button', { name: 'Ask Claude to review' }).click();
+    await report.getByRole('region', { name: 'Claude review' }).getByText(/Simulated model: no AI was called/).waitFor();
+    await reviews.getByRole('button', { name: 'Review again' }).waitFor();
+    await report.getByRole('region', { name: 'Claude' }).getByText('6 · Free').waitFor();
     await report.getByRole('region', { name: 'Your ask' }).getByText('Add a page that lists members').waitFor();
     await report.getByRole('region', { name: 'Claude' }).getByText('Simulated agent').waitFor();
     await report.getByRole('region', { name: 'Waiting for you' }).getByText('Keep or undo this change').waitFor();
