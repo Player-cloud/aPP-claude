@@ -96,7 +96,7 @@ test('M18-4: spec drift compares the ask and acceptance criteria with the change
   );
 });
 
-test('M18-4: the scan runs first, then the other three together; one failing helper does not stop the rest', async () => {
+test('M18-4 + M19: the scan runs first, then the other four together; one failing helper does not stop the rest', async () => {
   const seen: string[][] = [];
   let t = 0;
   const now = () => new Date(Date.UTC(2026, 9, 29, 0, 0, 0, (t += 5)));
@@ -109,13 +109,14 @@ test('M18-4: the scan runs first, then the other three together; one failing hel
     runs.map((h) => [h.id, h.label, h.status, h.costUsd]),
     [
       ['scan', 'Repository scan', 'done', 0],
+      ['review', 'Code review', 'done', 0],
       ['security', 'Security', 'done', 0],
       ['tests', 'Tests', 'done', 0],
       ['drift', 'Spec drift', 'done', 0],
     ],
   );
   assert.deepEqual(seen[0], ['scan']);
-  assert.equal(seen.length, 4);
+  assert.equal(seen.length, 5);
   assert.ok(runs.every((h) => h.durationMs > 0));
   // A check whose output cannot be read makes the tests helper fail, not the run.
   const broken = await runHelpers({ repoFiles: [], files: [], patch: '', checks: [{ checkId: 'x' } as CheckResult], goal: 'x', requirements: [] });

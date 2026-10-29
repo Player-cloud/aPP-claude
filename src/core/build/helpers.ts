@@ -1,8 +1,9 @@
 // Helper agents (M18 part 4, DEC-036). After a task's checks run, a scan of
-// the repository goes first, then three helpers look at the change side by
-// side: security (the added lines), tests (what the checks' own output says
-// ran) and spec drift (the linked requirements and the goal against what
-// changed). They read real files, the real diff and real check output; none
+// the repository goes first, then four helpers look at the change side by
+// side: code review (correctness, test adequacy, maintainability and
+// complexity in the added lines, M19), security (the added lines), tests
+// (what the checks' own output says ran) and spec drift (the linked
+// requirements and the goal against what changed). They read real files, the real diff and real check output; none
 // calls a model, so none costs anything, and a finding never shows a secret.
 // A helper that throws is recorded as failed and the others still finish.
 
@@ -11,15 +12,24 @@ import type { CheckResult } from './checks.ts';
 import type { ChangedFile } from './git.ts';
 import { isTestFile } from './review.ts';
 
-export type HelperId = 'scan' | 'security' | 'tests' | 'drift';
+/** "claude" is the optional independent review by Claude (M19, DEC-037); the others never call a model. */
+export type HelperId = 'scan' | 'review' | 'security' | 'tests' | 'drift' | 'claude';
 export type HelperSeverity = 'high' | 'medium' | 'low' | 'info';
+/** What a review finding is about (FR-QA-003). */
+export type ReviewArea = 'correctness' | 'security' | 'regression' | 'tests' | 'maintainability' | 'complexity';
 
 export interface HelperFinding {
   severity: HelperSeverity;
   title: string;
+  /** The evidence: what was seen. */
   detail: string;
   file?: string;
   line?: number;
+  area?: ReviewArea;
+  /** What could go wrong because of it. */
+  impact?: string;
+  /** How to fix it. */
+  fix?: string;
 }
 
 export interface TestCase {
@@ -57,7 +67,7 @@ export interface HelperInput {
   requirements: { id: string; title: string; acceptanceCriteria: string[] }[];
 }
 
-export const HELPER_LABELS: Record<HelperId, string> = { scan: 'Repository scan', security: 'Security', tests: 'Tests', drift: 'Spec drift' };
+export const HELPER_LABELS: Record<HelperId, string> = { scan: 'Repository scan', review: 'Code review', security: 'Security', tests: 'Tests', drift: 'Spec drift', claude: 'Claude review' };
 export const MAX_TESTS = 400;
 const MAX_FINDINGS = 40;
 
@@ -107,36 +117,36 @@ export function scanRepo(repoFiles: string[], files: ChangedFile[]): Pick<Helper
   };
 }
 
-type Rule = { severity: HelperSeverity; title: string; test: RegExp; detail: string; files?: RegExp };
+type Rule = { severity: HelperSeverity; title: string; test: RegExp; detail: string; impact: string; fix: string };
 const SECURITY_RULES: Rule[] = [
-  { severity: 'high', title: 'Possible secret', test: /sk-ant-[A-Za-z0-9_-]{10,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/, detail: 'This line looks like it holds a key or token. Keep secrets out of the code.' },
-  { severity: 'high', title: 'Hard-coded password or key', test: /\b(password|passwd|secret|api[_-]?key|token)\b\s*[:=]\s*['"`][^'"`\s]{8,}['"`]/i, detail: 'A password or key is written into the code. Read it from the environment instead.' },
-  { severity: 'high', title: 'Certificate checks turned off', test: /rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED|verify\s*=\s*False|InsecureSkipVerify\s*:\s*true/, detail: 'Turning off certificate checks lets anyone in the middle read or change the traffic.' },
-  { severity: 'high', title: 'Runs text as code', test: /\beval\s*\(|\bnew Function\s*\(/, detail: 'eval and new Function run whatever text they get; if any of it comes from outside, so does the code.' },
-  { severity: 'high', title: 'Shell command built from text', test: /\b(exec|execSync)\s*\(\s*(`[^`]*\$\{|['"][^'"]*['"]\s*\+)|shell\s*=\s*True|os\.system\s*\(/, detail: 'A shell command is put together from text; if any of it comes from outside, it can run other commands. Pass arguments as a list instead.' },
-  { severity: 'medium', title: 'SQL built from text', test: /\b(SELECT|INSERT|UPDATE|DELETE)\b[^;\n]*(\$\{|['"]\s*\+\s*\w)/i, detail: 'A query is put together from text, which allows SQL injection. Use parameters.' },
-  { severity: 'medium', title: 'HTML from text', test: /\.innerHTML\s*=|\.outerHTML\s*=|dangerouslySetInnerHTML|document\.write\s*\(/, detail: 'Writing HTML from text can run scripts if the text comes from a person. Set text instead, or clean it first.' },
-  { severity: 'medium', title: 'Guessable random value', test: /Math\.random\(\)[^\n]*(token|secret|password|key|id)|(token|secret|password|key)[^\n]*Math\.random\(\)/i, detail: 'Math.random is predictable. Use crypto.randomUUID or crypto.getRandomValues for anything secret.' },
-  { severity: 'low', title: 'Plain http address', test: /http:\/\/(?!localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|www\.w3\.org)[a-z0-9.-]+\.[a-z]{2,}/i, detail: 'Traffic to this address is not encrypted. Use https.' },
+  { severity: 'high', title: 'Possible secret', test: /sk-ant-[A-Za-z0-9_-]{10,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/, detail: 'This line looks like it holds a key or token.', impact: 'Anyone who can read the code can use the key.', fix: 'Remove it, revoke the key, and read it from the environment or a credential store.' },
+  { severity: 'high', title: 'Hard-coded password or key', test: /\b(password|passwd|secret|api[_-]?key|token)\b\s*[:=]\s*['"`][^'"`\s]{8,}['"`]/i, detail: 'A password or key is written into the code.', impact: 'Anyone who can read the code can use it, and it cannot be changed without a release.', fix: 'Read it from the environment instead.' },
+  { severity: 'high', title: 'Certificate checks turned off', test: /rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED|verify\s*=\s*False|InsecureSkipVerify\s*:\s*true/, detail: 'Certificate checks are switched off for a connection.', impact: 'Anyone in the middle can read or change the traffic.', fix: 'Keep certificate checks on; trust a specific certificate if one is self-signed.' },
+  { severity: 'high', title: 'Runs text as code', test: /\beval\s*\(|\bnew Function\s*\(/, detail: 'eval or new Function runs whatever text it gets.', impact: 'If any of the text comes from outside, so does the code that runs.', fix: 'Parse the data (for example with JSON.parse) instead of running it.' },
+  { severity: 'high', title: 'Shell command built from text', test: /\b(exec|execSync)\s*\(\s*(`[^`]*\$\{|['"][^'"]*['"]\s*\+)|shell\s*=\s*True|os\.system\s*\(/, detail: 'A shell command is put together from text.', impact: 'If any of it comes from outside, it can run other commands.', fix: 'Pass the arguments as a list (execFile, spawn, subprocess.run([...])).' },
+  { severity: 'medium', title: 'SQL built from text', test: /\b(SELECT|INSERT|UPDATE|DELETE)\b[^;\n]*(\$\{|['"]\s*\+\s*\w)/i, detail: 'A query is put together from text.', impact: 'It allows SQL injection: someone can read or change data they should not.', fix: 'Use query parameters.' },
+  { severity: 'medium', title: 'HTML from text', test: /\.innerHTML\s*=|\.outerHTML\s*=|dangerouslySetInnerHTML|document\.write\s*\(/, detail: 'HTML is written from text.', impact: 'It can run scripts if the text comes from a person.', fix: 'Set text instead, or clean the HTML first.' },
+  { severity: 'medium', title: 'Guessable random value', test: /Math\.random\(\)[^\n]*(token|secret|password|key|id)|(token|secret|password|key)[^\n]*Math\.random\(\)/i, detail: 'Math.random makes a value that should be secret.', impact: 'Math.random is predictable, so the value can be guessed.', fix: 'Use crypto.randomUUID or crypto.getRandomValues.' },
+  { severity: 'low', title: 'Plain http address', test: /http:\/\/(?!localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|www\.w3\.org)[a-z0-9.-]+\.[a-z]{2,}/i, detail: 'An address uses http.', impact: 'Traffic to it is not encrypted.', fix: 'Use https.' },
 ];
 
 export function securityReview(files: ChangedFile[], patch: string): Pick<HelperRun, 'summary' | 'findings'> {
   const findings: HelperFinding[] = [];
   for (const f of files) {
     if (/(^|\/)\.env(\.|$)/.test(f.path) && !/\.(example|sample|template)$/.test(f.path) && f.status !== 'deleted')
-      findings.push({ severity: 'high', title: 'Environment file in the change', detail: `${f.path} usually holds secrets and should not be committed.`, file: f.path });
+      findings.push({ severity: 'high', area: 'security', title: 'Environment file in the change', detail: `${f.path} usually holds secrets.`, impact: 'Committed secrets can be read by anyone with the repository.', fix: 'Remove it from git and commit a .env.example with names only.', file: f.path });
   }
   for (const [file, lines] of addedWithLines(patch)) {
     for (const { line, text } of lines) {
       const rule = SECURITY_RULES.find((r) => r.test.test(text));
-      if (rule) findings.push({ severity: rule.severity, title: rule.title, detail: rule.detail, file, line });
+      if (rule) findings.push({ severity: rule.severity, area: 'security', title: rule.title, detail: rule.detail, impact: rule.impact, fix: rule.fix, file, line });
     }
     if (/(^|\/)package\.json$/.test(file)) {
       let inDeps = false;
       for (const { line, text } of lines) {
         if (/"(dependencies|devDependencies)"\s*:/.test(text)) inDeps = true;
         const dep = /^\s*"(@?[a-z0-9][\w./-]*)"\s*:\s*"[~^]?[\d*x]/.exec(text);
-        if (dep && (inDeps || !/"(version|node|npm)"/.test(text))) findings.push({ severity: 'info', title: 'New dependency', detail: `${dep[1]} was added. Check that it is the package you expect and is maintained.`, file, line });
+        if (dep && (inDeps || !/"(version|node|npm)"/.test(text))) findings.push({ severity: 'info', area: 'security', title: 'New dependency', detail: `${dep[1]} was added.`, impact: 'A wrong or abandoned package runs its code in your project.', fix: 'Check that it is the package you expect and that it is maintained.', file, line });
       }
     }
   }
@@ -149,6 +159,83 @@ export function securityReview(files: ChangedFile[], patch: string): Pick<Helper
 }
 
 export const SEVERITY_RANK: Record<HelperSeverity, number> = { high: 0, medium: 1, low: 2, info: 3 };
+
+const SOURCE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|cs|php|swift|c|h|cpp|hpp|vue|svelte)$/i;
+const TYPED = /\.(ts|tsx|mts|cts)$/i;
+/** Files where printing is the point. */
+const SCRIPT = /(^|\/)(scripts?|bin|cli|tools)\//i;
+
+type CodeRule = { severity: HelperSeverity; area: ReviewArea; title: string; test: RegExp; files?: RegExp; skip?: RegExp; detail: string; impact: string; fix: string };
+const CODE_RULES: CodeRule[] = [
+  { severity: 'medium', area: 'correctness', title: 'Error swallowed', test: /\bcatch\s*(\([^)]*\))?\s*\{\s*\}|^\s*except[^:]*:\s*pass\b|\.catch\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)/, detail: 'An error is caught and ignored.', impact: 'A failure looks like success, so a bug goes unnoticed.', fix: 'Handle the error, or record it and pass it on.' },
+  { severity: 'medium', area: 'correctness', title: 'Checker switched off', test: /@ts-ignore|@ts-nocheck|@ts-expect-error|eslint-disable|#\s*type:\s*ignore|#\s*noqa|#\[allow\(|@SuppressWarnings/, detail: 'A type check or lint rule is switched off for this code.', impact: 'The checker can no longer catch a mistake here.', fix: 'Fix what the checker reports, or say in a comment why it is wrong.' },
+  { severity: 'medium', area: 'correctness', title: 'Debugger left in', test: /^\s*debugger\s*;?\s*$|\bbreakpoint\(\)|\bbinding\.pry\b/, detail: 'A debugger stop is left in the code.', impact: 'The program stops or slows down when it reaches this line.', fix: 'Remove it.' },
+  { severity: 'low', area: 'maintainability', title: 'Debug output left in', test: /\bconsole\.(log|debug|dir)\s*\(|^\s*print\s*\(|\bfmt\.Println\s*\(|\bSystem\.out\.println\s*\(/, skip: SCRIPT, detail: 'Debug printing was added.', impact: 'It clutters the output and can show data that should stay private.', fix: 'Remove it, or use the project’s logger.' },
+  { severity: 'low', area: 'maintainability', title: 'Unfinished work', test: /\b(TODO|FIXME|XXX|HACK)\b/, detail: 'A TODO or FIXME was added.', impact: 'Part of the work may be missing.', fix: 'Finish it, or keep it as a to-do outside the code.' },
+  { severity: 'low', area: 'maintainability', title: 'Type check bypassed', test: /\bas any\b|:\s*any\b|<any>/, files: TYPED, detail: '"any" turns off type checking for a value.', impact: 'Type mistakes with this value are no longer caught.', fix: 'Give it a real type, or unknown and check it.' },
+];
+const MAX_PER_RULE = 5;
+const BIG_FILE = 300;
+const BIG_CHANGE = 1_000;
+const DEEP = /^(\s{24,}|\t{6,})\S/;
+const REPEAT = 6;
+
+/**
+ * The code-review helper (M19, FR-QA-003): correctness, test adequacy,
+ * maintainability and complexity in the added lines. Rules only, so a finding
+ * always points at a line; it cannot judge what the code means. Each finding
+ * has its evidence, impact and fix.
+ */
+export function codeReview(files: ChangedFile[], patch: string): Pick<HelperRun, 'summary' | 'findings'> {
+  const findings: HelperFinding[] = [];
+  const added = addedWithLines(patch);
+  let total = 0;
+  const blocks = new Map<string, { file: string; line: number }[]>();
+  for (const [file, lines] of added) {
+    if (!SOURCE.test(file) || isTestFile(file)) continue;
+    total += lines.length;
+    for (const rule of CODE_RULES) {
+      if ((rule.files && !rule.files.test(file)) || rule.skip?.test(file)) continue;
+      const hits = lines.filter((l) => rule.test.test(l.text));
+      for (const h of hits.slice(0, MAX_PER_RULE)) findings.push({ severity: rule.severity, area: rule.area, title: rule.title, detail: rule.detail, impact: rule.impact, fix: rule.fix, file, line: h.line });
+      if (hits.length > MAX_PER_RULE) findings.push({ severity: 'info', area: rule.area, title: rule.title, detail: `${hits.length - MAX_PER_RULE} more line${hits.length - MAX_PER_RULE === 1 ? '' : 's'} like this.`, file });
+    }
+    if (lines.length > BIG_FILE)
+      findings.push({ severity: 'medium', area: 'complexity', title: 'Large change in one file', detail: `${lines.length} lines were added to this file.`, impact: 'A change this size is hard to review and easy to get wrong.', fix: 'Split it into smaller functions or files.', file });
+    const deep = lines.find((l) => DEEP.test(l.text));
+    if (deep) findings.push({ severity: 'low', area: 'complexity', title: 'Deeply nested code', detail: 'Code is nested six or more levels deep.', impact: 'Deep nesting is hard to follow and to test.', fix: 'Return early, or move the inner part into its own function.', file, line: deep.line });
+    // Repeated code: the same run of meaningful lines added twice.
+    const meaningful = lines.filter((l) => l.text.trim().length > 3 && !/^[\s{}()[\];,]*$/.test(l.text));
+    for (let i = 0; i + REPEAT <= meaningful.length; i++) {
+      const key = meaningful.slice(i, i + REPEAT).map((l) => l.text.trim()).join('\n');
+      const at = blocks.get(key) ?? [];
+      at.push({ file, line: meaningful[i]!.line });
+      blocks.set(key, at);
+    }
+  }
+  const reported = new Set<string>();
+  for (const at of blocks.values()) {
+    if (at.length < 2) continue;
+    const first = at[0]!;
+    const second = at.find((a) => a.file !== first.file || a.line >= first.line + REPEAT);
+    if (!second) continue;
+    const key = `${first.file}:${second.file}`;
+    if (reported.has(key)) continue;
+    reported.add(key);
+    findings.push({ severity: 'medium', area: 'maintainability', title: 'Repeated code', detail: `The same ${REPEAT}+ lines appear at ${first.file}:${first.line} and ${second.file}:${second.line}.`, impact: 'A fix made in one copy is easily missed in the other.', fix: 'Move the shared lines into one function.', file: second.file, line: second.line });
+  }
+  if (total > BIG_CHANGE)
+    findings.push({ severity: 'medium', area: 'complexity', title: 'Large change', detail: `${total} lines of code were added.`, impact: 'A change this size is hard to review in one go.', fix: 'Split it into smaller tasks if you can.' });
+  const source = files.filter((f) => SOURCE.test(f.path) && !isTestFile(f.path) && f.status !== 'deleted');
+  if (source.length && !files.some((f) => isTestFile(f.path) && f.status !== 'deleted'))
+    findings.push({ severity: 'medium', area: 'tests', title: 'No test for the change', detail: `${source.length} source file${source.length === 1 ? '' : 's'} changed and no test did.`, impact: 'Nothing proves the change works or keeps working.', fix: 'Add a test that fails without the change.' });
+  findings.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+  const serious = findings.filter((f) => f.severity === 'high' || f.severity === 'medium').length;
+  return {
+    summary: findings.length === 0 ? 'Nothing to change in the added code.' : serious ? `${serious} finding${serious === 1 ? '' : 's'} to look at.` : `${findings.length} note${findings.length === 1 ? '' : 's'}, nothing serious.`,
+    findings: findings.slice(0, MAX_FINDINGS),
+  };
+}
 
 // Test names as the common runners print them.
 const TAP = /^\s*(not ok|ok)\s+\d+\s+-?\s*(.+?)(\s+#\s*(SKIP|TODO)\b.*)?$/i;
@@ -187,7 +274,7 @@ export function readTests(checks: CheckResult[]): Pick<HelperRun, 'summary' | 'f
     }
   }
   const findings: HelperFinding[] = [];
-  for (const t of tests.filter((t) => t.status === 'failed').slice(0, MAX_FINDINGS)) findings.push({ severity: 'high', title: 'Test fails', detail: `${t.name} (check "${t.checkId}")` });
+  for (const t of tests.filter((t) => t.status === 'failed').slice(0, MAX_FINDINGS)) findings.push({ severity: 'high', area: 'tests', title: 'Test fails', detail: `${t.name} (check "${t.checkId}")` });
   if (totals.failed > 0 && !tests.some((t) => t.status === 'failed')) findings.push({ severity: 'high', title: 'Tests fail', detail: `${totals.failed} test${totals.failed === 1 ? '' : 's'} failed; the output does not name them.` });
   if (totals.skipped > 0) findings.push({ severity: 'low', title: 'Skipped tests', detail: `${totals.skipped} test${totals.skipped === 1 ? ' was' : 's were'} skipped.` });
   const all = totals.ok + totals.failed + totals.skipped;
@@ -234,7 +321,7 @@ export function specDrift(input: Pick<HelperInput, 'files' | 'patch' | 'goal' | 
 }
 
 /**
- * Runs the scan, then security, tests and spec drift together. `onUpdate`
+ * Runs the scan, then code review, security, tests and spec drift together. `onUpdate`
  * gets every helper's state each time one starts or finishes, so the screen
  * can show them working.
  */
@@ -258,9 +345,10 @@ export async function runHelpers(input: HelperInput, onUpdate?: (runs: HelperRun
   };
   await run('scan', () => scanRepo(input.repoFiles, input.files));
   await Promise.all([
+    run('review', () => codeReview(input.files, input.patch)),
     run('security', () => securityReview(input.files, input.patch)),
     run('tests', () => readTests(input.checks)),
     run('drift', () => specDrift(input, readTests(input.checks).tests)),
   ]);
-  return (['scan', 'security', 'tests', 'drift'] as const).map((id) => runs.get(id)!);
+  return (['scan', 'review', 'security', 'tests', 'drift'] as const).map((id) => runs.get(id)!);
 }

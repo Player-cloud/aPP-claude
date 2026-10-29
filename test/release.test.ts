@@ -108,7 +108,7 @@ test('M7-AC1: a release with finished, merged, verified work and a plan passes e
   gitIn(repo, 'merge', '-q', '--no-edit', build.branch!);
   d = await releaser.check(r.id);
   for (const id of ['spec', 'drift', 'builds', 'risks', 'tests', 'secrets', 'plan']) assert.equal(gate(d.release.gates, id), 'passed', id);
-  assert.equal(gate(d.release.gates, 'reviews'), 'skipped');
+  assert.equal(gate(d.release.gates, 'reviews'), 'passed', 'the code-review and security helpers ran when the build was verified');
   // The SHOULD requirement nobody built is recorded but does not block.
   const drift = d.release.gates!.find((g) => g.id === 'drift')!;
   assert.deepEqual(drift.findings?.map((f) => [f.requirementId, f.kind]), [['REQ-002', 'optional_improvement']]);
@@ -246,6 +246,7 @@ test('M7: gate rules over recorded evidence', () => {
     note: null,
     merged: true,
     branch: 'iap/feature-1',
+    reviews: { ran: ['scan', 'review', 'security', 'tests', 'drift'], serious: [] },
     ...over,
   });
   const input = (over: Partial<GateInput> = {}): GateInput => ({
@@ -275,7 +276,14 @@ test('M7: gate rules over recorded evidence', () => {
   const empty = { ...build().verify[0]!, output: 'ℹ tests 0\nℹ pass 0' };
   assert.match(st(input({ checks: { defined: 1, results: [empty] } }), 'tests').summary, /passed but found no tests/);
   assert.equal(st(input({ specOutdated: true }), 'spec').status, 'failed');
-  assert.match(st(input({ reviewTools: ['/security-review'] }), 'reviews').summary, /has not verified them/);
+  // M19: every change must have had the code-review and security helpers; a high finding blocks.
+  assert.match(st(input({ reviewTools: ['/security-review'] }), 'reviews').evidence.join(), /not run by this app: \/security-review/);
+  assert.equal(st(input({ builds: [build({ reviews: undefined })] }), 'reviews').status, 'blocked', 'evidence from before M19 has no reviews');
+  assert.equal(st(input({ builds: [build({ reviews: { ran: ['scan', 'security'], serious: [] } })] }), 'reviews').status, 'blocked');
+  const serious = st(input({ builds: [build({ reviews: { ran: ['review', 'security', 'claude'], serious: ['Claude review: Critical: Data loss in a.ts:3'] } })] }), 'reviews');
+  assert.deepEqual([serious.status, serious.required], ['failed', true]);
+  assert.match(serious.evidence[0]!, /Thing: Claude review: Critical/);
+  assert.match(st(input({ builds: [build({ reviews: { ran: ['review', 'security', 'claude'], serious: [] } })] }), 'reviews').summary, /1 also reviewed by Claude/);
   // An exception for a gate that passed is ignored; only failed or blocked gates carry one.
   const ex = { gateId: 'tests', commit: 'abc', reason: 'r'.repeat(10), mitigation: 'm'.repeat(10), actor: 'me', at: '' };
   assert.equal(st(input({ exceptions: [ex] }), 'tests').exception, undefined);

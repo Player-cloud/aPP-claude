@@ -22,7 +22,7 @@ export type { BuildDetail, BuildInput } from '../core/build/builder.ts';
 export type { Diff, ChangedFile } from '../core/build/git.ts';
 export type { Build, BuildAgentRun, CheckRun, Todo, TodoStatus } from '../core/workspace.ts';
 export type { Risk } from '../core/build/review.ts';
-export type { HelperFinding, HelperId, HelperRun, HelperSeverity, TestCase } from '../core/build/helpers.ts';
+export type { HelperFinding, HelperId, HelperRun, HelperSeverity, ReviewArea, TestCase } from '../core/build/helpers.ts';
 export type { Check } from '../core/build/checks.ts';
 export type { LiveEvent, LiveState } from '../core/build/live.ts';
 export type { PreviewKind, PreviewPlan, PreviewState } from '../core/build/preview.ts';
@@ -169,6 +169,10 @@ export interface IapApi {
   quickBuild(input: { projectId: string; goal: string }): Promise<Result<Build>>;
   /** M15: asks Claude to change the reviewed work further, in the same work folder. */
   followUpBuild(input: { buildId: string; text: string }): Promise<Result<Build>>;
+  /** M19: Claude's independent review of the verified change (costs money with real calls on). */
+  reviewBuild(buildId: string): Promise<Result<BuildDetail>>;
+  /** M19: asks Claude to simplify the change where the review found repeated, long or nested code; the checks run again. */
+  simplifyBuild(buildId: string): Promise<Result<Build>>;
   /** M15: live progress since a sequence number; null when nothing ran since the app started. */
   buildLive(input: { buildId: string; since?: number }): Promise<Result<LiveState | null>>;
   answerBuildQuestion(input: { buildId: string; approvalId: string; allow: boolean }): Promise<Result<null>>;
@@ -363,6 +367,8 @@ export const IAP_METHODS = [
   'buildDiff',
   'quickBuild',
   'followUpBuild',
+  'reviewBuild',
+  'simplifyBuild',
   'buildLive',
   'answerBuildQuestion',
   'stopBuild',
