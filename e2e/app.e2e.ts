@@ -1330,6 +1330,12 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     await report.getByLabel('At a glance').locator('.diff-add', { hasText: '+9' }).waitFor();
     // The step list is folded away under the report.
     await report.getByText(/How Claude did it · \d+ steps?/).waitFor();
+    // The task is a canvas (M18): the ask and Claude beside the steps, the evidence and the result.
+    assert.deepEqual(await report.locator('.col-head').evaluateAll((els) => els.map((e) => e.firstChild?.textContent?.trim())), ['Thread', 'Steps', 'Evidence']);
+    await report.getByRole('region', { name: 'Your ask' }).getByText('Add a page that lists members').waitFor();
+    await report.getByRole('region', { name: 'Claude' }).getByText('Simulated agent').waitFor();
+    await report.getByRole('region', { name: 'Waiting for you' }).getByText('Keep or undo this change').waitFor();
+    assert.equal(await work.getByRole('list', { name: 'Stages' }).locator('li[data-state="done"]').count(), 5);
     assert.equal(await work.getByText('Ready for your review.').isVisible(), false);
     // Live preview (M16 H): a plain index.html is served by the app, so no command needs approving.
     const preview = report.getByRole('region', { name: 'Preview' });
@@ -1341,6 +1347,9 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     await shot(page, '40-build-preview-dark-1280');
     await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
     await shot(page, '36-build-review-dark-1280');
+    await page.evaluate(() => (document.documentElement.dataset.theme = 'light'));
+    await shot(page, '56-task-canvas-light-1280');
+    await page.evaluate(() => (document.documentElement.dataset.theme = 'dark'));
     // The report is the densest screen: its text must read on the sky too (M17 N).
     for (const theme of ['light', 'dark']) {
       await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);

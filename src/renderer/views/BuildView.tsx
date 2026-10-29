@@ -6,7 +6,7 @@
 // is left before it ships, and Keep or Undo in one tap.
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { AgentStatus, Build, BuildDetail, ChangedFile, Diff, LiveEvent, LiveState, PreviewState, Project, RecentBuild, Todo } from '../../shared/api.ts';
-import { describeStep, formatDuration, groupFiles, keepNote, makeReport, progressStages, statusLine, type ReportCommand, type ReportTone } from '../../shared/report.ts';
+import { describeStep, formatDuration, groupFiles, keepNote, makeReport, progressStages, STAGES, statusLine, type ReportCommand, type ReportTone } from '../../shared/report.ts';
 import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
@@ -271,10 +271,18 @@ function StepLine({ step }: { step: { tool: string; target: string; ok: boolean 
 }
 
 /** Where the work is, as named stages (M17 M). */
-function StageBar({ events }: { events: LiveEvent[] }) {
+/** Stages for the strip above the canvas: live while the work runs, from the task's state once it is over. */
+function stagesFor(b: Build, events: LiveEvent[], running: boolean): ReturnType<typeof progressStages> | null {
+  if (running || events.some((e) => e.kind === 'end')) return progressStages(events);
+  if (b.status === 'abandoned' || b.status === 'draft') return null;
+  if (b.status === 'review' || b.status === 'completed') return STAGES.map((st) => ({ ...st, state: 'done' as const }));
+  return STAGES.map((st, i) => ({ ...st, state: i < 1 ? ('done' as const) : i === 1 ? ('stopped' as const) : ('todo' as const) }));
+}
+
+function StageBar({ stages }: { stages: ReturnType<typeof progressStages> }) {
   return (
     <ol className="progress-stages" aria-label="Stages">
-      {progressStages(events).map((st) => (
+      {stages.map((st) => (
         <li key={st.id} data-state={st.state} aria-current={st.state === 'current' ? 'step' : undefined}>
           <span className="progress-dot" aria-hidden="true">
             {st.state === 'done' ? '✓' : st.state === 'stopped' ? '!' : ''}
@@ -720,6 +728,7 @@ export function WorkView({
   const [noteOpen, setNoteOpen] = useState(false);
   const [followUp, setFollowUp] = useState('');
   const [todos, setTodos] = useState<Todo[] | null>(null);
+  const [agent, setAgent] = useState<AgentStatus | null>(null);
   const followRef = useRef<HTMLInputElement>(null);
   const changed = useRef(onChanged);
   changed.current = onChanged;
@@ -730,6 +739,7 @@ export function WorkView({
       setDetail(d);
       setDiff(d.build.worktree && d.build.status !== 'draft' && d.build.status !== 'abandoned' ? await call(iap().buildDiff(buildId)) : null);
       setTodos((await call(iap().listTodos({ buildId }))).filter((t) => t.status === 'open' || t.status === 'done'));
+      setAgent(await call(iap().agentStatus()).catch(() => null));
       changed.current?.();
     } catch (e) {
       setError((e as Error).message);
@@ -786,6 +796,271 @@ export function WorkView({
   const steps = b?.agent?.steps.length ?? live.events.filter((e) => e.kind === 'step').length;
   const now = running ? statusLine(live.events, live.state?.pending ?? null, paused) : null;
 
+  const stages = b ? stagesFor(b, live.events, running) : null;
+  const cost = live.state && live.state.costUsd > 0 ? live.state.costUsd : (b?.agent?.costUsd ?? 0);
+  const simulated = b?.agent?.model === 'simulated' || (!b?.agent && agent?.mode !== 'claude');
+  const pending = live.state?.pending ?? null;
+
+  // The thread column: what was asked, who is doing it and what it costs, and what waits for the person.
+  const thread = b && (
+    <div className="canvas-col" data-col="thread">
+      <h2 className="col-head">Thread</h2>
+      <section className="kcard ask-card" aria-label="Your ask">
+        <p className="who">
+          <span className="who-face" aria-hidden="true">
+            Y
+          </span>
+          You · {relativeTime(b.createdAt)}
+        </p>
+        <p className="ask-text">{b.goal}</p>
+        {b.worktree && (
+          <p className="ask-meta">
+            <span className="mono">{b.branch ?? 'own branch'}</span> · a separate copy of your code
+          </p>
+        )}
+      </section>
+      <section className="kcard claude-card" aria-label="Claude">
+        <span className="chip chip-agent">
+          <span className="chip-dot" aria-hidden="true" />
+          {simulated ? 'Simulated agent' : 'Claude'}
+        </span>
+        <h3 className="claude-card-title">{running ? (paused ? 'Paused' : 'Working on it') : b.agent ? `${steps} ${steps === 1 ? 'step' : 'steps'} taken` : 'Not started'}</h3>
+        <p className="claude-card-text">{b.agent?.model && b.agent.model !== 'simulated' ? b.agent.model : simulated ? 'No AI is called; the steps show the workflow.' : (agent?.model ?? '')}</p>
+        <dl className="kv-mini">
+          <dt>This task</dt>
+          <dd>{simulated ? 'Free' : `$${cost.toFixed(2)}`}</dd>
+          {agent?.budgetUsd ? (
+            <>
+              <dt>This month</dt>
+              <dd>
+                ${agent.spentUsd.toFixed(2)} of ${agent.budgetUsd.toFixed(2)}
+              </dd>
+            </>
+          ) : null}
+        </dl>
+        {agent?.budgetUsd ? (
+          <div className="meter" role="img" aria-label={`${Math.round((agent.spentUsd / agent.budgetUsd) * 100)}% of this month's budget spent`}>
+            <i style={{ width: `${Math.min(100, (agent.spentUsd / agent.budgetUsd) * 100)}%` }} />
+          </div>
+        ) : null}
+      </section>
+      {pending && (
+        <section className="kcard note-card" aria-label="Waiting for you">
+          <p className="who note-who">Waiting for you</p>
+          <h3 className="note-title">Claude asks to run a command</h3>
+          <p className="mono note-code">{pending.detail ?? pending.tool}</p>
+          <p className="subtle">Answer in the steps beside this.</p>
+        </section>
+      )}
+      {!pending && b.status === 'review' && report && (
+        <section className="kcard note-card" aria-label="Waiting for you">
+          <p className="who note-who">Waiting for you</p>
+          <h3 className="note-title">Keep or undo this change</h3>
+          <p className="subtle">Keep saves it on its own branch; Undo throws it away. You can also ask Claude for changes below.</p>
+        </section>
+      )}
+      {report?.trouble && (
+        <section className="kcard trouble" aria-labelledby={`trouble-${buildId}`}>
+          <h3 className="report-title" id={`trouble-${buildId}`}>
+            What went wrong
+          </h3>
+          <p>{report.trouble.what}</p>
+          <h3 className="report-title">What you can do</h3>
+          <p>{report.trouble.next}</p>
+          {report.trouble.ask && (
+            <div className="btn-row">
+              <button type="button" className="btn btn-sm" onClick={() => ask(report.trouble!.ask!)}>
+                Ask Claude to fix it
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+      {b.status === 'completed' && (
+        <section className="kcard report-done">
+          <h3 className="report-title">Kept</h3>
+          <p>
+            Saved on branch <span className="mono">{b.branch}</span>
+            {b.resultCommit ? (
+              <>
+                {' '}
+                as commit <span className="mono">{b.resultCommit.slice(0, 7)}</span>
+              </>
+            ) : null}
+            . Merge it into your main branch when you are ready; nothing was merged or pushed for you.
+          </p>
+        </section>
+      )}
+    </div>
+  );
+
+  // The steps column: how the work went, step by step, and the commands that ran.
+  const stepsCol = b && (
+    <div className="canvas-col" data-col="steps">
+      <h2 className="col-head">
+        Steps <span className="col-count">{steps}</span>
+      </h2>
+      {report ? (
+        <section className="kcard">
+          <details className="report-steps">
+            <summary>
+              How Claude did it · {steps} {steps === 1 ? 'step' : 'steps'}
+            </summary>
+            {timeline}
+          </details>
+        </section>
+      ) : (
+        <section className="kcard work-main" aria-label="Progress">
+          {timeline}
+        </section>
+      )}
+      {report && (
+        <section className="kcard" aria-labelledby={`cmds-${buildId}`}>
+          <h3 className="kcard-title" id={`cmds-${buildId}`}>
+            Commands
+          </h3>
+          <Terminal commands={report.commands} />
+        </section>
+      )}
+      {report && (
+        <details className="kcard report-steps">
+          <summary>Details</summary>
+          <dl className="kv-list">
+            <dt>Kind</dt>
+            <dd>{b.kind === 'bugfix' ? 'Bug fix' : b.kind === 'ui_polish' ? 'UI polish' : 'Feature'}</dd>
+            {b.branch && (
+              <>
+                <dt>Branch</dt>
+                <dd className="mono">{b.branch}</dd>
+              </>
+            )}
+            {b.worktree && (
+              <>
+                <dt>Work folder</dt>
+                <dd className="mono">{b.worktree}</dd>
+              </>
+            )}
+            {b.agent && (
+              <>
+                <dt>Model</dt>
+                <dd>{b.agent.model}</dd>
+              </>
+            )}
+            {b.note && (
+              <>
+                <dt>Note</dt>
+                <dd>{b.note}</dd>
+              </>
+            )}
+          </dl>
+        </details>
+      )}
+    </div>
+  );
+
+  // The evidence column: the page itself.
+  const evidence = b && b.worktree && b.status !== 'abandoned' && (
+    <div className="canvas-col" data-col="evidence">
+      <h2 className="col-head">Evidence</h2>
+      <section className="kcard report-section" aria-labelledby={`preview-${buildId}`}>
+        <h3 className="kcard-title" id={`preview-${buildId}`}>
+          Preview
+        </h3>
+        <PreviewPane buildId={buildId} live={running} />
+      </section>
+    </div>
+  );
+
+  // The result column: the answer first, then what changed and what is left.
+  const result = b && (
+    <div className="canvas-col" data-col="result">
+      {report ? (
+        <>
+          <header className="report-head">
+            <span className="chip chip-agent">
+              <span className="chip-dot" aria-hidden="true" />
+              Result
+            </span>
+            <h2 className="report-headline" data-tone={report.tone}>
+              {report.headline}
+            </h2>
+            {report.summary && <p className="report-summary">{report.summary}</p>}
+          </header>
+          <dl className="stat-row" aria-label="At a glance">
+            <div data-tone={report.checks.total === 0 ? 'neutral' : STAT_TONE[report.checks.passed === report.checks.total ? 'ok' : 'danger']}>
+              <dt>Checks passed</dt>
+              <dd>{report.checks.total > 0 ? `${report.checks.passed}/${report.checks.total}` : b.checks.length ? "Didn't run" : 'None set up'}</dd>
+            </div>
+            <div>
+              <dt>Files changed</dt>
+              <dd>{report.files.length}</dd>
+            </div>
+            <div>
+              <dt>Lines</dt>
+              <dd>
+                <span className="diff-add">+{report.added}</span> <span className={report.removed ? 'diff-del' : 'subtle'}>−{report.removed}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Cost</dt>
+              <dd>{b.agent?.model === 'simulated' ? 'Free' : `$${report.costUsd.toFixed(2)}`}</dd>
+            </div>
+          </dl>
+          <section className="kcard" aria-labelledby={`ships-${buildId}`}>
+            <h3 className="kcard-title" id={`ships-${buildId}`}>
+              Before it ships
+            </h3>
+            {todos && todos.length > 0 ? (
+              <TodoItems todos={todos} label="Before it ships" onChanged={() => void load()} ask={b.status === 'review' ? ask : undefined} onOpenTask={onOpenTask} />
+            ) : report.todos.length ? (
+              <ul className="todo-list" aria-label="Before it ships">
+                {report.todos.map((t, i) => (
+                  <li key={i}>
+                    <span className="todo-dot" aria-hidden="true" />
+                    <span className="todo-text">{t}</span>
+                    {b.status === 'review' && (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => ask(t)} aria-label={`Ask Claude to handle: ${t}`}>
+                        Ask Claude
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="subtle">Nothing left to do.</p>
+            )}
+          </section>
+          <section className="kcard" aria-labelledby={`changes-${buildId}`}>
+            <h3 className="kcard-title" id={`changes-${buildId}`}>
+              What changed
+            </h3>
+            {diff ? <Changes diff={diff} /> : <p className="muted">{b.status === 'abandoned' ? 'This change was undone.' : 'There is no change to show.'}</p>}
+          </section>
+        </>
+      ) : (
+        <header className="report-head">
+          <span className="chip chip-agent">
+            <span className="chip-dot" aria-hidden="true" />
+            So far
+          </span>
+          <h2 className="report-headline" data-tone="neutral">
+            {running ? (paused ? 'Paused before the next step' : 'Claude is working') : b.status === 'draft' ? 'Not started yet' : 'Stopped'}
+          </h2>
+          {now && <p className="report-summary">{now.text}</p>}
+        </header>
+      )}
+    </div>
+  );
+
+  const canvas = (
+    <div className="kiln-canvas" data-evidence={evidence ? 'yes' : 'no'}>
+      {thread}
+      {stepsCol}
+      {evidence}
+      {result}
+    </div>
+  );
+
   return (
     <article className="work-view" aria-label={b?.title ?? 'Task'}>
       <div className="work-head">
@@ -794,7 +1069,6 @@ export function WorkView({
         </button>
         <div className="work-head-text">
           <h1 className="page-title work-title">{b?.title ?? 'Loading…'}</h1>
-          {b && b.goal !== b.title && <p className="subtle">{b.goal}</p>}
           {now && (
             <p className="status-line" role="status" data-waiting={now.waiting}>
               <span className="status-line-dot" aria-hidden="true" />
@@ -825,125 +1099,13 @@ export function WorkView({
       </div>
       {error && <Alert tone="danger">{error}</Alert>}
 
-      {running && <StageBar events={live.events} />}
+      {stages && <StageBar stages={stages} />}
 
       {!report ? (
-        <div className="work-live">
-          <section className="work-main" aria-label="Progress">
-            {timeline}
-          </section>
-          {b && b.worktree && (
-            <section className="report-section" aria-label="Preview">
-              <h3 className="report-title">Preview</h3>
-              <PreviewPane buildId={buildId} live={running} />
-            </section>
-          )}
-        </div>
+        canvas
       ) : (
         <section className="report" aria-label="Report">
-          <header className="report-head">
-            <h2 className="report-headline" data-tone={report.tone}>
-              {report.headline}
-            </h2>
-            {report.summary && <p className="report-summary">{report.summary}</p>}
-          </header>
-
-          {report.trouble && (
-            <section className="trouble" aria-labelledby={`trouble-${buildId}`}>
-              <h3 className="report-title" id={`trouble-${buildId}`}>
-                What went wrong
-              </h3>
-              <p>{report.trouble.what}</p>
-              <h3 className="report-title">What you can do</h3>
-              <p>{report.trouble.next}</p>
-              {report.trouble.ask && (
-                <div className="btn-row">
-                  <button type="button" className="btn btn-sm" onClick={() => ask(report.trouble!.ask!)}>
-                    Ask Claude to fix it
-                  </button>
-                </div>
-              )}
-            </section>
-          )}
-
-          <dl className="stat-row" aria-label="At a glance">
-            <div data-tone={report.checks.total === 0 ? 'neutral' : STAT_TONE[report.checks.passed === report.checks.total ? 'ok' : 'danger']}>
-              <dt>Checks passed</dt>
-              <dd>{report.checks.total > 0 ? `${report.checks.passed}/${report.checks.total}` : b!.checks.length ? "Didn't run" : 'None set up'}</dd>
-            </div>
-            <div>
-              <dt>Files changed</dt>
-              <dd>{report.files.length}</dd>
-            </div>
-            <div>
-              <dt>Lines</dt>
-              <dd>
-                <span className="diff-add">+{report.added}</span> <span className={report.removed ? 'diff-del' : 'subtle'}>−{report.removed}</span>
-              </dd>
-            </div>
-            <div>
-              <dt>Cost</dt>
-              <dd>{b!.agent?.model === 'simulated' ? 'Free' : `$${report.costUsd.toFixed(2)}`}</dd>
-            </div>
-          </dl>
-
-          {b!.worktree && b!.status !== 'abandoned' && (
-            <section className="report-section" aria-labelledby={`preview-${buildId}`}>
-              <h3 className="report-title" id={`preview-${buildId}`}>
-                Preview
-              </h3>
-              <PreviewPane buildId={buildId} live={false} />
-            </section>
-          )}
-
-          <div className="report-grid">
-            <section className="report-section" aria-labelledby={`changes-${buildId}`}>
-              <h3 className="report-title" id={`changes-${buildId}`}>
-                What changed
-              </h3>
-              {diff ? <Changes diff={diff} /> : <p className="muted">{b!.status === 'abandoned' ? 'This change was undone.' : 'There is no change to show.'}</p>}
-            </section>
-            <div className="report-aside">
-              <section className="report-section" aria-labelledby={`cmds-${buildId}`}>
-                <h3 className="report-title" id={`cmds-${buildId}`}>
-                  Commands
-                </h3>
-                <Terminal commands={report.commands} />
-              </section>
-              <section className="report-section" aria-labelledby={`ships-${buildId}`}>
-                <h3 className="report-title" id={`ships-${buildId}`}>
-                  Before it ships
-                </h3>
-                {todos && todos.length > 0 ? (
-                  <TodoItems todos={todos} label="Before it ships" onChanged={() => void load()} ask={b!.status === 'review' ? ask : undefined} onOpenTask={onOpenTask} />
-                ) : report.todos.length ? (
-                  <ul className="todo-list" aria-label="Before it ships">
-                    {report.todos.map((t, i) => (
-                      <li key={i}>
-                        <span className="todo-dot" aria-hidden="true" />
-                        <span className="todo-text">{t}</span>
-                        {b!.status === 'review' && (
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => ask(t)} aria-label={`Ask Claude to handle: ${t}`}>
-                            Ask Claude
-                          </button>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="subtle">Nothing left to do.</p>
-                )}
-              </section>
-            </div>
-          </div>
-
-          <details className="report-steps">
-            <summary>
-              How Claude did it · {steps} {steps === 1 ? 'step' : 'steps'}
-            </summary>
-            {timeline}
-          </details>
-
+          {canvas}
           {b!.status === 'review' && (
             <div className="report-actions" role="group" aria-label="Keep or undo">
               <form
@@ -973,52 +1135,6 @@ export function WorkView({
               {noteOpen && <input className="input keep-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="A note for the record, saved when you keep or undo" aria-label="Note" autoFocus />}
             </div>
           )}
-          {b!.status === 'completed' && (
-            <div className="report-done">
-              <h3 className="report-title">Kept</h3>
-              <p>
-                Saved on branch <span className="mono">{b!.branch}</span>
-                {b!.resultCommit ? (
-                  <>
-                    {' '}
-                    as commit <span className="mono">{b!.resultCommit.slice(0, 7)}</span>
-                  </>
-                ) : null}
-                . Merge it into your main branch when you are ready; nothing was merged or pushed for you.
-              </p>
-            </div>
-          )}
-          <details className="report-steps">
-            <summary>Details</summary>
-            <dl className="kv-list">
-              <dt>Kind</dt>
-              <dd>{b!.kind === 'bugfix' ? 'Bug fix' : b!.kind === 'ui_polish' ? 'UI polish' : 'Feature'}</dd>
-              {b!.branch && (
-                <>
-                  <dt>Branch</dt>
-                  <dd className="mono">{b!.branch}</dd>
-                </>
-              )}
-              {b!.worktree && (
-                <>
-                  <dt>Work folder</dt>
-                  <dd className="mono">{b!.worktree}</dd>
-                </>
-              )}
-              {b!.agent && (
-                <>
-                  <dt>Model</dt>
-                  <dd>{b!.agent.model}</dd>
-                </>
-              )}
-              {b!.note && (
-                <>
-                  <dt>Note</dt>
-                  <dd>{b!.note}</dd>
-                </>
-              )}
-            </dl>
-          </details>
         </section>
       )}
     </article>
