@@ -1624,6 +1624,9 @@ test('M17-L: Ctrl K finds tasks and to-dos by their words, starts a task from wh
     await page.keyboard.press('Enter');
     const birthdays = page.getByRole('article', { name: 'Show member birthdays' });
     await birthdays.waitFor();
+    // Paused, it is still running however slow or fast the machine is.
+    await birthdays.getByRole('button', { name: 'Pause' }).click();
+    await birthdays.getByRole('status').filter({ hasText: /^Paused/ }).waitFor();
 
     // While it runs, the launcher offers to stop it.
     await page.keyboard.press('Control+k');

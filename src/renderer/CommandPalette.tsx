@@ -74,6 +74,17 @@ export function CommandPalette({
     } else if (!open && d.open) d.close();
   }, [open]);
 
+  // Running work changes while the launcher is open, so its list stays fresh.
+  useEffect(() => {
+    if (!open) return;
+    const t = setInterval(() => {
+      call(iap().recentBuilds())
+        .then(setRecent)
+        .catch(() => undefined);
+    }, 2_000);
+    return () => clearInterval(t);
+  }, [open]);
+
   const q = query.trim();
   useEffect(() => {
     if (!open || !q) {
