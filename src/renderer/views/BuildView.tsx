@@ -10,6 +10,7 @@ import { describeStep, formatDuration, groupFiles, keepNote, makeReport, progres
 import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
+import { CanvasFrame } from './Canvas.tsx';
 import { Alert, Badge, relativeTime, type Tone } from '../ui.tsx';
 
 /** What a task's state means to the person, in their words. */
@@ -1053,12 +1054,12 @@ export function WorkView({
   );
 
   const canvas = (
-    <div className="kiln-canvas" data-evidence={evidence ? 'yes' : 'no'}>
+    <CanvasFrame live={running && !paused} evidence={!!evidence} toolbarStart={stages && <StageBar stages={stages} />}>
       {thread}
       {stepsCol}
       {evidence}
       {result}
-    </div>
+    </CanvasFrame>
   );
 
   return (
@@ -1099,7 +1100,6 @@ export function WorkView({
       </div>
       {error && <Alert tone="danger">{error}</Alert>}
 
-      {stages && <StageBar stages={stages} />}
 
       {!report ? (
         canvas

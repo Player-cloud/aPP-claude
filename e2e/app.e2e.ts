@@ -1349,6 +1349,16 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     await shot(page, '36-build-review-dark-1280');
     await page.evaluate(() => (document.documentElement.dataset.theme = 'light'));
     await shot(page, '56-task-canvas-light-1280');
+    // Wires join the columns, and the zoom controls scale and widen the canvas (M18 part 3).
+    assert.ok((await report.locator('svg.wires path').count()) >= 3);
+    const zoom = work.getByRole('group', { name: 'Zoom' });
+    await zoom.getByRole('button', { name: 'Zoom out' }).click();
+    await zoom.getByRole('button', { name: /Zoom 90%/ }).waitFor();
+    await zoom.getByRole('button', { name: 'Show everything side by side' }).click();
+    assert.equal(await report.locator('.kiln-canvas').getAttribute('data-layout'), 'wide');
+    await shot(page, '57-task-canvas-wide-light-1280');
+    await zoom.getByRole('button', { name: /reset to 100%/ }).click();
+    assert.equal(await report.locator('.kiln-canvas').getAttribute('data-layout'), null);
     await page.evaluate(() => (document.documentElement.dataset.theme = 'dark'));
     // The report is the densest screen: its text must read on the sky too (M17 N).
     for (const theme of ['light', 'dark']) {

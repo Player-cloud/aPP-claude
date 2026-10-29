@@ -4445,3 +4445,143 @@ details.outcome-group > summary {
     grid-template-columns: repeat(2, max-content);
   }
 }
+
+/* ---- M18 part 3: wires, zoom and the overview (DEC-036) ----
+   Curved wires run from each column to the cards of the next one, dashed and
+   moving while Claude works. The toolbar zooms the canvas, lays every column
+   side by side ("show everything"), and a small overview scrolls to a spot. */
+.canvas-frame {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.canvas-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.canvas-toolbar > .progress-stages {
+  flex: 1 1 auto;
+  margin: 0;
+}
+.canvas-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.zoom-group {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--card-edge);
+  border-radius: 10px;
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+}
+.zoom-btn {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font: 500 0.8125rem/1 var(--font-mono);
+  cursor: pointer;
+}
+.zoom-btn:hover:not(:disabled),
+.zoom-btn[aria-pressed="true"] {
+  background: var(--canvas-dot);
+  color: var(--text);
+}
+.zoom-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.zoom-level {
+  min-width: 48px;
+}
+.minimap {
+  position: relative;
+  width: 132px;
+  overflow: hidden;
+  border: 1px solid var(--card-edge);
+  border-radius: 8px;
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+  cursor: pointer;
+}
+.minimap i {
+  position: absolute;
+  border-radius: 1.5px;
+  background: var(--text-subtle);
+  opacity: 0.35;
+}
+.minimap b {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border: 1.5px solid var(--accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.kiln-canvas {
+  position: relative;
+  isolation: isolate;
+}
+.kiln-canvas > .canvas-col {
+  position: relative;
+  z-index: 1;
+}
+.wires {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.wires path {
+  fill: none;
+  stroke: var(--text-subtle);
+  stroke-opacity: 0.45;
+  stroke-width: 1.5;
+}
+.wires path.live {
+  stroke: var(--accent);
+  stroke-opacity: 0.8;
+  stroke-dasharray: 5 5;
+  animation: wire-flow 0.9s linear infinite;
+}
+.wires .port {
+  fill: var(--card-bg);
+  stroke: var(--text-subtle);
+  stroke-width: 1.5;
+}
+@keyframes wire-flow {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wires path.live {
+    animation: none;
+  }
+}
+.kiln-canvas[data-layout="wide"] {
+  grid-template-columns: 228px 268px minmax(0, 1fr);
+  grid-template-areas: "thread steps result";
+  grid-template-rows: auto;
+  min-width: 1080px;
+}
+.kiln-canvas[data-layout="wide"][data-evidence="yes"] {
+  grid-template-columns: 228px 268px 300px minmax(0, 1fr);
+  grid-template-areas: "thread steps evidence result";
+  min-width: 1480px;
+}
+.canvas-zoom:has(.kiln-canvas[data-layout="wide"]) {
+  overflow-x: auto;
+}
