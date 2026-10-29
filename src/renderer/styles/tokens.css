@@ -1,11 +1,12 @@
 /*
  * Design tokens (FR-DESIGN-004). Every colour, size and duration used by the
- * UI comes from here. Direction (DEC-021, quieted by DEC-033 in M16): frosted
- * glass over a sky, a day sky for the light theme and a night sky for the
- * dark one, after Zephium. The chrome stays quiet: no glows or gradients,
- * faint borders, colour from the work itself. Blue-violet for selection and
- * primary actions, blue for progress, cyan only for work that is really
- * running, amber for review, coral for risk.
+ * UI comes from here. Direction (DEC-021, quieted by DEC-033 in M16, made
+ * one window by DEC-035): a single frosted window floating over a sky, a day
+ * sky for the light theme and a night sky for the dark one, after Zephium.
+ * The rail and context panel sit flat on the window; the work sits on a
+ * near-solid panel inside it. One blue for selection, progress and actions;
+ * violet only for the agent; ink primary buttons by day, lit blue by night;
+ * cyan only for work that is really running, amber for review, coral for risk.
  * Themes: [data-theme="dark"] (default), [data-theme="light"]; "system" is
  * resolved in the renderer from prefers-color-scheme.
  */
@@ -34,20 +35,23 @@
   --space-6: 32px;
   --space-7: 48px;
 
-  /* Radii: control, card, panel, shell. */
+  /* Radii: control, card, panel, window. */
   --radius-sm: 10px;
-  --radius-md: 14px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-window: 24px;
   --radius-pill: 999px;
 
-  --rail-width: 72px;
-  --side-width: 256px;
+  --rail-width: 68px;
+  --side-width: 248px;
+  /* Sky left visible around the window. */
+  --window-gap: clamp(10px, 2.2vw, 40px);
   --panel-width: 320px;
   --topbar-height: 60px;
 
-  --glass-blur: 24px;
-  --glass-saturate: 150%;
+  --glass-blur: 32px;
+  --glass-saturate: 160%;
 
   /* Motion: micro, fast, panel, layout, workflow. Ambient drift is not used. */
   --duration-micro: 120ms;
@@ -57,6 +61,10 @@
   --duration-layout: 320ms;
   --duration-workflow: 420ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.2, 0.9, 0.25, 1.15);
+
+  /* The agent's mark (the brand mark in the rail): a small lit sphere. */
+  --agent-orb: conic-gradient(from 210deg, #7a5cff, #2e6bff, #62d3ff, #a98bff, #7a5cff);
 }
 
 :root,
@@ -75,15 +83,22 @@
   --text-muted: #aab4cc;
   --text-subtle: #8a95b0;
 
-  --accent: #7c8cff;
+  --accent: #6f98ff;
   /* Accent used as text: lighter on the night sky so it reads at AA (M17 N). */
-  --accent-ink: #a8b2ff;
+  --accent-ink: #9fbaff;
   /* Accent as a fill behind white text (buttons, pressed toggles). */
-  --accent-fill: #5464e6;
-  --accent-strong: #97a4ff;
+  --accent-fill: #3f5fe8;
+  --accent-strong: #93b2ff;
   --accent-text: #ffffff;
-  --accent-soft: rgba(124, 140, 255, 0.18);
-  --accent-gradient: #5464e6;
+  --accent-soft: rgba(111, 152, 255, 0.16);
+  --accent-gradient: #3f5fe8;
+  /* Violet belongs to the agent only. */
+  --agent: #a896ff;
+  --agent-soft: rgba(160, 140, 255, 0.15);
+  /* Primary action: lit blue at night. */
+  --primary-bg: linear-gradient(180deg, #5b7cf5 0%, #3f5fe8 100%);
+  --primary-text: #ffffff;
+  --primary-shadow: 0 8px 24px -8px rgba(80, 120, 255, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.22);
   --teal: #53ded8;
   --blue: #5ca8ff;
   --cyan: #53ded8;
@@ -104,7 +119,9 @@
 
   /* Elevation E1-E3. */
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  --shadow-e3: 0 18px 50px rgba(0, 0, 0, 0.26);
+  --shadow-e3: 0 30px 70px -24px rgba(0, 0, 0, 0.8);
+  --shadow-float: 0 22px 50px -18px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --shadow-window: 0 60px 120px -40px rgba(0, 0, 0, 0.9);
 
   /* Layer 0, atmosphere: a night sky, darkened a little under the work. */
   --backdrop:
@@ -120,16 +137,19 @@
   --glass-border: rgba(200, 215, 255, 0.1);
   --glass-border-strong: rgba(200, 215, 255, 0.18);
   --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+  --glass-shadow: 0 14px 34px -16px rgba(0, 0, 0, 0.7);
   --glow: none;
   --field-bg: rgba(6, 10, 24, 0.42);
   --pill-bg: rgba(255, 255, 255, 0.06);
 
-  /* The context panel next to the rail. */
-  --side-bg: var(--main-bg);
-  /* The work surface: one large frosted panel, nearly opaque so text reads. */
-  --main-bg: rgba(13, 19, 37, 0.86);
-  --side-active: rgba(124, 140, 255, 0.2);
+  /* The window over the sky; the rail and context panel sit on it. */
+  --window-bg: rgba(8, 12, 28, 0.55);
+  --window-edge: rgba(255, 255, 255, 0.09);
+  --side-bg: transparent;
+  /* The work surface inside the window, nearly opaque so text reads. */
+  --main-bg: rgba(11, 16, 33, 0.86);
+  --main-edge: rgba(255, 255, 255, 0.07);
+  --side-active: rgba(255, 255, 255, 0.09);
   --tree-line: rgba(200, 215, 255, 0.14);
 }
 
@@ -148,13 +168,19 @@
   --text-muted: #4c586f;
   --text-subtle: #5b6679;
 
-  --accent: #4255d6;
-  --accent-ink: #3546c4;
-  --accent-fill: #4255d6;
-  --accent-strong: #5568e8;
+  --accent: #2e6bff;
+  --accent-ink: #1f4fd1;
+  --accent-fill: #2459e0;
+  --accent-strong: #1f4fd1;
   --accent-text: #ffffff;
-  --accent-soft: rgba(66, 85, 214, 0.1);
-  --accent-gradient: #4255d6;
+  --accent-soft: rgba(46, 107, 255, 0.1);
+  --accent-gradient: #2459e0;
+  --agent: #5b3fe0;
+  --agent-soft: rgba(122, 92, 255, 0.11);
+  /* Primary action: ink by day, as in Zephium. */
+  --primary-bg: #0f1828;
+  --primary-text: #ffffff;
+  --primary-shadow: 0 6px 16px -6px rgba(13, 22, 38, 0.45);
   --teal: #0f8f88;
   --blue: #195fa8;
   --cyan: #0f8f88;
@@ -174,7 +200,9 @@
   --neutral-soft: rgba(93, 102, 128, 0.1);
 
   --shadow: 0 8px 24px rgba(22, 26, 46, 0.08);
-  --shadow-e3: 0 18px 44px rgba(22, 26, 46, 0.12);
+  --shadow-e3: 0 24px 60px -24px rgba(20, 45, 95, 0.35);
+  --shadow-float: 0 18px 40px -16px rgba(20, 45, 95, 0.3), 0 2px 6px rgba(20, 45, 95, 0.06);
+  --shadow-window: 0 50px 100px -40px rgba(14, 40, 95, 0.55);
 
   /* A day sky, lightened a little under the work. */
   --backdrop:
@@ -189,31 +217,32 @@
   --glass-border: rgba(255, 255, 255, 0.6);
   --glass-border-strong: rgba(30, 50, 90, 0.12);
   --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  --glass-shadow: 0 10px 30px rgba(30, 60, 120, 0.1);
+  --glass-shadow: 0 8px 24px -12px rgba(13, 22, 38, 0.16), 0 1px 1px rgba(13, 22, 38, 0.03);
   --glow: none;
   --field-bg: rgba(255, 255, 255, 0.6);
   --pill-bg: rgba(30, 50, 90, 0.06);
 
-  --side-bg: var(--main-bg);
-  --main-bg: rgba(246, 248, 252, 0.9);
-  --side-active: rgba(66, 85, 214, 0.12);
+  --window-bg: rgba(232, 240, 251, 0.68);
+  --window-edge: rgba(255, 255, 255, 0.7);
+  --side-bg: transparent;
+  --main-bg: rgba(247, 250, 254, 0.9);
+  --main-edge: rgba(255, 255, 255, 0.95);
+  --side-active: rgba(255, 255, 255, 0.85);
   --tree-line: rgba(30, 50, 90, 0.12);
 }
 
 /* Glass off (setting) or the OS asks for less transparency: solid surfaces, no blur. */
 [data-glass="off"] {
   --main-bg: var(--bg);
+  --window-bg: var(--bg-elevated);
   --glass-blur: 0px;
   --glass-saturate: 100%;
   --glass-bg: var(--surface);
   --glass-bg-strong: var(--bg-elevated);
   --content-bg: var(--surface);
 }
-[data-glass="off"][data-theme="light"] {
-  --side-bg: var(--surface);
-}
-[data-glass="off"]:not([data-theme="light"]) {
-  --side-bg: var(--rail);
+[data-glass="off"] {
+  --side-bg: transparent;
 }
 @media (prefers-reduced-transparency: reduce) {
   :root {
