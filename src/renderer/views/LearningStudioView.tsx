@@ -7,6 +7,8 @@ import type { AgentStatus, DesignReference, ImportResult, Project, ReferenceCata
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { Alert, Badge, Empty, formatDate } from '../ui.tsx';
+import type { Look } from '../../shared/look.ts';
+import { Collections, MovesCard, Palette, TasteCard, useLooks } from './StudioOverview.tsx';
 
 export type StudioFilter = 'all' | 'archived' | string;
 
@@ -61,10 +63,13 @@ function Inspector({
   projects,
   catalog,
   agent,
+  look,
   onChanged,
   onClose,
 }: {
   reference: DesignReference;
+  /** Colours and readings from the picture's pixels (M18). */
+  look?: Look;
   projects: Project[];
   catalog: ReferenceCatalog;
   agent: AgentStatus | null;
@@ -140,6 +145,7 @@ function Inspector({
         {reference.fileName} · {sizeLabel(reference.size)}
         {reference.width ? ` · ${reference.width}×${reference.height}` : ''} · added {formatDate(reference.createdAt)}
       </p>
+      <Palette look={look} />
       {archived && <Alert tone="warn">Archived. It is hidden from the library and cannot be suggested on until it is restored.</Alert>}
       {error && <Alert tone="danger">{error}</Alert>}
 
@@ -322,6 +328,7 @@ export function LearningStudioView({ projects, filter, onFilter }: { projects: P
   const current = list?.find((r) => r.id === selected) ?? null;
   const groups = useMemo(() => (list ? groupsOf(list, groupBy, projects) : []), [list, groupBy, projects]);
   const filtered = !!(query.trim() || tag || projectFilter || kind);
+  const looks = useLooks(list);
 
   return (
     <>
@@ -395,6 +402,15 @@ export function LearningStudioView({ projects, filter, onFilter }: { projects: P
             </Alert>
           )}
 
+          {list && list.length > 0 && !filtered && !archived && (
+            <>
+              <div className="studio-top">
+                <TasteCard looks={[...looks.values()]} />
+                <MovesCard list={list} onTag={setTag} />
+              </div>
+              <Collections list={list} onTag={setTag} />
+            </>
+          )}
           {!list && !error && <p className="loading">Loading references…</p>}
           {list && list.length === 0 && (
             <div className="card">
@@ -462,6 +478,7 @@ export function LearningStudioView({ projects, filter, onFilter }: { projects: P
               projects={projects}
               catalog={catalog}
               agent={agent}
+              look={looks.get(current.id)}
               onChanged={() => void load()}
               onClose={() => setSelected(null)}
             />

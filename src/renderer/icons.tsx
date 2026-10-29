@@ -17,6 +17,21 @@ const paths: Record<string, ReactElement> = {
   bookmark: <path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" />,
   close: <path d="M6 6l12 12M18 6L6 18" />,
   plus: <path d="M12 5v14M5 12h14" />,
+  sun: (
+    <>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+    </>
+  ),
+  pages: (
+    <>
+      <rect x="3" y="4" width="13" height="10" rx="1.5" />
+      <rect x="17" y="8" width="4" height="10" rx="1" />
+      <path d="M7 18h6M10 14v4" />
+    </>
+  ),
+  moon: <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />,
+  arrowUp: <path d="M5 12l7-7 7 7M12 19V5" />,
   logo: <path d="M5 5l6 7-6 7M13 5l6 7-6 7" />,
   back: <path d="M15 5l-7 7 7 7" />,
   search: (

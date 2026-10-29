@@ -403,3 +403,57 @@ test('M17-L: the launcher finds tasks, the files they changed, open to-dos and l
   const again = h.searchWork(word);
   assert.ok(again.ok && !again.value.some((x) => x.kind === 'todo' && x.todoId === todo.value[0]!.id));
 });
+
+test('M18-6: pages are captured from the task and from a copy of the code before it, which is removed afterwards', async (t) => {
+  const { home, cleanup } = tempHome();
+  const shots: string[] = [];
+  // Stands in for the desktop app's hidden window: the picture is the page's own HTML, so a change shows as a different picture.
+  const capturePage = async (url: string, size: { width: number; height: number }) => {
+    shots.push(`${new URL(url).pathname} ${size.width}`);
+    const html = await (await fetch(url)).text();
+    return `data:image/png;base64,${Buffer.from(`${size.width}:${html}`).toString('base64')}`;
+  };
+  const s = new AppService(home, '0.0.0-test', { capturePage });
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
+  const h = s.handlers;
+  const repoPath = repo(join(home, 'site'));
+  writeFileSync(join(repoPath, 'index.html'), '<h1>Club</h1>');
+  execFileSync('git', ['add', '-A'], { cwd: repoPath });
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'home'], { cwd: repoPath });
+  const p = h.createProject({ name: 'Club HR' });
+  assert.ok(p.ok);
+  assert.ok((await h.setProjectRepo({ projectId: p.value.id, path: repoPath })).ok);
+  assert.equal((await h.capturePages('nope')).ok, false);
+  const b = await h.quickBuild({ projectId: p.value.id, goal: 'Add a members page' });
+  assert.ok(b.ok);
+  await settle(h, b.value.id);
+  const wt = (h.getBuild(b.value.id) as { ok: true; value: { build: { worktree: string } } }).value.build.worktree;
+  // Stand in for Claude's change: the home page changes and a members page is new.
+  writeFileSync(join(wt, 'index.html'), '<h1>Club</h1><a href="members.html">Members</a>');
+  writeFileSync(join(wt, 'members.html'), '<h1>Members</h1>');
+
+  const set = await h.capturePages(b.value.id);
+  assert.ok(set.ok, !set.ok ? set.error.message : '');
+  assert.equal(set.value.beforeNote, null);
+  assert.deepEqual(
+    set.value.routes.map((r) => [r.route, r.shots.desktop.changed, r.shots.phone.changed, r.shots.phone.before]),
+    [
+      ['/', true, true, 'home-phone-before.png'],
+      ['/members.html', null, null, null],
+    ],
+  );
+  assert.equal(set.value.routes[1]!.shots.desktop.note, 'This page did not exist before the change.');
+  assert.equal(shots.length, 6, 'home before and after at two widths, members after at two widths');
+  // The pictures are kept with the task and read back by name only.
+  const again = h.pageSet(b.value.id);
+  assert.ok(again.ok && again.value?.routes.length === 2);
+  const pic = h.pageShot({ buildId: b.value.id, name: 'home-desktop-after.png' });
+  assert.ok(pic.ok && Buffer.from(pic.value.split(',')[1]!, 'base64').toString().startsWith('1280:<h1>Club</h1><a'));
+  assert.equal(h.pageShot({ buildId: b.value.id, name: '../../secret.png' }).ok, false);
+  // The copy of the code before the change is gone, and the person's checkout was never touched.
+  assert.equal(execFileSync('git', ['worktree', 'list'], { cwd: repoPath, encoding: 'utf8' }).includes('-base'), false);
+  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: repoPath, encoding: 'utf8' }).trim(), '');
+});

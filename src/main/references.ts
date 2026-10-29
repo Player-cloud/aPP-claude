@@ -7,7 +7,9 @@ import { Readable } from 'node:stream';
 /** Serves one reference file, honouring a single byte range so videos can seek. */
 export function serveReference(file: { path: string; mediaType: string }, range: string | null): Response {
   const size = statSync(file.path).size;
-  const headers: Record<string, string> = { 'Content-Type': file.mediaType, 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff' };
+  // The Learning Studio reads a picture's pixels for its colours (M18), which needs the copy to allow CORS.
+  // Only the app's own window can reach this scheme, and it serves only the app's copies by id.
+  const headers: Record<string, string> = { 'Content-Type': file.mediaType, 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': '*' };
   const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null;
   if (m && (m[1] || m[2])) {
     const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));

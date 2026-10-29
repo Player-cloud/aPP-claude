@@ -23,7 +23,7 @@ const home = resolveAppHome();
 // scheme (iap-ref://ref/<id>). Only ids the workspace knows are served, and only
 // from the app's own references folder, so a page cannot read arbitrary files.
 const REF_SCHEME = 'iap-ref';
-protocol.registerSchemesAsPrivileged([{ scheme: REF_SCHEME, privileges: { standard: true, secure: true, stream: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: REF_SCHEME, privileges: { standard: true, secure: true, stream: true, corsEnabled: true } }]);
 
 const smokeTest = process.argv.includes('--smoke-test');
 

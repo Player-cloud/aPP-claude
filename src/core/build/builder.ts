@@ -31,6 +31,7 @@ import { detectChecks, normalizeChecks, ranNoTests, runCheck, type Check, type C
 import { MANDATORY_CHECKS, protectedApproved, protectedChanges, protectedFiles, TEST_CHECKS } from '../maintain/maintain.ts';
 import { addWorktree, commitWorktree, diffWorktree, git, inspectRepo, trackedFiles, type Diff } from './git.ts';
 import { reviewChange } from './review.ts';
+import { runHelpers } from './helpers.ts';
 import { splitShipList } from '../../shared/report.ts';
 import { auditUi, describeAudit } from '../design/audit.ts';
 import { reviewUi } from '../design/review.ts';
@@ -221,13 +222,26 @@ export class Builder {
       const risks = reviewChange({ kind: build.kind, files: diff.files, patch: diff.patch, truncated: diff.truncated, components: build.components, baseline, final });
       if (build.checks.length === 0) risks.push({ kind: 'not_run', detail: 'No check commands were found for this repository, so nothing tested the change. Look at it yourself, or add a test command next time.' });
       if (build.kind === 'ui_polish') risks.push(...reviewUi({ files: diff.files, patch: diff.patch, audit: build.uiAudit, motion: build.motion }));
+      // Helper agents (M18 part 4): a repository scan, then security, tests and spec drift.
+      hooks?.emit({ kind: 'phase', text: 'Helpers are reviewing the change' });
+      const spec = this.ws.approvedPlanDoc(build.projectId, 'spec')?.content as Spec | undefined;
+      const helpers = await runHelpers({
+        repoFiles: (await git(build.worktree!, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']).catch(() => '')).split('\0').filter(Boolean),
+        files: diff.files,
+        patch: diff.patch,
+        checks: final,
+        goal: build.goal,
+        requirements: (spec?.requirements ?? []).filter((r) => build.requirementIds.includes(r.id)),
+      });
+      for (const f of helpers.find((h) => h.id === 'security')?.findings ?? [])
+        if (f.severity === 'high') risks.push({ kind: 'security', detail: `${f.title}${f.file ? ` in ${f.file}${f.line ? `:${f.line}` : ''}` : ''}: ${f.detail}` });
       if (build.source) {
         for (const c of protectedChanges(diff.files.map((f) => f.path))) risks.push({ kind: 'protected_change', detail: `Changes ${c.area.title.toLowerCase()}: ${c.files.join(', ')}. This needs your separate approval.` });
       }
       this.ws.updateBuild(
         buildId,
-        { status: 'review', changedFiles: diff.files, risks },
-        { type: 'build.verified', payload: { files: diff.files.length, risks: risks.map((r) => r.kind), checks: final.map((r) => `${r.checkId}:${r.status}`) } },
+        { status: 'review', changedFiles: diff.files, risks, helpers },
+        { type: 'build.verified', payload: { files: diff.files.length, risks: risks.map((r) => r.kind), helpers: helpers.map((h) => `${h.id}:${h.findings.length}`), checks: final.map((r) => `${r.checkId}:${r.status}`) } },
       );
       // What is left before it ships becomes to-dos the person can tick off (M17 K).
       const ship = splitShipList(this.ws.getBuild(buildId).agent?.summary ?? '').todos;

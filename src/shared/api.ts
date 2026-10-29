@@ -3,6 +3,8 @@
 
 import type { AgentTask, AuditEvent, Fact, Project, Settings, WorkflowRun } from '../core/workspace.ts';
 import type { ToolScan } from '../core/tools.ts';
+import type { PageSet } from '../core/build/pages.ts';
+import type { RunStats } from '../core/iterate/runs.ts';
 import type { PlanningOverview } from '../core/planner.ts';
 import type { PlanChange, PlanDoc } from '../core/planning.ts';
 import type { RunState, Workflow } from '../core/workflow.ts';
@@ -15,13 +17,16 @@ import type { Diff } from '../core/build/git.ts';
 import type { Build, Todo, TodoStatus } from '../core/workspace.ts';
 import type { SearchHit } from '../core/search.ts';
 export type { SearchHit } from '../core/search.ts';
+export type { Kpi, RunMark, RunOutcome, RunStats } from '../core/iterate/runs.ts';
 export type { BuildDetail, BuildInput } from '../core/build/builder.ts';
 export type { Diff, ChangedFile } from '../core/build/git.ts';
 export type { Build, BuildAgentRun, CheckRun, Todo, TodoStatus } from '../core/workspace.ts';
 export type { Risk } from '../core/build/review.ts';
+export type { HelperFinding, HelperId, HelperRun, HelperSeverity, TestCase } from '../core/build/helpers.ts';
 export type { Check } from '../core/build/checks.ts';
 export type { LiveEvent, LiveState } from '../core/build/live.ts';
 export type { PreviewKind, PreviewPlan, PreviewState } from '../core/build/preview.ts';
+export type { PageRoute, PageSet, PageShot, Viewport } from '../core/build/pages.ts';
 import type { PreviewState } from '../core/build/preview.ts';
 import type { LiveState } from '../core/build/live.ts';
 
@@ -176,6 +181,8 @@ export interface IapApi {
   pauseBuild(buildId: string): Promise<Result<null>>;
   resumeBuild(buildId: string): Promise<Result<null>>;
   recentBuilds(): Promise<Result<RecentBuild[]>>;
+  /** M18 Improve: the last runs and this week's numbers against last week's, from the app's own records. */
+  runStats(): Promise<Result<RunStats>>;
   /** M17 L: tasks, changed files, open to-dos and lessons that contain every word typed. */
   searchWork(query: string): Promise<Result<SearchHit[]>>;
   /** Live preview (M16 H): the dev server or static page of a task's worktree. */
@@ -186,6 +193,12 @@ export interface IapApi {
   capturePreview(input: { buildId: string; width?: number; height?: number }): Promise<Result<string>>;
   /** M17 K: the task's latest preview picture as a PNG data URL, or null when none was taken. */
   buildPicture(buildId: string): Promise<Result<string | null>>;
+  /** M18 Pages: pictures of each page at desktop and phone width, before and after the change. Runs the preview (asking first) and a copy of the code before the change. */
+  capturePages(buildId: string): Promise<Result<PageSet>>;
+  /** M18 Pages: the last pictures taken for a task, or null. */
+  pageSet(buildId: string): Promise<Result<PageSet | null>>;
+  /** M18 Pages: one picture as a PNG data URL. */
+  pageShot(input: { buildId: string; name: string }): Promise<Result<string>>;
   openPreview(buildId: string): Promise<Result<null>>;
   stopPreview(buildId: string): Promise<Result<null>>;
   /** Releases (M7): quality gate and ship-check. Preparing a release never deploys it. */
@@ -360,10 +373,14 @@ export const IAP_METHODS = [
   'resumeBuild',
   'recentBuilds',
   'searchWork',
+  'runStats',
   'previewState',
   'startPreview',
   'capturePreview',
   'buildPicture',
+  'capturePages',
+  'pageSet',
+  'pageShot',
   'openPreview',
   'stopPreview',
   'listReleases',

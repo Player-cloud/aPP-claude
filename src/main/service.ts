@@ -3,7 +3,7 @@
 // treated as untrusted and validated here, the security boundary (ARCH §3.2):
 // UI controls are not relied on for authorization or validation.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
@@ -16,7 +16,9 @@ import { DEFAULT_RUN_CAP_USD } from '../core/build/agent.ts';
 import { detectSetup } from '../core/build/checks.ts';
 import { runClaudeCode, type QueryFn } from '../core/build/claudeCode.ts';
 import { LiveRuns, type AgentHooks } from '../core/build/live.ts';
-import { detectPreview, Previews } from '../core/build/preview.ts';
+import { detectPreview, Previews, type PreviewPlan } from '../core/build/preview.ts';
+import { capturePages, findRoutes, type PageSet } from '../core/build/pages.ts';
+import { git } from '../core/build/git.ts';
 import { Releaser, type ReleaseInput } from '../core/release/releaser.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
 import { Assessor } from '../core/assess/assessor.ts';
@@ -37,12 +39,13 @@ import { appPaths } from '../core/paths.ts';
 import { runToolScan } from '../core/tools.ts';
 import { allowedTransitions, isRunState } from '../core/workflow.ts';
 import { searchWork } from '../core/search.ts';
+import { runStats } from '../core/iterate/runs.ts';
 import { moveCorruptStateAside, Workspace, type Build, type Fact, type TodoStatus, type WorkflowRun } from '../core/workspace.ts';
 import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'todoToTask' | 'startPreview' | 'stopPreview' | 'abandonBuild' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
+type AsyncMethod = 'capturePages' | 'todoToTask' | 'startPreview' | 'stopPreview' | 'abandonBuild' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -422,6 +425,25 @@ export class AppService {
     });
   }
 
+  /** Starts a task's preview, asking first in the native dialog when it runs the project's own command. */
+  private async startApprovedPreview(key: string, title: string, plan: PreviewPlan) {
+    if (plan.kind === 'script' && !this.previewApproved.has(key)) {
+      if (!(await this.confirmPreview({ title, command: plan.command!, folder: plan.folder }))) {
+        throw new ValidationError('The preview command was not approved, so nothing ran.');
+      }
+      this.previewApproved.add(key);
+    }
+    return await this.previews.start(key, plan);
+  }
+
+  /** Where a task's page pictures are kept (M18), next to its report. */
+  private pagesDir(buildId: string): string {
+    const build = this.workspace().getBuild(buildId);
+    const dir = join(this.workspace().getProject(build.projectId).workspacePath, 'docs', 'builds', build.id, 'pages');
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
   /** Where a task's latest preview picture is kept, next to its report. */
   private picturePath(buildId: string): string {
     const build = this.workspace().getBuild(buildId);
@@ -756,6 +778,16 @@ export class AppService {
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
           .slice(0, 30);
       }),
+    // The Improve dashboard (M18 part 9): how the work has been going, from the app's own records.
+    runStats: () =>
+      wrap(() => {
+        const ws = this.workspace();
+        const builds = ws
+          .listProjects()
+          .filter((p) => p.kind !== 'maintenance')
+          .flatMap((p) => ws.listBuilds(p.id));
+        return runStats(builds, ws.listEvents({ limit: 10_000 }).filter((e) => e.type === 'build.agent'));
+      }),
     searchWork: (query) =>
       wrap(() => {
         const ws = this.workspace();
@@ -790,13 +822,68 @@ export class AppService {
         if (!build.worktree || build.status === 'abandoned') throw new ValidationError('This task has no work folder to preview.');
         const plan = detectPreview(build.worktree);
         if (!plan) throw new ValidationError('Nothing to preview: the project has no dev, start or preview script and no index.html.');
-        if (plan.kind === 'script' && !this.previewApproved.has(build.id)) {
-          if (!(await this.confirmPreview({ title: build.title, command: plan.command!, folder: build.worktree }))) {
-            throw new ValidationError('The preview command was not approved, so nothing ran.');
+        return await this.startApprovedPreview(build.id, build.title, plan);
+      }),
+    // Pages (M18 part 6): each page at desktop and phone width, before and after the change.
+    capturePages: (buildId) =>
+      wrapAsync(async () => {
+        const build = this.workspace().getBuild(str(buildId, 'Build id')!);
+        if (!build.worktree || build.status === 'abandoned') throw new ValidationError('This task has no work folder to take pictures of.');
+        if (!this.capturePage) throw new ValidationError('Pictures of pages need the desktop app.');
+        const plan = detectPreview(build.worktree);
+        if (!plan) throw new ValidationError('Nothing to take pictures of: the project has no dev, start or preview script and no index.html.');
+        const after = await this.startApprovedPreview(build.id, build.title, plan);
+        if (after.status !== 'running' || !after.url) throw new ValidationError(after.log.trim().split('\n').at(-1) || "The preview didn't start.");
+        const dir = this.pagesDir(build.id);
+        for (const f of readdirSync(dir)) if (f.endsWith('.png') || f === 'pages.json') rmSync(join(dir, f));
+        const baseKey = `${build.id}:base`;
+        const baseDir = join(this.workspace().paths.worktrees, `${build.id}-base`);
+        let before: { url: string | null; note: string | null } = { url: null, note: 'There is no earlier version to compare with.' };
+        try {
+          if (build.repoPath && build.baseCommit) {
+            // A detached copy of the code before the change; the person's checkout is never touched.
+            if (existsSync(baseDir)) await git(build.repoPath, ['worktree', 'remove', '--force', baseDir]).catch(() => undefined);
+            await git(build.repoPath, ['worktree', 'add', '--detach', baseDir, build.baseCommit]);
+            const basePlan = detectPreview(baseDir);
+            if (!basePlan) before = { url: null, note: 'Before this change there was nothing to preview.' };
+            else {
+              const st = await this.startApprovedPreview(baseKey, `${build.title} (before the change)`, basePlan);
+              before = st.status === 'running' && st.url ? { url: st.url, note: null } : { url: null, note: `The version before the change didn't start: ${st.log.trim().split('\n').at(-1) || 'no output'}` };
+            }
           }
-          this.previewApproved.add(build.id);
+          const capture = this.capturePage;
+          const set = await capturePages({
+            buildId: build.id,
+            routes: findRoutes(plan, build.worktree),
+            after: after.url,
+            before,
+            capture: async (url, size) => {
+              const m = /^data:image\/png;base64,(.+)$/.exec(await capture(url, size));
+              if (!m) throw new Error('The picture could not be taken.');
+              return Buffer.from(m[1]!, 'base64');
+            },
+            save: (name, png) => writeFileSync(join(dir, name), png),
+          });
+          writeFileSync(join(dir, 'pages.json'), JSON.stringify(set, null, 2));
+          return set;
+        } finally {
+          await this.previews.stop(baseKey);
+          if (existsSync(baseDir) && build.repoPath) await git(build.repoPath, ['worktree', 'remove', '--force', baseDir]).catch(() => undefined);
         }
-        return await this.previews.start(build.id, plan);
+      }),
+    pageSet: (buildId) =>
+      wrap(() => {
+        const path = join(this.pagesDir(str(buildId, 'Build id')!), 'pages.json');
+        return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as PageSet) : null;
+      }),
+    pageShot: (input) =>
+      wrap(() => {
+        const i = obj(input, 'Picture');
+        const name = str(i.name, 'Picture name')!;
+        if (!/^[a-z0-9-]{1,80}-(desktop|phone)-(before|after)\.png$/.test(name)) throw new ValidationError('Not a page picture.');
+        const path = join(this.pagesDir(str(i.buildId, 'Build id')!), name);
+        if (!existsSync(path)) throw new ValidationError('That picture is not there.');
+        return `data:image/png;base64,${readFileSync(path).toString('base64')}`;
       }),
     capturePreview: (input) =>
       wrapAsync(async () => {

@@ -235,6 +235,7 @@ test('M2-AC7/AC9: keyboard navigation, visible focus, and layouts at target size
     assert.notEqual(focused.width, '0px');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
     await page.keyboard.press('Enter');
     await page.getByRole('navigation', { name: 'Library sections' }).getByRole('button', { name: 'Learning Studio' }).and(page.locator('[aria-current="page"]')).waitFor();
 
@@ -665,10 +666,25 @@ test('M9: collect design references in the Learning Studio, with a suggestion th
 
     await grid.getByRole('button', { name: /pricing cards/ }).click();
     const pricing = page.getByRole('region', { name: 'pricing cards' });
-    await pricing.getByLabel('Tags').fill('pricing, cards');
+    await pricing.getByLabel('Tags').fill('pricing, cards, onboarding');
     await pricing.getByRole('button', { name: 'Save' }).click();
     await pricing.getByText('Saved.').waitFor();
     await pricing.getByRole('button', { name: 'Close the reference' }).click();
+
+    // The overview (M18 part 8) is read from the pictures and their tags: two share #onboarding, which makes a collection.
+    await page.getByRole('heading', { name: 'Your taste, read from 3 pictures' }).waitFor();
+    await page.getByRole('img', { name: /^Dark to Light: \d+% light, from the pictures' lightness$/ }).waitFor();
+    await page.getByRole('region', { name: 'Tags that keep coming back' }).getByRole('button', { name: '#onboarding 2' }).waitFor();
+    await shot(page, '59-studio-overview-dark-1280');
+    await page.getByRole('button', { name: 'Collection #onboarding, 2 references' }).click();
+    await grid.getByRole('button', { name: /settings dark/ }).waitFor({ state: 'detached' });
+    assert.equal(await grid.getByRole('listitem').count(), 2);
+    await page.getByLabel('Tag').selectOption('');
+    // Each picture's main colours are sampled from its pixels: this one is a dark navy gradient.
+    await grid.getByRole('button', { name: /settings dark/ }).click();
+    const swatches = await page.getByRole('region', { name: 'settings dark' }).getByRole('list', { name: 'Main colours' }).getByRole('listitem').allTextContents();
+    assert.ok(swatches.length >= 1 && swatches.every((c) => /^#[0-3][0-9A-F][0-3][0-9A-F][1-4][0-9A-F]$/.test(c)), swatches.join(','));
+    await page.getByRole('region', { name: 'settings dark' }).getByRole('button', { name: 'Close the reference' }).click();
 
     await page.getByRole('group', { name: 'Group by' }).getByRole('button', { name: 'Project' }).click();
     await page.getByRole('heading', { name: /Club HR/ }).waitFor();
@@ -1042,7 +1058,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.20.0', { exact: true }).waitFor();
+    await kg.getByText('0.21.0', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.
@@ -1282,9 +1298,10 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
   const { app, page } = await launch(home);
   try {
     await resize(app, 1280, 800);
-    // Four places in the rail, the rest one level down.
+    // Four places in the rail, the rest one level down (M15); search, project tiles and day/night beside them (M18).
     const rail = page.getByRole('navigation', { name: 'Primary' });
-    assert.deepEqual(await rail.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Projects', 'Library', 'Settings']);
+    assert.deepEqual(await rail.getByRole('group', { name: 'Places' }).getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Pages', 'Projects', 'Library']);
+    assert.deepEqual(await rail.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Pages', 'Projects', 'Library', 'Search', 'Add a project', 'Switch to the night sky', 'Settings']);
 
     // With no project yet, the composer asks for a name and makes one.
     const composer = page.getByRole('form', { name: 'Start a task' });
@@ -1300,6 +1317,16 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     // No checks were found, so nothing tested it; that is listed before it ships.
     await report.getByRole('list', { name: 'Before it ships' }).getByText(/nothing tested the change/).waitFor();
     await report.getByLabel('At a glance').getByText('None set up').waitFor();
+    // The Kiln shell (M18): the project gets a tile that says it waits for you, and the status pill names the task.
+    await rail.getByRole('button', { name: 'Project Club HR, waiting for you' }).waitFor();
+    const pill = page.getByRole('status').filter({ hasText: /^1 ready for you/ });
+    await pill.getByText('“Add a page that lists members”').waitFor();
+    assert.equal(await pill.getByRole('button', { name: 'Open' }).count(), 0, 'no Open for the task already on screen');
+    // Day and night are one tap, and the choice is saved.
+    await rail.getByRole('button', { name: 'Switch to the night sky' }).click();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+    await rail.getByRole('button', { name: 'Switch to the day sky' }).click();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
 
     // Stand in for Claude's edit, so the report has files, lines and a coloured diff to show.
     const worktree = (await report.locator('.kv-list dd.mono').last().textContent())!.trim();
@@ -1319,6 +1346,18 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     await report.getByLabel('At a glance').locator('.diff-add', { hasText: '+9' }).waitFor();
     // The step list is folded away under the report.
     await report.getByText(/How Claude did it · \d+ steps?/).waitFor();
+    // The task is a canvas (M18): the ask and Claude beside the steps, the evidence and the result.
+    assert.deepEqual(await report.locator('.col-head').evaluateAll((els) => els.map((e) => e.firstChild?.textContent?.trim())), ['Thread', 'Helpers', 'Evidence']);
+    // The helpers (M18 parts 4-5) read the real worktree, diff and check output.
+    await report.getByRole('region', { name: 'Repository scan' }).getByText(/^\d+ files?( \(mostly .*\))?, \d+ test files?; this task changed \d+\.$/).waitFor();
+    await report.getByRole('region', { name: 'Security' }).getByText('Nothing risky found in the added lines.').waitFor();
+    await report.getByRole('region', { name: 'Tests' }).getByText('No checks ran.').waitFor();
+    await report.getByRole('region', { name: 'Spec drift' }).getByText(/^Compared with the ask/).waitFor();
+    await report.getByRole('region', { name: 'Claude' }).getByText('4 · Free').waitFor();
+    await report.getByRole('region', { name: 'Your ask' }).getByText('Add a page that lists members').waitFor();
+    await report.getByRole('region', { name: 'Claude' }).getByText('Simulated agent').waitFor();
+    await report.getByRole('region', { name: 'Waiting for you' }).getByText('Keep or undo this change').waitFor();
+    assert.equal(await work.getByRole('list', { name: 'Stages' }).locator('li[data-state="done"]').count(), 5);
     assert.equal(await work.getByText('Ready for your review.').isVisible(), false);
     // Live preview (M16 H): a plain index.html is served by the app, so no command needs approving.
     const preview = report.getByRole('region', { name: 'Preview' });
@@ -1330,6 +1369,19 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     await shot(page, '40-build-preview-dark-1280');
     await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
     await shot(page, '36-build-review-dark-1280');
+    await page.evaluate(() => (document.documentElement.dataset.theme = 'light'));
+    await shot(page, '56-task-canvas-light-1280');
+    // Wires join the columns, and the zoom controls scale and widen the canvas (M18 part 3).
+    assert.ok((await report.locator('svg.wires path').count()) >= 3);
+    const zoom = work.getByRole('group', { name: 'Zoom' });
+    await zoom.getByRole('button', { name: 'Zoom out' }).click();
+    await zoom.getByRole('button', { name: /Zoom 90%/ }).waitFor();
+    await zoom.getByRole('button', { name: 'Show everything side by side' }).click();
+    assert.equal(await report.locator('.kiln-canvas').getAttribute('data-layout'), 'wide');
+    await shot(page, '57-task-canvas-wide-light-1280');
+    await zoom.getByRole('button', { name: /reset to 100%/ }).click();
+    assert.equal(await report.locator('.kiln-canvas').getAttribute('data-layout'), null);
+    await page.evaluate(() => (document.documentElement.dataset.theme = 'dark'));
     // The report is the densest screen: its text must read on the sky too (M17 N).
     for (const theme of ['light', 'dark']) {
       await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
@@ -1340,6 +1392,22 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
       }
     }
     await page.evaluate(() => (document.documentElement.dataset.theme = 'light'));
+
+    // Pages (M18 parts 6-7): every page at desktop and phone width, before and after. This project had no page before the task.
+    await report.getByRole('region', { name: 'Pages' }).getByRole('button', { name: 'See the pages' }).click();
+    const pagesView = page.locator('.pages-view');
+    await pagesView.getByRole('heading', { name: 'Pages', level: 1 }).waitFor();
+    await pagesView.getByText('No pictures yet.', { exact: false }).waitFor();
+    await pagesView.getByRole('button', { name: 'Take pictures' }).click();
+    const routes = pagesView.getByRole('navigation', { name: 'Pages' });
+    await routes.getByRole('button', { name: /^\/\s*New$/ }).waitFor({ timeout: 60_000 });
+    await pagesView.getByText('Before this change there was nothing to preview.').first().waitFor();
+    await pagesView.getByRole('img', { name: '/ after the change, desktop width' }).waitFor();
+    await pagesView.getByRole('group', { name: 'Width' }).getByRole('button', { name: 'Phone' }).click();
+    await pagesView.getByRole('img', { name: '/ after the change, phone width' }).waitFor();
+    assert.equal(await pagesView.getByRole('list', { name: 'All pages' }).getByRole('listitem').count(), 1);
+    await shot(page, '58-pages-light-1280');
+    await pagesView.getByRole('button', { name: 'Open task' }).click();
 
     // Keeping is one tap; the record still says what was open.
     await report.getByRole('button', { name: 'Keep', exact: true }).click();
@@ -1365,6 +1433,17 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     const tabs = page.getByRole('navigation', { name: 'Settings sections' });
     assert.deepEqual(await tabs.getByRole('button').allTextContents(), ['General', 'Activity', 'Tools', 'Updates', 'Improvements', 'Platform']);
     await shot(page, '39-settings-tabs-dark-1280');
+
+    // The Improve dashboard (M18 part 9) counts the task that just ran: one clean run, kept.
+    await tabs.getByRole('button', { name: 'Improvements' }).click();
+    const worked = page.getByRole('region', { name: 'Runs that worked' });
+    await worked.getByText('100%').waitFor();
+    await worked.getByText('No runs the week before').waitFor();
+    await page.getByRole('region', { name: 'Median cost per run' }).getByText('$0.00').waitFor();
+    await page.getByRole('heading', { name: 'Last 1 run' }).waitFor();
+    await page.getByRole('list', { name: 'Runs, oldest first' }).getByText('Add a page that lists members: Clean').waitFor({ state: 'attached' });
+    await page.getByRole('list', { name: 'Improvement loop' }).waitFor();
+    await shot(page, '60-improve-dashboard-dark-1280');
   } finally {
     await app.close();
   }

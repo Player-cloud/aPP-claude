@@ -10,10 +10,23 @@
  * Themes: [data-theme="dark"] (default), [data-theme="light"]; "system" is
  * resolved in the renderer from prefers-color-scheme.
  */
+/* Geist and Geist Mono (SIL Open Font License, fonts/OFL.txt), bundled so the app never fetches a font (M18, DEC-036). */
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
 :root {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "Cascadia Code", Consolas, ui-monospace, monospace;
+  --font-sans: "Geist", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  --font-display: "Geist", "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  --font-mono: "Geist Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
 
   /* Type: badge 11-12, metadata 12-13, body 14-16, card 15-17, section 19-23, page 26-32. */
   --text-2xs: 0.6875rem;
@@ -95,6 +108,15 @@
   /* Violet belongs to the agent only. */
   --agent: #a896ff;
   --agent-soft: rgba(160, 140, 255, 0.15);
+  /* Kiln canvas (M18) */
+  --agent-ink: #c2b6ff;
+  --card-bg: rgba(24, 31, 53, 0.92);
+  --card-edge: rgba(255, 255, 255, 0.07);
+  --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 14px 34px -16px rgba(0, 0, 0, 0.7);
+  --note-bg: rgba(255, 206, 110, 0.09);
+  --note-edge: rgba(255, 206, 110, 0.18);
+  --note-ink: #f1d18e;
+  --canvas-dot: rgba(255, 255, 255, 0.05);
   /* Primary action: lit blue at night. */
   --primary-bg: linear-gradient(180deg, #5b7cf5 0%, #3f5fe8 100%);
   --primary-text: #ffffff;
@@ -177,6 +199,15 @@
   --accent-gradient: #2459e0;
   --agent: #5b3fe0;
   --agent-soft: rgba(122, 92, 255, 0.11);
+  /* Kiln canvas (M18) */
+  --agent-ink: #4a2fc9;
+  --card-bg: #ffffff;
+  --card-edge: rgba(13, 22, 38, 0.07);
+  --card-shadow: 0 1px 1px rgba(13, 22, 38, 0.03), 0 8px 24px -12px rgba(13, 22, 38, 0.16);
+  --note-bg: #fbf3d6;
+  --note-edge: rgba(170, 130, 20, 0.16);
+  --note-ink: #6b5410;
+  --canvas-dot: rgba(13, 22, 38, 0.07);
   /* Primary action: ink by day, as in Zephium. */
   --primary-bg: #0f1828;
   --primary-text: #ffffff;

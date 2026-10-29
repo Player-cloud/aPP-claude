@@ -12,6 +12,7 @@ type Item = { id: string; label: string; hint: string; icon: Parameters<typeof I
 
 const DESTINATIONS: { id: Section; icon: Item['icon'] }[] = [
   { id: 'home', icon: 'home' },
+  { id: 'pages', icon: 'pages' },
   { id: 'projects', icon: 'projects' },
   { id: 'activity', icon: 'activity' },
   { id: 'studio', icon: 'studio' },
