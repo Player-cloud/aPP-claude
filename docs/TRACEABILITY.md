@@ -278,3 +278,13 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M16-AC9 | A task previews its dev server or static page: a script needs approval, gets no keys, runs on a free local port and is reported if it fails; a static page is served read-only inside its folder | Verified | `preview.test.ts` (4 tests) |
 | M16-AC10 | The preview is shown as a picture taken in a sandboxed hidden window, refreshes while Claude works, opens in the browser, and stops with the task or the app | Verified | `e2e/app.e2e.ts` M15 (static preview, PNG picture), screenshot `40-build-preview-dark-1280` |
 | M16-AC11 | Run a real task on joshua's PC and check the report, the sky look and the live preview of Club HR | Verified | 2026-10-29, v0.19.0 on joshua's PC: a real Claude task on Club HR ($0.15) added index.html and tests/index.test.mjs (+138); the report showed files, commands and Before it ships; Start preview served index.html on 127.0.0.1 and the picture of the page showed in the report |
+
+
+## Milestone M17 acceptance criteria (work that stays visible, DEC-034)
+
+| AC | Criterion | Status | Evidence |
+|---|---|---|---|
+| M17-AC1 | Text on Build, Projects, Library, Settings and the report meets WCAG AA contrast against the real sky under it, in Light and Dark | Verified | `e2e/app.e2e.ts` M17-N and M15 (`contrastFailures` in `e2e/helpers.ts`) |
+| M17-AC2 | Tab reaches every control on Build and each shows a visible change when focused; Ctrl K opens the launcher and Escape closes it | Verified | `e2e/app.e2e.ts` M17-N |
+| M17-AC3 | A first-run tour says what each rail item is for, and Got it hides it for good | Verified | `e2e/app.e2e.ts` M17-N (survives a restart), screenshot `50-tour-light-1280`; `workspace.test.ts` (setting `tour`) |
+| M17-AC4 | The Keep/Undo bar is solid, and an empty checks count says whether checks are not set up or did not run | Verified | `e2e/app.e2e.ts` M15 ("None set up") |

@@ -76,10 +76,14 @@
   --text-subtle: #8a95b0;
 
   --accent: #7c8cff;
+  /* Accent used as text: lighter on the night sky so it reads at AA (M17 N). */
+  --accent-ink: #a8b2ff;
+  /* Accent as a fill behind white text (buttons, pressed toggles). */
+  --accent-fill: #5464e6;
   --accent-strong: #97a4ff;
   --accent-text: #ffffff;
   --accent-soft: rgba(124, 140, 255, 0.18);
-  --accent-gradient: #6f7ff5;
+  --accent-gradient: #5464e6;
   --teal: #53ded8;
   --blue: #5ca8ff;
   --cyan: #53ded8;
@@ -122,7 +126,7 @@
   --pill-bg: rgba(255, 255, 255, 0.06);
 
   /* The context panel next to the rail. */
-  --side-bg: rgba(14, 21, 42, 0.58);
+  --side-bg: var(--main-bg);
   /* The work surface: one large frosted panel, nearly opaque so text reads. */
   --main-bg: rgba(13, 19, 37, 0.86);
   --side-active: rgba(124, 140, 255, 0.2);
@@ -142,23 +146,25 @@
 
   --text: #162033;
   --text-muted: #4c586f;
-  --text-subtle: #677389;
+  --text-subtle: #5b6679;
 
   --accent: #4255d6;
+  --accent-ink: #3546c4;
+  --accent-fill: #4255d6;
   --accent-strong: #5568e8;
   --accent-text: #ffffff;
   --accent-soft: rgba(66, 85, 214, 0.1);
   --accent-gradient: #4255d6;
   --teal: #0f8f88;
-  --blue: #1d6fc4;
+  --blue: #195fa8;
   --cyan: #0f8f88;
   --cyan-soft: rgba(15, 143, 136, 0.1);
 
   --focus: #4255d6;
 
-  --ok: #13865a;
+  --ok: #0b6a46;
   --ok-soft: rgba(19, 134, 90, 0.12);
-  --warn: #9a6200;
+  --warn: #865500;
   --warn-soft: rgba(154, 98, 0, 0.12);
   --danger: #c4253f;
   --danger-soft: rgba(196, 37, 63, 0.1);
@@ -188,7 +194,7 @@
   --field-bg: rgba(255, 255, 255, 0.6);
   --pill-bg: rgba(30, 50, 90, 0.06);
 
-  --side-bg: rgba(255, 255, 255, 0.5);
+  --side-bg: var(--main-bg);
   --main-bg: rgba(246, 248, 252, 0.9);
   --side-active: rgba(66, 85, 214, 0.12);
   --tree-line: rgba(30, 50, 90, 0.12);

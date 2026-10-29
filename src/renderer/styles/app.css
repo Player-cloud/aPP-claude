@@ -16,7 +16,7 @@ body {
   background: var(--backdrop);
   background-color: var(--bg);
   background-attachment: fixed;
-  accent-color: var(--accent);
+  accent-color: var(--accent-ink);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--text-md);
@@ -51,7 +51,7 @@ body {
   top: -48px;
   z-index: 10;
   padding: var(--space-2) var(--space-3);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-text);
   border-radius: var(--radius-sm);
 }
@@ -149,7 +149,7 @@ body {
 /* Active: a soft pill with an indicator bar on the rail's edge (quieted in M16). */
 .rail-item[aria-current="page"] {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .rail-item[aria-current="page"]::before {
   content: "";
@@ -235,7 +235,7 @@ body {
   color: var(--text-subtle);
 }
 .side-search:focus-within {
-  border-color: var(--accent);
+  border-color: var(--accent-ink);
 }
 .side-search-input {
   flex: 1;
@@ -532,7 +532,7 @@ body {
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-pill);
   background: var(--pill-bg);
-  color: var(--text-muted);
+  color: var(--text);
   white-space: nowrap;
 }
 .pill {
@@ -723,7 +723,7 @@ body {
   height: 22px;
   border-radius: var(--radius-pill);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-size: var(--text-xs);
 }
 
@@ -848,7 +848,7 @@ body {
 .input:focus-visible,
 .textarea:focus-visible,
 .select:focus-visible {
-  border-color: var(--accent);
+  border-color: var(--accent-ink);
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
 .select option {
@@ -881,7 +881,7 @@ fieldset.field {
   font-size: var(--text-sm);
 }
 .radio-pill:has(input:checked) {
-  border-color: var(--accent);
+  border-color: var(--accent-ink);
   background: var(--accent-soft);
 }
 .radio-pill:has(input:focus-visible) {
@@ -1317,7 +1317,7 @@ fieldset.field {
   border-color: var(--glass-border-strong);
 }
 .ref-card[aria-current="true"] {
-  border-color: var(--accent);
+  border-color: var(--accent-ink);
   box-shadow: 0 0 0 1px var(--accent), var(--shadow);
 }
 .ref-thumb {
@@ -2032,7 +2032,7 @@ button.status-pill {
   cursor: pointer;
 }
 .segmented button[aria-pressed="true"] {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-text);
 }
 
@@ -2293,7 +2293,7 @@ button.status-pill {
   background: var(--accent-soft);
 }
 .phase[data-state="current"] .phase-mark {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-text);
 }
 .phase[data-state="current"] .phase-detail {
@@ -2425,7 +2425,7 @@ button.status-pill {
   gap: var(--space-3);
 }
 .imp-row[aria-current='true'] {
-  border-color: var(--accent);
+  border-color: var(--accent-ink);
 }
 .imp-num {
   color: var(--text-muted);
@@ -2483,7 +2483,7 @@ button.status-pill {
 /* Tool cleanup (M11). The dry run reads like a finding's body; options run least disruptive first. */
 .cleanup-panel {
   margin-bottom: var(--space-4);
-  border-color: var(--accent);
+  border-color: var(--accent-ink);
 }
 .cleanup-options {
   display: grid;
@@ -2715,7 +2715,7 @@ button.status-pill {
   background: var(--raised-bg);
 }
 .task-composer:focus-within {
-  border-color: var(--accent);
+  border-color: var(--accent-ink);
 }
 .task-composer-title {
   font-family: var(--font-display);
@@ -3095,7 +3095,7 @@ button.status-pill {
   cursor: pointer;
 }
 .chip[aria-checked="true"] {
-  border-color: var(--accent);
+  border-color: var(--accent-ink);
   background: var(--accent-soft);
 }
 .run-tracker > summary {
@@ -3344,7 +3344,7 @@ button.status-pill {
   opacity: 0.8;
 }
 .hl-k {
-  color: var(--accent-strong);
+  color: var(--accent-ink);
 }
 .hl-s {
   color: var(--ok);
@@ -3442,9 +3442,9 @@ button.status-pill {
   padding: var(--space-2);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-pill);
-  background: var(--glass-bg-strong);
+  /* Solid, so the report scrolling underneath never shows through the buttons (M17 N). */
+  background: var(--surface);
   box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 .follow-bar {
   display: flex;
@@ -3676,4 +3676,49 @@ button.status-pill {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   white-space: pre-wrap;
+}
+
+/* ---- M17 N: first-run tour (DEC-034) ---- */
+.tour {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 640px;
+  margin: 0 auto var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--glass-shadow);
+}
+.tour-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.tour-title {
+  margin: 0;
+  font-size: var(--text-md, 1rem);
+}
+.tour-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tour-list li {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+.tour-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-hover);
+  color: var(--accent-ink);
 }

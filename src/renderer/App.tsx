@@ -57,6 +57,49 @@ function applyTheme(theme: Settings['theme']) {
   document.documentElement.dataset.theme = resolved;
 }
 
+// First-run tour (M17 N, DEC-034): what each rail item is for, once, until dismissed.
+const TOUR: { icon: NavIcon; name: string; text: string }[] = [
+  { icon: 'home', name: 'Build', text: 'Ask Claude for a change, watch it work, then keep or undo the result.' },
+  { icon: 'projects', name: 'Projects', text: 'Your projects with their plans, results and releases.' },
+  { icon: 'studio', name: 'Library', text: 'Lessons, skills and preferences the app has learned with you.' },
+  { icon: 'settings', name: 'Settings', text: 'Your API key, budget, theme, tools and updates.' },
+];
+
+function Tour({ onDone }: { onDone: () => void }) {
+  return (
+    <aside className="tour" aria-labelledby="tour-title">
+      <div className="tour-head">
+        <h2 id="tour-title" className="tour-title">
+          Getting around
+        </h2>
+        <button type="button" className="btn btn-sm" onClick={onDone}>
+          Got it
+        </button>
+      </div>
+      <ul className="tour-list">
+        {TOUR.map((t) => (
+          <li key={t.name}>
+            <span className="tour-icon" aria-hidden="true">
+              <Icon name={t.icon} size={18} />
+            </span>
+            <span>
+              <b>{t.name}</b> {t.text}
+            </span>
+          </li>
+        ))}
+        <li>
+          <span className="tour-icon" aria-hidden="true">
+            <Icon name="search" size={18} />
+          </span>
+          <span>
+            <kbd>Ctrl K</kbd> finds a project or page from anywhere.
+          </span>
+        </li>
+      </ul>
+    </aside>
+  );
+}
+
 function RailButton({ label, icon, current, onClick }: { label: string; icon: NavIcon; current: boolean; onClick: () => void }) {
   const name = label;
   return (
@@ -278,6 +321,9 @@ export function App() {
                 </button>
               ))}
             </nav>
+          )}
+          {section === 'home' && !openBuild && settings?.tour === 'new' && (
+            <Tour onDone={() => void call(iap().updateSetting({ key: 'tour', value: 'done' })).then(setSettings).catch(() => undefined)} />
           )}
           {section === 'home' && <BuildHome projects={projects} agent={agent} onProjectsChanged={() => void loadProjects()} openBuild={openBuild} onOpenBuild={setOpenBuild} />}
           {section === 'projects' && !projectId && (

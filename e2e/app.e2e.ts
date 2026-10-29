@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ElectronApplication, Page } from 'playwright-core';
-import { launch, ROOT, SHOTS, tempHome } from './helpers.ts';
+import { contrastFailures, launch, ROOT, SHOTS, tempHome } from './helpers.ts';
 import { buildClaudeFixture, CANARIES } from '../test/claude-fixture.ts';
 import { platformRepo, solidPng } from '../test/helpers.ts';
 
@@ -1298,7 +1298,7 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     await report.getByRole('heading', { name: 'Nothing changed' }).waitFor({ timeout: 30_000 });
     // No checks were found, so nothing tested it; that is listed before it ships.
     await report.getByRole('list', { name: 'Before it ships' }).getByText(/nothing tested the change/).waitFor();
-    await report.getByLabel('At a glance').getByText('None ran').waitFor();
+    await report.getByLabel('At a glance').getByText('None set up').waitFor();
 
     // Stand in for Claude's edit, so the report has files, lines and a coloured diff to show.
     const worktree = (await report.locator('.kv-list dd.mono').last().textContent())!.trim();
@@ -1329,6 +1329,16 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     await shot(page, '40-build-preview-dark-1280');
     await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
     await shot(page, '36-build-review-dark-1280');
+    // The report is the densest screen: its text must read on the sky too (M17 N).
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+      for (const top of [0, 600, 1200]) {
+        await page.locator('.content').evaluate((el, y) => el.scrollTo(0, y), top);
+        const { failures } = await contrastFailures(app, page);
+        assert.deepEqual(failures, [], `report text below WCAG AA contrast (${theme}, scrolled to ${top})`);
+      }
+    }
+    await page.evaluate(() => (document.documentElement.dataset.theme = 'light'));
 
     // Keeping is one tap; the record still says what was open.
     await report.getByRole('button', { name: 'Keep', exact: true }).click();
@@ -1352,6 +1362,81 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     const tabs = page.getByRole('navigation', { name: 'Settings sections' });
     assert.deepEqual(await tabs.getByRole('button').allTextContents(), ['General', 'Activity', 'Tools', 'Updates', 'Improvements', 'Platform']);
     await shot(page, '39-settings-tabs-dark-1280');
+  } finally {
+    await app.close();
+  }
+});
+
+test('M17-N: text is readable on both skies, the tour explains the rail once, and the keyboard reaches everything', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  let { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 800);
+    // The first-run tour names what each rail item is for.
+    const tour = page.getByRole('complementary', { name: 'Getting around' });
+    await tour.waitFor();
+    assert.match(await tour.innerText(), /Projects[\s\S]*Library[\s\S]*Settings[\s\S]*Ctrl K/);
+    await shot(page, '50-tour-light-1280');
+
+    for (const theme of ['Light', 'Dark'] as const) {
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await page.getByRole('radio', { name: theme }).check();
+      await page.waitForFunction((t) => document.documentElement.dataset.theme === t, theme.toLowerCase());
+      for (const where of ['Build', 'Projects', 'Library', 'Settings']) {
+        await page.getByRole('button', { name: where, exact: true }).click();
+        await page.waitForTimeout(200);
+        const { failures, checked } = await contrastFailures(app, page);
+        assert.ok(checked > 5, `${where} (${theme}): too little text checked (${checked})`);
+        assert.deepEqual(failures, [], `${where} (${theme}): text below WCAG AA contrast`);
+      }
+    }
+
+    // Every control on the Build screen can be reached with Tab and shows where focus is.
+    await page.getByRole('button', { name: 'Build', exact: true }).click();
+    const reached: string[] = [];
+    for (let i = 0; i < 25; i++) {
+      await page.keyboard.press('Tab');
+      // Focus is visible when the control, or the field around it, looks different focused than not.
+      const f = await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement;
+        const ring = () => {
+          const out: string[] = [];
+          for (let a: HTMLElement | null = el, i = 0; a && i < 3; a = a.parentElement, i++) {
+            const s = getComputedStyle(a);
+            out.push(`${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}|${s.boxShadow}|${s.borderColor}`);
+          }
+          return out.join(';');
+        };
+        const focused = ring();
+        el.blur();
+        const blurred = ring();
+        el.focus({ focusVisible: true } as FocusOptions);
+        const label = (el as HTMLInputElement).labels?.[0]?.textContent?.trim();
+        return { name: el.getAttribute('aria-label') || label || el.textContent?.trim() || el.tagName, visible: focused !== blurred };
+      });
+      assert.ok(f.visible, `no visible focus on "${f.name}"`);
+      reached.push(f.name);
+    }
+    for (const name of ['Build', 'Settings', 'Got it', 'What do you want to build?']) assert.ok(reached.includes(name), `Tab never reached "${name}": ${reached.join(', ')}`);
+
+    // Ctrl K opens the launcher from anywhere and Escape closes it.
+    await page.keyboard.press('Control+k');
+    await page.getByRole('dialog').getByRole('combobox').or(page.getByRole('dialog').getByRole('textbox')).first().waitFor();
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+
+    // Got it hides the tour for good.
+    await tour.getByRole('button', { name: 'Got it' }).click();
+    await tour.waitFor({ state: 'detached' });
+  } finally {
+    await app.close();
+  }
+  ({ app, page } = await launch(home));
+  try {
+    await page.getByRole('button', { name: 'Build', exact: true }).waitFor();
+    await page.waitForTimeout(500);
+    assert.equal(await page.getByRole('complementary', { name: 'Getting around' }).count(), 0);
   } finally {
     await app.close();
   }

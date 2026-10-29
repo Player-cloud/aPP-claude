@@ -704,7 +704,7 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
           <dl className="stat-row" aria-label="At a glance">
             <div data-tone={report.checks.total === 0 ? 'neutral' : STAT_TONE[report.checks.passed === report.checks.total ? 'ok' : 'danger']}>
               <dt>Checks passed</dt>
-              <dd>{report.checks.total === 0 ? 'None ran' : `${report.checks.passed}/${report.checks.total}`}</dd>
+              <dd>{report.checks.total > 0 ? `${report.checks.passed}/${report.checks.total}` : b!.checks.length ? "Didn't run" : 'None set up'}</dd>
             </div>
             <div>
               <dt>Files changed</dt>
