@@ -5,7 +5,7 @@
 // the numbers, the changed files and their diff, the commands that ran, what
 // is left before it ships, and Keep or Undo in one tap.
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { AgentStatus, Build, BuildDetail, ChangedFile, Diff, LiveEvent, LiveState, Project, RecentBuild } from '../../shared/api.ts';
+import type { AgentStatus, Build, BuildDetail, ChangedFile, Diff, LiveEvent, LiveState, PreviewState, Project, RecentBuild } from '../../shared/api.ts';
 import { formatDuration, groupFiles, keepNote, makeReport, statusLine, type ReportCommand, type ReportTone } from '../../shared/report.ts';
 import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
@@ -480,6 +480,109 @@ function Terminal({ commands }: { commands: ReportCommand[] }) {
   );
 }
 
+/**
+ * The page being built (M16 H): the project's dev server or static page,
+ * pictured in the app. While Claude works the picture refreshes by itself.
+ */
+export function PreviewPane({ buildId, live }: { buildId: string; live: boolean }) {
+  const [state, setState] = useState<PreviewState | null>(null);
+  const [shot, setShot] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setState(null);
+    setShot(null);
+    setError(null);
+    call(iap().previewState(buildId))
+      .then(setState)
+      .catch((e: Error) => setError(e.message));
+  }, [buildId]);
+
+  const capture = useCallback(async () => {
+    try {
+      setShot(await call(iap().capturePreview({ buildId, width: 1280, height: 800 })));
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [buildId]);
+
+  const running = state?.status === 'running';
+  useEffect(() => {
+    if (!running) return;
+    void capture();
+    if (!live) return;
+    const t = setInterval(() => void capture(), 5_000);
+    return () => clearInterval(t);
+  }, [running, live, capture]);
+
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    setState((s) => (s ? { ...s, status: 'starting' } : s));
+    try {
+      setState(await call(iap().startPreview(buildId)));
+    } catch (e) {
+      setError((e as Error).message);
+      setState(await call(iap().previewState(buildId)));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const stop = async () => {
+    await call(iap().stopPreview(buildId)).catch(() => undefined);
+    setShot(null);
+    setState(await call(iap().previewState(buildId)));
+  };
+
+  if (!state) return error ? <Alert tone="danger">{error}</Alert> : null;
+  if (!state.plan) return <p className="subtle">Nothing to preview: the project has no dev or start script and no index.html.</p>;
+  const what = state.plan.kind === 'script' ? <code className="mono">{state.plan.command}</code> : 'its index.html';
+  return (
+    <div className="preview">
+      <div className="preview-bar">
+        <span className="preview-dot" data-status={state.status} aria-hidden="true" />
+        <span className="preview-where">
+          {running ? (
+            <>
+              Running on <span className="mono">{state.url?.replace(/^https?:\/\//, '').replace(/\/$/, '')}</span>
+            </>
+          ) : state.status === 'starting' ? (
+            'Starting the preview…'
+          ) : state.status === 'failed' ? (
+            "The preview didn't start"
+          ) : (
+            <>Preview runs {what} in this task's copy</>
+          )}
+        </span>
+        <span className="preview-actions">
+          {running ? (
+            <>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void capture()}>
+                Refresh
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void call(iap().openPreview(buildId)).catch((e: Error) => setError(e.message))}>
+                Open in browser
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => void stop()}>
+                Stop
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn btn-sm" disabled={busy || state.status === 'starting'} onClick={() => void start()}>
+              {state.status === 'failed' ? 'Try again' : 'Start preview'}
+            </button>
+          )}
+        </span>
+      </div>
+      {running && (shot ? <img className="preview-shot" src={shot} alt="The page as it looks now" /> : <div className="preview-shot preview-wait">Taking a picture…</div>)}
+      {state.status === 'failed' && state.log && <pre className="preview-log">{state.log.slice(-1_500)}</pre>}
+      {error && <Alert tone="danger">{error}</Alert>}
+    </div>
+  );
+}
+
 const STAT_TONE: Record<ReportTone, Tone> = { ok: 'ok', warn: 'warn', danger: 'danger', neutral: 'neutral' };
 
 /** One task: live progress while it runs, then the report. */
@@ -578,9 +681,17 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
       {error && <Alert tone="danger">{error}</Alert>}
 
       {!report ? (
-        <section className="work-main" aria-label="Progress">
-          {timeline}
-        </section>
+        <div className="work-live">
+          <section className="work-main" aria-label="Progress">
+            {timeline}
+          </section>
+          {b && b.worktree && (
+            <section className="report-section" aria-label="Preview">
+              <h3 className="report-title">Preview</h3>
+              <PreviewPane buildId={buildId} live={running} />
+            </section>
+          )}
+        </div>
       ) : (
         <section className="report" aria-label="Report">
           <header className="report-head">
@@ -610,6 +721,15 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
               <dd>{b!.agent?.model === 'simulated' ? 'Free' : `$${report.costUsd.toFixed(2)}`}</dd>
             </div>
           </dl>
+
+          {b!.worktree && b!.status !== 'abandoned' && (
+            <section className="report-section" aria-labelledby={`preview-${buildId}`}>
+              <h3 className="report-title" id={`preview-${buildId}`}>
+                Preview
+              </h3>
+              <PreviewPane buildId={buildId} live={false} />
+            </section>
+          )}
 
           <div className="report-grid">
             <section className="report-section" aria-labelledby={`changes-${buildId}`}>
@@ -767,10 +887,9 @@ export function BuildHome({ projects, agent, onProjectsChanged, openBuild, onOpe
   return (
     <div className="build-home">
       {empty ? (
-        <section className="build-hello" aria-labelledby="hello-title">
-          <h1 className="build-hello-title" id="hello-title">
-            What do you want to build?
-          </h1>
+        // Not a labelled region: the message bar's box already carries this name.
+        <div className="build-hello">
+          <h1 className="build-hello-title">What do you want to build?</h1>
           <p className="muted">Say it in one sentence. Claude works in a separate copy of your code, and you see every step.</p>
           <div className="chips" aria-label="Examples">
             {EXAMPLES.map((x) => (
@@ -779,7 +898,7 @@ export function BuildHome({ projects, agent, onProjectsChanged, openBuild, onOpe
               </button>
             ))}
           </div>
-        </section>
+        </div>
       ) : (
         <section aria-labelledby="work-title">
           <h2 className="card-title" id="work-title">

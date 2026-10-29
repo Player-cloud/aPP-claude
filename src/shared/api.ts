@@ -19,6 +19,8 @@ export type { Build, BuildAgentRun, CheckRun } from '../core/workspace.ts';
 export type { Risk } from '../core/build/review.ts';
 export type { Check } from '../core/build/checks.ts';
 export type { LiveEvent, LiveState } from '../core/build/live.ts';
+export type { PreviewKind, PreviewPlan, PreviewState } from '../core/build/preview.ts';
+import type { PreviewState } from '../core/build/preview.ts';
 import type { LiveState } from '../core/build/live.ts';
 
 /** A build with the name of its project, for the Build screen's list (M15). */
@@ -165,6 +167,14 @@ export interface IapApi {
   answerBuildQuestion(input: { buildId: string; approvalId: string; allow: boolean }): Promise<Result<null>>;
   stopBuild(buildId: string): Promise<Result<null>>;
   recentBuilds(): Promise<Result<RecentBuild[]>>;
+  /** Live preview (M16 H): the dev server or static page of a task's worktree. */
+  previewState(buildId: string): Promise<Result<PreviewState>>;
+  /** Asks for approval in a native dialog the first time, then waits until the page answers. */
+  startPreview(buildId: string): Promise<Result<PreviewState>>;
+  /** A PNG data URL of the page at that size. */
+  capturePreview(input: { buildId: string; width?: number; height?: number }): Promise<Result<string>>;
+  openPreview(buildId: string): Promise<Result<null>>;
+  stopPreview(buildId: string): Promise<Result<null>>;
   /** Releases (M7): quality gate and ship-check. Preparing a release never deploys it. */
   listReleases(projectId: string): Promise<Result<Release[]>>;
   getRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
@@ -331,6 +341,11 @@ export const IAP_METHODS = [
   'answerBuildQuestion',
   'stopBuild',
   'recentBuilds',
+  'previewState',
+  'startPreview',
+  'capturePreview',
+  'openPreview',
+  'stopPreview',
   'listReleases',
   'getRelease',
   'createRelease',
