@@ -713,12 +713,15 @@ export function WorkView({
   onBack,
   onChanged,
   onOpenTask,
+  onPages,
   focusAsk = false,
 }: {
   buildId: string;
   onBack: () => void;
   onChanged?: () => void;
   onOpenTask?: (buildId: string) => void;
+  /** Opens the Pages screen for this task (M18). */
+  onPages?: (buildId: string) => void;
   /** Opened to ask Claude for changes: the ask bar gets focus once the report is shown (M17 K). */
   focusAsk?: boolean;
 }) {
@@ -985,6 +988,17 @@ export function WorkView({
         </h3>
         <PreviewPane buildId={buildId} live={running} />
       </section>
+      {onPages && !running && (
+        <section className="kcard" aria-labelledby={`pages-${buildId}`}>
+          <h3 className="kcard-title" id={`pages-${buildId}`}>
+            Pages
+          </h3>
+          <p className="helper-summary">Every page at desktop and phone width, before and after this change.</p>
+          <button type="button" className="btn btn-sm" onClick={() => onPages(buildId)}>
+            See the pages
+          </button>
+        </section>
+      )}
     </div>
   );
 
@@ -1158,7 +1172,21 @@ export function WorkView({
 }
 
 /** The Build home: composer and the person's work across projects. */
-export function BuildHome({ projects, agent, onProjectsChanged, openBuild, onOpenBuild }: { projects: Project[] | null; agent: AgentStatus | null; onProjectsChanged: () => void; openBuild: string | null; onOpenBuild: (id: string | null) => void }) {
+export function BuildHome({
+  projects,
+  agent,
+  onProjectsChanged,
+  openBuild,
+  onOpenBuild,
+  onPages,
+}: {
+  projects: Project[] | null;
+  agent: AgentStatus | null;
+  onProjectsChanged: () => void;
+  openBuild: string | null;
+  onOpenBuild: (id: string | null) => void;
+  onPages?: (id: string) => void;
+}) {
   const [builds, setBuilds] = useState<RecentBuild[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraftState] = useState({ n: 0, text: '' });
@@ -1181,7 +1209,7 @@ export function BuildHome({ projects, agent, onProjectsChanged, openBuild, onOpe
     return () => clearInterval(t);
   }, [openBuild, builds, reload]);
 
-  if (openBuild) return <WorkView buildId={openBuild} onBack={() => onOpenBuild(null)} onOpenTask={onOpenBuild} />;
+  if (openBuild) return <WorkView buildId={openBuild} onBack={() => onOpenBuild(null)} onOpenTask={onOpenBuild} onPages={onPages} />;
   const empty = builds !== null && builds.length === 0;
   return (
     <div className="build-home">

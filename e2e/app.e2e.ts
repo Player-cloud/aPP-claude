@@ -235,6 +235,7 @@ test('M2-AC7/AC9: keyboard navigation, visible focus, and layouts at target size
     assert.notEqual(focused.width, '0px');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
     await page.keyboard.press('Enter');
     await page.getByRole('navigation', { name: 'Library sections' }).getByRole('button', { name: 'Learning Studio' }).and(page.locator('[aria-current="page"]')).waitFor();
 
@@ -1284,8 +1285,8 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     await resize(app, 1280, 800);
     // Four places in the rail, the rest one level down (M15); search, project tiles and day/night beside them (M18).
     const rail = page.getByRole('navigation', { name: 'Primary' });
-    assert.deepEqual(await rail.getByRole('group', { name: 'Places' }).getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Projects', 'Library']);
-    assert.deepEqual(await rail.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Projects', 'Library', 'Search', 'Add a project', 'Switch to the night sky', 'Settings']);
+    assert.deepEqual(await rail.getByRole('group', { name: 'Places' }).getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Pages', 'Projects', 'Library']);
+    assert.deepEqual(await rail.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Pages', 'Projects', 'Library', 'Search', 'Add a project', 'Switch to the night sky', 'Settings']);
 
     // With no project yet, the composer asks for a name and makes one.
     const composer = page.getByRole('form', { name: 'Start a task' });
@@ -1376,6 +1377,22 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
       }
     }
     await page.evaluate(() => (document.documentElement.dataset.theme = 'light'));
+
+    // Pages (M18 parts 6-7): every page at desktop and phone width, before and after. This project had no page before the task.
+    await report.getByRole('region', { name: 'Pages' }).getByRole('button', { name: 'See the pages' }).click();
+    const pagesView = page.locator('.pages-view');
+    await pagesView.getByRole('heading', { name: 'Pages', level: 1 }).waitFor();
+    await pagesView.getByText('No pictures yet.', { exact: false }).waitFor();
+    await pagesView.getByRole('button', { name: 'Take pictures' }).click();
+    const routes = pagesView.getByRole('navigation', { name: 'Pages' });
+    await routes.getByRole('button', { name: /^\/\s*New$/ }).waitFor({ timeout: 60_000 });
+    await pagesView.getByText('Before this change there was nothing to preview.').first().waitFor();
+    await pagesView.getByRole('img', { name: '/ after the change, desktop width' }).waitFor();
+    await pagesView.getByRole('group', { name: 'Width' }).getByRole('button', { name: 'Phone' }).click();
+    await pagesView.getByRole('img', { name: '/ after the change, phone width' }).waitFor();
+    assert.equal(await pagesView.getByRole('list', { name: 'All pages' }).getByRole('listitem').count(), 1);
+    await shot(page, '58-pages-light-1280');
+    await pagesView.getByRole('button', { name: 'Open task' }).click();
 
     // Keeping is one tap; the record still says what was open.
     await report.getByRole('button', { name: 'Keep', exact: true }).click();

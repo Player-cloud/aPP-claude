@@ -6,6 +6,7 @@ import { Icon } from './icons.tsx';
 import { SidePanel } from './SidePanel.tsx';
 import { ActivityView } from './views/ActivityView.tsx';
 import { BuildHome } from './views/BuildView.tsx';
+import { PagesView } from './views/PagesView.tsx';
 import { IterativeView, type ImprovementFilter } from './views/IterativeView.tsx';
 import { LearningStudioView, type StudioFilter } from './views/LearningStudioView.tsx';
 import { ProjectDetail } from './views/ProjectDetail.tsx';
@@ -17,9 +18,9 @@ import { SettingsView } from './views/SettingsView.tsx';
 import { ToolsView, type ToolFilter } from './views/ToolsView.tsx';
 import { UpdatesView, type UpdateFilter } from './views/UpdatesView.tsx';
 
-export type Section = 'home' | 'projects' | 'activity' | 'studio' | 'preferences' | 'tools' | 'updates' | 'iterative' | 'platform' | 'settings';
+export type Section = 'home' | 'pages' | 'projects' | 'activity' | 'studio' | 'preferences' | 'tools' | 'updates' | 'iterative' | 'platform' | 'settings';
 
-type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'bookmark' | 'tools' | 'radar' | 'iterate' | 'shield' | 'settings';
+type NavIcon = 'home' | 'pages' | 'projects' | 'activity' | 'studio' | 'bookmark' | 'tools' | 'radar' | 'iterate' | 'shield' | 'settings';
 
 /**
  * Four places (M15): Build, Projects, Library and Settings. Less-used screens
@@ -29,6 +30,7 @@ type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'bookmark' | 'tools
 type Group = { id: Section; label: string; icon: NavIcon; tabs?: Section[] };
 const NAV: Group[] = [
   { id: 'home', label: 'Build', icon: 'home' },
+  { id: 'pages', label: 'Pages', icon: 'pages' },
   { id: 'projects', label: 'Projects', icon: 'projects' },
   { id: 'studio', label: 'Library', icon: 'studio', tabs: ['studio', 'preferences'] },
 ];
@@ -40,6 +42,7 @@ const groupOf = (s: Section): Group => [...NAV, SETTINGS_GROUP].find((g) => g.id
 
 export const SECTION_LABEL: Record<Section, string> = {
   home: 'Build',
+  pages: 'Pages',
   projects: 'Projects',
   activity: 'Activity',
   studio: 'Learning Studio',
@@ -158,6 +161,7 @@ export function App() {
   const [prefTab, setPrefTab] = useState<PreferencesTab>('preferences');
   // The task open on the Build screen, if any.
   const [openBuild, setOpenBuild] = useState<string | null>(null);
+  const [pagesBuild, setPagesBuild] = useState<string | null>(null);
   const [agent, setAgent] = useState<AgentStatus | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Every task's state, for the status pill and the project tiles; refreshed often while anything runs.
@@ -281,7 +285,7 @@ export function App() {
   const group = groupOf(section);
 
   return (
-    <div className={section === 'home' ? 'shell no-side' : 'shell'}>
+    <div className={section === 'home' || section === 'pages' ? 'shell no-side' : 'shell'}>
       <a className="skip-link" href="#main">
         Skip to content
       </a>
@@ -343,7 +347,7 @@ export function App() {
         <RailButton label={SETTINGS_GROUP.label} icon={SETTINGS_GROUP.icon} current={group.id === 'settings'} onClick={() => go('settings')} />
       </nav>
 
-      {section !== 'home' && (
+      {section !== 'home' && section !== 'pages' && (
         <SidePanel
           section={section}
           projects={projects}
@@ -431,7 +435,29 @@ export function App() {
           {section === 'home' && !openBuild && settings?.tour === 'new' && (
             <Tour onDone={() => void call(iap().updateSetting({ key: 'tour', value: 'done' })).then(setSettings).catch(() => undefined)} />
           )}
-          {section === 'home' && <BuildHome projects={projects} agent={agent} onProjectsChanged={() => void loadProjects()} openBuild={openBuild} onOpenBuild={setOpenBuild} />}
+          {section === 'home' && (
+            <BuildHome
+              projects={projects}
+              agent={agent}
+              onProjectsChanged={() => void loadProjects()}
+              openBuild={openBuild}
+              onOpenBuild={setOpenBuild}
+              onPages={(id) => {
+                go('pages');
+                setPagesBuild(id);
+              }}
+            />
+          )}
+          {section === 'pages' && (
+            <PagesView
+              buildId={pagesBuild}
+              onBuild={setPagesBuild}
+              onOpenTask={(id) => {
+                go('home');
+                setOpenBuild(id);
+              }}
+            />
+          )}
           {section === 'projects' && !projectId && (
             <ProjectsView
               projects={projects}

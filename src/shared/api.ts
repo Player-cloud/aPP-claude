@@ -3,6 +3,7 @@
 
 import type { AgentTask, AuditEvent, Fact, Project, Settings, WorkflowRun } from '../core/workspace.ts';
 import type { ToolScan } from '../core/tools.ts';
+import type { PageSet } from '../core/build/pages.ts';
 import type { PlanningOverview } from '../core/planner.ts';
 import type { PlanChange, PlanDoc } from '../core/planning.ts';
 import type { RunState, Workflow } from '../core/workflow.ts';
@@ -23,6 +24,7 @@ export type { HelperFinding, HelperId, HelperRun, HelperSeverity, TestCase } fro
 export type { Check } from '../core/build/checks.ts';
 export type { LiveEvent, LiveState } from '../core/build/live.ts';
 export type { PreviewKind, PreviewPlan, PreviewState } from '../core/build/preview.ts';
+export type { PageRoute, PageSet, PageShot, Viewport } from '../core/build/pages.ts';
 import type { PreviewState } from '../core/build/preview.ts';
 import type { LiveState } from '../core/build/live.ts';
 
@@ -187,6 +189,12 @@ export interface IapApi {
   capturePreview(input: { buildId: string; width?: number; height?: number }): Promise<Result<string>>;
   /** M17 K: the task's latest preview picture as a PNG data URL, or null when none was taken. */
   buildPicture(buildId: string): Promise<Result<string | null>>;
+  /** M18 Pages: pictures of each page at desktop and phone width, before and after the change. Runs the preview (asking first) and a copy of the code before the change. */
+  capturePages(buildId: string): Promise<Result<PageSet>>;
+  /** M18 Pages: the last pictures taken for a task, or null. */
+  pageSet(buildId: string): Promise<Result<PageSet | null>>;
+  /** M18 Pages: one picture as a PNG data URL. */
+  pageShot(input: { buildId: string; name: string }): Promise<Result<string>>;
   openPreview(buildId: string): Promise<Result<null>>;
   stopPreview(buildId: string): Promise<Result<null>>;
   /** Releases (M7): quality gate and ship-check. Preparing a release never deploys it. */
@@ -365,6 +373,9 @@ export const IAP_METHODS = [
   'startPreview',
   'capturePreview',
   'buildPicture',
+  'capturePages',
+  'pageSet',
+  'pageShot',
   'openPreview',
   'stopPreview',
   'listReleases',

@@ -203,7 +203,7 @@ export function SidePanel({
   prefTab: PreferencesTab;
   onPrefTab: (t: PreferencesTab) => void;
 }) {
-  const title = { home: 'Projects', projects: 'Projects', activity: 'Activity', studio: 'Learning Studio', preferences: 'Preferences', tools: 'Tools', updates: 'Updates', iterative: 'Improvements', platform: 'Platform', settings: 'Settings' }[section];
+  const title = { home: 'Projects', pages: 'Pages', projects: 'Projects', activity: 'Activity', studio: 'Learning Studio', preferences: 'Preferences', tools: 'Tools', updates: 'Updates', iterative: 'Improvements', platform: 'Platform', settings: 'Settings' }[section];
   return (
     <aside className="side" aria-label={`${title} panel`}>
       <div className="side-head">
