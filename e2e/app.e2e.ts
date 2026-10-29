@@ -666,10 +666,25 @@ test('M9: collect design references in the Learning Studio, with a suggestion th
 
     await grid.getByRole('button', { name: /pricing cards/ }).click();
     const pricing = page.getByRole('region', { name: 'pricing cards' });
-    await pricing.getByLabel('Tags').fill('pricing, cards');
+    await pricing.getByLabel('Tags').fill('pricing, cards, onboarding');
     await pricing.getByRole('button', { name: 'Save' }).click();
     await pricing.getByText('Saved.').waitFor();
     await pricing.getByRole('button', { name: 'Close the reference' }).click();
+
+    // The overview (M18 part 8) is read from the pictures and their tags: two share #onboarding, which makes a collection.
+    await page.getByRole('heading', { name: 'Your taste, read from 3 pictures' }).waitFor();
+    await page.getByRole('img', { name: /^Dark to Light: \d+% light, from the pictures' lightness$/ }).waitFor();
+    await page.getByRole('region', { name: 'Tags that keep coming back' }).getByRole('button', { name: '#onboarding 2' }).waitFor();
+    await shot(page, '59-studio-overview-dark-1280');
+    await page.getByRole('button', { name: 'Collection #onboarding, 2 references' }).click();
+    await grid.getByRole('button', { name: /settings dark/ }).waitFor({ state: 'detached' });
+    assert.equal(await grid.getByRole('listitem').count(), 2);
+    await page.getByLabel('Tag').selectOption('');
+    // Each picture's main colours are sampled from its pixels: this one is a dark navy gradient.
+    await grid.getByRole('button', { name: /settings dark/ }).click();
+    const swatches = await page.getByRole('region', { name: 'settings dark' }).getByRole('list', { name: 'Main colours' }).getByRole('listitem').allTextContents();
+    assert.ok(swatches.length >= 1 && swatches.every((c) => /^#[0-3][0-9A-F][0-3][0-9A-F][1-4][0-9A-F]$/.test(c)), swatches.join(','));
+    await page.getByRole('region', { name: 'settings dark' }).getByRole('button', { name: 'Close the reference' }).click();
 
     await page.getByRole('group', { name: 'Group by' }).getByRole('button', { name: 'Project' }).click();
     await page.getByRole('heading', { name: /Club HR/ }).waitFor();
