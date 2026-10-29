@@ -1284,17 +1284,38 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
 
     const work = page.getByRole('article', { name: 'Add a page that lists members' });
     await work.getByRole('list', { name: 'What Claude is doing' }).getByText('Setting up a separate copy of your code').waitFor();
-    await work.getByText('Ready for your review.').waitFor({ timeout: 30_000 });
-    await work.getByRole('heading', { name: 'Keep this change?' }).waitFor();
-    // No checks were found, so the review says nothing tested it, and keeping needs a reason.
-    await work.getByRole('list', { name: 'Risks' }).getByText(/nothing tested the change/).waitFor();
-    const keep = work.getByRole('button', { name: 'Keep the change' });
-    assert.equal(await keep.isDisabled(), true);
+    // When it ends, the work becomes a report (M16): the simulated model changes nothing.
+    const report = work.getByRole('region', { name: 'Report' });
+    await report.getByRole('heading', { name: 'Nothing changed' }).waitFor({ timeout: 30_000 });
+    // No checks were found, so nothing tested it; that is listed before it ships.
+    await report.getByRole('list', { name: 'Before it ships' }).getByText(/nothing tested the change/).waitFor();
+    await report.getByLabel('At a glance').getByText('None ran').waitFor();
+
+    // Stand in for Claude's edit, so the report has files, lines and a coloured diff to show.
+    const worktree = (await report.locator('.kv-list dd.mono').last().textContent())!.trim();
+    mkdirSync(join(worktree, 'src'), { recursive: true });
+    writeFileSync(join(worktree, 'src', 'members.ts'), "// Lists the club's members.\nexport function members(rows: string[]): string[] {\n  const out = rows.filter((r) => r.trim().length > 0);\n  return out.sort();\n}\n");
+    writeFileSync(join(worktree, 'README.md'), '# Club HR\n\nA members page.\n');
+    await work.getByRole('button', { name: '← All work' }).click();
+    await page.getByRole('list', { name: 'Your work' }).getByRole('button', { name: /Add a page that lists members/ }).click();
+    await report.getByRole('heading', { name: 'Ready for your review' }).waitFor();
+    const tree = report.getByRole('list', { name: 'Changed files' });
+    assert.deepEqual((await tree.getByRole('button').allTextContents()).map((t) => t.replace(/\s+/g, '')), ['AREADME.md+3', 'Amembers.ts+5']);
+    await tree.getByRole('button', { name: /members\.ts/ }).click();
+    const code = report.getByLabel('Changes to src/members.ts');
+    await code.locator('.hl-k', { hasText: 'export' }).first().waitFor();
+    await code.locator('.hl-c').first().waitFor();
+    await report.getByLabel('At a glance').locator('.diff-add', { hasText: '+8' }).waitFor();
+    // The step list is folded away under the report.
+    await report.getByText(/How Claude did it · \d+ steps?/).waitFor();
+    assert.equal(await work.getByText('Ready for your review.').isVisible(), false);
     await shot(page, '36-build-review-dark-1280');
-    await work.getByRole('radio', { name: 'OK for now' }).click();
-    await keep.click();
-    await work.getByRole('heading', { name: 'Kept' }).waitFor();
+
+    // Keeping is one tap; the record still says what was open.
+    await report.getByRole('button', { name: 'Keep', exact: true }).click();
+    await report.getByRole('heading', { name: 'Kept' }).first().waitFor();
     await work.getByText(/nothing was merged or pushed for you/).waitFor();
+    await report.getByText(/^Kept from the review with \d open points?: .*not run/).waitFor({ state: 'attached' });
 
     await work.getByRole('button', { name: '← All work' }).click();
     const list = page.getByRole('list', { name: 'Your work' });

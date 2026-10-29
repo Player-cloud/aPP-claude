@@ -1,10 +1,13 @@
 // The Build screen (M15, DEC-032): say what you want, watch Claude work, then
 // review and keep the change. The composer starts a task from one sentence;
 // the work view follows its live progress (steps, Claude's plan, questions
-// that need the person) and then shows the review: checks before and after,
-// the diff, what to look at, and keep, ask for changes, or discard.
+// that need the person) and then shows the report (M16, DEC-033): a headline,
+// the numbers, the changed files and their diff, the commands that ran, what
+// is left before it ships, and Keep or Undo in one tap.
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { AgentStatus, Build, BuildDetail, CheckRun, Diff, LiveEvent, LiveState, Project, RecentBuild } from '../../shared/api.ts';
+import type { AgentStatus, Build, BuildDetail, ChangedFile, Diff, LiveEvent, LiveState, Project, RecentBuild } from '../../shared/api.ts';
+import { formatDuration, groupFiles, keepNote, makeReport, type ReportCommand, type ReportTone } from '../../shared/report.ts';
+import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
 import { Alert, Badge, relativeTime, type Tone } from '../ui.tsx';
 
@@ -353,97 +356,128 @@ function RecordedSteps({ build }: { build: Build }) {
   );
 }
 
-/** A unified diff, coloured line by line, one block per file. */
-export function DiffView({ diff }: { diff: Diff }) {
-  const files = diff.patch.split(/^(?=diff --git )/m).filter((f) => f.startsWith('diff --git'));
-  if (files.length === 0) return <p className="muted">No changes.</p>;
+/** One file's unified diff, coloured line by line, with syntax colouring. */
+function FileDiff({ path, block }: { path: string; block: string }) {
+  const lines = block.split('\n');
+  const start = lines.findIndex((l) => l.startsWith('@@'));
+  const body = start < 0 ? [] : lines.slice(start);
+  const lang = langOf(path);
+  if (body.length === 0) return <p className="subtle diff-empty">No text changes to show (a binary file, a rename or an empty file).</p>;
   return (
-    <div className="diffs">
-      {files.map((block, i) => {
-        const lines = block.split('\n');
-        const name = /^diff --git a\/(.+?) b\//.exec(lines[0] ?? '')?.[1] ?? `file ${i + 1}`;
-        const added = lines.filter((l) => l.startsWith('+') && !l.startsWith('+++')).length;
-        const removed = lines.filter((l) => l.startsWith('-') && !l.startsWith('---')).length;
-        const body = lines.slice(lines.findIndex((l) => l.startsWith('@@')));
+    <pre className="diff-body" aria-label={`Changes to ${path}`}>
+      {body.map((l, j) => {
+        const kind = l.startsWith('@@') ? 'dl-hunk' : l.startsWith('+') ? 'dl-add' : l.startsWith('-') ? 'dl-del' : 'dl-ctx';
+        if (kind === 'dl-hunk') {
+          return (
+            <span key={j} className={kind}>
+              {l}
+            </span>
+          );
+        }
         return (
-          <details key={name + i} className="diff-file" open={i < 3}>
-            <summary>
-              <span className="mono">{name}</span>
-              <span className="diff-count">
-                <span className="diff-add">+{added}</span> <span className="diff-del">−{removed}</span>
-              </span>
-            </summary>
-            <pre className="diff-body">
-              {body.map((l, j) => (
-                <span key={j} className={l.startsWith('@@') ? 'dl-hunk' : l.startsWith('+') ? 'dl-add' : l.startsWith('-') ? 'dl-del' : 'dl-ctx'}>
-                  {l || ' '}
-                </span>
-              ))}
-            </pre>
-          </details>
+          <span key={j} className={kind}>
+            <span className="dl-mark" aria-hidden="true">
+              {l.slice(0, 1) || ' '}
+            </span>
+            {highlight(l.slice(1), lang)}
+            {l.length <= 1 ? ' ' : ''}
+          </span>
         );
       })}
+    </pre>
+  );
+}
+
+/** Each file's block of a unified diff, by path. */
+function splitPatch(patch: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const block of patch.split(/^(?=diff --git )/m)) {
+    if (!block.startsWith('diff --git')) continue;
+    const name = /^diff --git a\/(.+?) b\/(.+)$/m.exec(block);
+    if (name) out.set(name[2]!, block);
+  }
+  return out;
+}
+
+const FILE_MARK: Record<ChangedFile['status'], string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' };
+
+/** What changed: the files as a tree with line counts, and the selected file's diff. */
+export function Changes({ diff }: { diff: Diff }) {
+  const blocks = splitPatch(diff.patch);
+  const groups = groupFiles(diff.files);
+  const [open, setOpen] = useState<string | null>(diff.files[0]?.path ?? null);
+  useEffect(() => {
+    if (!open || !diff.files.some((f) => f.path === open)) setOpen(diff.files[0]?.path ?? null);
+  }, [diff, open]);
+  if (diff.files.length === 0) return <p className="muted">No files changed.</p>;
+  return (
+    <div className="changes">
+      <ul className="file-tree" aria-label="Changed files">
+        {groups.map((g) => (
+          <li key={g.dir || '.'}>
+            {g.dir && <span className="file-dir mono">{g.dir}/</span>}
+            <ul>
+              {g.files.map((f) => (
+                <li key={f.path}>
+                  <button type="button" className="file-row" aria-pressed={open === f.path} onClick={() => setOpen(f.path)} title={f.path}>
+                    <span className="file-mark" data-status={f.status} aria-label={f.status}>
+                      {FILE_MARK[f.status]}
+                    </span>
+                    <span className="mono file-name">{f.name}</span>
+                    <span className="diff-count">
+                      {f.added > 0 && <span className="diff-add">+{f.added}</span>} {f.removed > 0 && <span className="diff-del">−{f.removed}</span>}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+      {open && (
+        <div className="file-diff">
+          <div className="file-diff-head mono">{open}</div>
+          <FileDiff path={open} block={blocks.get(open) ?? ''} />
+        </div>
+      )}
       {diff.truncated && <p className="subtle">The diff was cut short; open the work folder to see all of it.</p>}
     </div>
   );
 }
 
-const CHECK_TONE: Record<CheckRun['status'], Tone> = { passed: 'ok', failed: 'danger', timed_out: 'danger', error: 'danger', not_run: 'neutral' };
-
-function CheckTable({ runs }: { runs: CheckRun[] }) {
-  const latest = (phase: CheckRun['phase']) => {
-    const m = new Map<string, CheckRun>();
-    for (const r of runs) if (r.phase === phase) m.set(r.checkId, r);
-    return m;
-  };
-  const before = latest('baseline');
-  const after = latest('verify');
-  const ids = [...new Set([...before.keys(), ...after.keys()])];
-  if (ids.length === 0) return <p className="muted">No checks ran.</p>;
+/** The commands that ran, as a terminal: checks with their times, then Claude's own. */
+function Terminal({ commands }: { commands: ReportCommand[] }) {
+  if (commands.length === 0) return <p className="muted">No commands ran. Nothing tested this change.</p>;
   return (
-    <table className="check-table">
-      <thead>
-        <tr>
-          <th scope="col">Check</th>
-          <th scope="col">Before</th>
-          <th scope="col">After</th>
-        </tr>
-      </thead>
-      <tbody>
-        {ids.map((id) => {
-          const b = before.get(id);
-          const a = after.get(id);
-          return (
-            <tr key={id}>
-              <td className="mono" title={(a ?? b)?.command}>
-                {(a ?? b)?.command ?? id}
-              </td>
-              <td>{b ? <Badge tone={CHECK_TONE[b.status]}>{b.status.replace('_', ' ')}</Badge> : '–'}</td>
-              <td>{a ? <Badge tone={CHECK_TONE[a.status]}>{a.status.replace('_', ' ')}</Badge> : '–'}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <ol className="terminal" aria-label="Commands that ran">
+      {commands.map((c, i) => (
+        <li key={i} data-ok={c.ok}>
+          <span className="term-mark" aria-label={c.ok ? 'passed' : 'failed'}>
+            {c.ok ? '✓' : '✗'}
+          </span>
+          <span className="term-cmd" title={c.command}>
+            {c.command}
+          </span>
+          <span className="term-meta">{c.durationMs !== null ? formatDuration(c.durationMs) : c.note || 'by Claude'}</span>
+          {c.from === 'check' && c.note && <span className="term-note">{c.note}</span>}
+        </li>
+      ))}
+    </ol>
   );
 }
 
-const KEEP_REASONS = ["I looked at it, it's fine", 'OK for now', "I'll fix it in a follow-up"];
-const KEEP_NOTE: Record<string, string> = {
-  [KEEP_REASONS[0]!]: 'Reviewed the change myself; it is fine.',
-  [KEEP_REASONS[1]!]: 'Accepted as it is for now.',
-  [KEEP_REASONS[2]!]: 'Will be fixed in a follow-up task.',
-};
+const STAT_TONE: Record<ReportTone, Tone> = { ok: 'ok', warn: 'warn', danger: 'danger', neutral: 'neutral' };
 
-/** One task: live progress while it runs, then the review. */
+/** One task: live progress while it runs, then the report. */
 export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBack: () => void; onChanged?: () => void }) {
   const [detail, setDetail] = useState<BuildDetail | null>(null);
   const [diff, setDiff] = useState<Diff | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [reason, setReason] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  const [noteOpen, setNoteOpen] = useState(false);
   const [followUp, setFollowUp] = useState('');
+  const followRef = useRef<HTMLInputElement>(null);
   const changed = useRef(onChanged);
   changed.current = onChanged;
 
@@ -462,15 +496,16 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
   useEffect(() => {
     setDetail(null);
     setDiff(null);
-    setReason(null);
     setNote('');
+    setNoteOpen(false);
     void load();
   }, [buildId, load]);
 
   const running = live.state?.running ?? false;
   const b = detail?.build;
   const status = b ? workStatus(b, running) : null;
-  const risks = b?.risks ?? [];
+  const reportable = b && (b.agent !== null || b.status === 'review' || b.status === 'completed' || b.status === 'abandoned');
+  const report = b && detail && !running && reportable ? makeReport(b, detail.checkRuns, diff?.files ?? null) : null;
 
   const act = async (label: string, fn: () => Promise<unknown>, restart = false) => {
     setBusy(label);
@@ -486,10 +521,18 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
     }
   };
 
-  const keep = () => {
-    const parts = [reason ? KEEP_NOTE[reason] : null, note.trim() || null].filter(Boolean);
-    return act('keep', () => call(iap().completeBuild({ buildId, note: parts.join(' ') || null })));
+  const ask = (text: string) => {
+    setFollowUp(text);
+    followRef.current?.focus();
   };
+
+  const timeline =
+    live.events.length > 0 ? (
+      <Timeline events={live.events} pending={live.state?.pending ?? null} buildId={buildId} onAnswered={() => undefined} />
+    ) : (
+      b && <RecordedSteps build={b} />
+    );
+  const steps = b?.agent?.steps.length ?? live.events.filter((e) => e.kind === 'step').length;
 
   return (
     <article className="work-view" aria-label={b?.title ?? 'Task'}>
@@ -513,132 +556,163 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
       </div>
       {error && <Alert tone="danger">{error}</Alert>}
 
-      <div className="work-grid">
+      {!report ? (
         <section className="work-main" aria-label="Progress">
-          {live.events.length > 0 ? (
-            <Timeline events={live.events} pending={live.state?.pending ?? null} buildId={buildId} onAnswered={() => undefined} />
-          ) : (
-            b && <RecordedSteps build={b} />
-          )}
-          {b && !running && b.agent && (
-            <div className="work-summary">
-              <span className="tl-label">Claude's summary</span>
-              <p>{b.agent.summary}</p>
-              {b.agent.resolution && <p className="subtle">{b.agent.resolution}</p>}
-            </div>
-          )}
-          {diff && !running && (
-            <section aria-label="Changes">
-              <h2 className="card-title">What changed</h2>
-              <DiffView diff={diff} />
-            </section>
-          )}
+          {timeline}
         </section>
+      ) : (
+        <section className="report" aria-label="Report">
+          <header className="report-head">
+            <h2 className="report-headline" data-tone={report.tone}>
+              {report.headline}
+            </h2>
+            {report.summary && <p className="report-summary">{report.summary}</p>}
+          </header>
 
-        <aside className="work-side" aria-label="Review">
-          {b && detail && (
-            <div className="work-box">
-              <h2 className="work-box-title">Checks</h2>
-              <CheckTable runs={detail.checkRuns} />
+          <dl className="stat-row" aria-label="At a glance">
+            <div data-tone={report.checks.total === 0 ? 'neutral' : STAT_TONE[report.checks.passed === report.checks.total ? 'ok' : 'danger']}>
+              <dt>Checks passed</dt>
+              <dd>{report.checks.total === 0 ? 'None ran' : `${report.checks.passed}/${report.checks.total}`}</dd>
             </div>
-          )}
-          {b && b.status === 'review' && !running && (
-            <>
-              <div className="work-box">
-                <h2 className="work-box-title">Worth a look</h2>
-                {risks.length ? (
-                  <ul className="small-list" aria-label="Risks">
-                    {risks.map((r, i) => (
-                      <li key={i}>{r.detail}</li>
+            <div>
+              <dt>Files changed</dt>
+              <dd>{report.files.length}</dd>
+            </div>
+            <div>
+              <dt>Lines</dt>
+              <dd>
+                <span className="diff-add">+{report.added}</span> <span className={report.removed ? 'diff-del' : 'subtle'}>−{report.removed}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Cost</dt>
+              <dd>{b!.agent?.model === 'simulated' ? 'Free' : `$${report.costUsd.toFixed(2)}`}</dd>
+            </div>
+          </dl>
+
+          <div className="report-grid">
+            <section className="report-section" aria-labelledby={`changes-${buildId}`}>
+              <h3 className="report-title" id={`changes-${buildId}`}>
+                What changed
+              </h3>
+              {diff ? <Changes diff={diff} /> : <p className="muted">{b!.status === 'abandoned' ? 'This change was undone.' : 'There is no change to show.'}</p>}
+            </section>
+            <div className="report-aside">
+              <section className="report-section" aria-labelledby={`cmds-${buildId}`}>
+                <h3 className="report-title" id={`cmds-${buildId}`}>
+                  Commands
+                </h3>
+                <Terminal commands={report.commands} />
+              </section>
+              <section className="report-section" aria-labelledby={`ships-${buildId}`}>
+                <h3 className="report-title" id={`ships-${buildId}`}>
+                  Before it ships
+                </h3>
+                {report.todos.length ? (
+                  <ul className="todo-list" aria-label="Before it ships">
+                    {report.todos.map((t, i) => (
+                      <li key={i}>
+                        <span className="todo-dot" aria-hidden="true" />
+                        <span className="todo-text">{t}</span>
+                        {b!.status === 'review' && (
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => ask(t)} aria-label={`Ask Claude to handle: ${t}`}>
+                            Ask Claude
+                          </button>
+                        )}
+                      </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="subtle">The automatic review found nothing to flag.</p>
+                  <p className="subtle">Nothing left to do.</p>
                 )}
-              </div>
-              <div className="work-box">
-                <h2 className="work-box-title">Keep this change?</h2>
-                {risks.length > 0 && (
-                  <div className="chips" role="radiogroup" aria-label="Why it is OK to keep">
-                    {KEEP_REASONS.map((r) => (
-                      <button key={r} type="button" role="radio" aria-checked={reason === r} className="chip" onClick={() => setReason(r)}>
-                        {r}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" aria-label="Note" />
-                <div className="btn-row">
-                  <button type="button" className="btn btn-primary" disabled={busy !== null || (risks.length > 0 && !reason && note.trim().length < 10)} onClick={() => void keep()}>
-                    Keep the change
-                  </button>
-                  <button type="button" className="btn btn-danger" disabled={busy !== null} onClick={() => void act('discard', () => call(iap().abandonBuild({ buildId, reason: 'Discarded from the review.' })))}>
-                    Discard
-                  </button>
-                </div>
-                {risks.length > 0 && !reason && <p className="subtle">Pick one so the record says why it was kept.</p>}
-              </div>
+              </section>
+            </div>
+          </div>
+
+          <details className="report-steps">
+            <summary>
+              How Claude did it · {steps} {steps === 1 ? 'step' : 'steps'}
+            </summary>
+            {timeline}
+          </details>
+
+          {b!.status === 'review' && (
+            <div className="report-actions" role="group" aria-label="Keep or undo">
               <form
-                className="work-box"
+                className="follow-bar"
                 onSubmit={(e) => {
                   e.preventDefault();
                   void act('follow', () => call(iap().followUpBuild({ buildId, text: followUp })).then(() => setFollowUp('')), true);
                 }}
               >
-                <h2 className="work-box-title">Ask for changes</h2>
-                <textarea className="textarea" rows={2} value={followUp} onChange={(e) => setFollowUp(e.target.value)} placeholder="For example: also email the manager when someone is flagged" aria-label="What to change" />
-                <div className="btn-row">
-                  <button type="submit" className="btn" disabled={busy !== null || followUp.trim().length < 3}>
+                <input ref={followRef} className="input" value={followUp} onChange={(e) => setFollowUp(e.target.value)} placeholder="Ask for changes…" aria-label="What to change" />
+                {followUp.trim().length >= 3 && (
+                  <button type="submit" className="btn" disabled={busy !== null}>
                     Send to Claude
                   </button>
-                </div>
+                )}
               </form>
-            </>
+              <span className="action-sep" aria-hidden="true" />
+              <button type="button" className="btn btn-ghost btn-sm" aria-expanded={noteOpen} onClick={() => setNoteOpen((o) => !o)}>
+                Note
+              </button>
+              <button type="button" className="btn" disabled={busy !== null} title="Throw this change away. The work folder stays on disk." onClick={() => void act('discard', () => call(iap().abandonBuild({ buildId, reason: note.trim() || 'Undone from the review.' })))}>
+                Undo
+              </button>
+              <button type="button" className="btn btn-primary" disabled={busy !== null} onClick={() => void act('keep', () => call(iap().completeBuild({ buildId, note: keepNote(b!, note) })))}>
+                Keep
+              </button>
+              {noteOpen && <input className="input keep-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="A note for the record, saved when you keep or undo" aria-label="Note" autoFocus />}
+            </div>
           )}
-          {b && b.status === 'completed' && (
-            <div className="work-box">
-              <h2 className="work-box-title">Kept</h2>
+          {b!.status === 'completed' && (
+            <div className="report-done">
+              <h3 className="report-title">Kept</h3>
               <p>
-                Saved on branch <span className="mono">{b.branch}</span>
-                {b.resultCommit ? (
+                Saved on branch <span className="mono">{b!.branch}</span>
+                {b!.resultCommit ? (
                   <>
                     {' '}
-                    as commit <span className="mono">{b.resultCommit.slice(0, 7)}</span>
+                    as commit <span className="mono">{b!.resultCommit.slice(0, 7)}</span>
                   </>
                 ) : null}
                 . Merge it into your main branch when you are ready; nothing was merged or pushed for you.
               </p>
             </div>
           )}
-          {b && (
-            <details className="work-box work-details">
-              <summary>Details</summary>
-              <dl className="kv-list">
-                <dt>Kind</dt>
-                <dd>{b.kind === 'bugfix' ? 'Bug fix' : b.kind === 'ui_polish' ? 'UI polish' : 'Feature'}</dd>
-                {b.branch && (
-                  <>
-                    <dt>Branch</dt>
-                    <dd className="mono">{b.branch}</dd>
-                  </>
-                )}
-                {b.worktree && (
-                  <>
-                    <dt>Work folder</dt>
-                    <dd className="mono">{b.worktree}</dd>
-                  </>
-                )}
-                {b.agent && (
-                  <>
-                    <dt>Model</dt>
-                    <dd>{b.agent.model}</dd>
-                  </>
-                )}
-              </dl>
-            </details>
-          )}
-        </aside>
-      </div>
+          <details className="report-steps">
+            <summary>Details</summary>
+            <dl className="kv-list">
+              <dt>Kind</dt>
+              <dd>{b!.kind === 'bugfix' ? 'Bug fix' : b!.kind === 'ui_polish' ? 'UI polish' : 'Feature'}</dd>
+              {b!.branch && (
+                <>
+                  <dt>Branch</dt>
+                  <dd className="mono">{b!.branch}</dd>
+                </>
+              )}
+              {b!.worktree && (
+                <>
+                  <dt>Work folder</dt>
+                  <dd className="mono">{b!.worktree}</dd>
+                </>
+              )}
+              {b!.agent && (
+                <>
+                  <dt>Model</dt>
+                  <dd>{b!.agent.model}</dd>
+                </>
+              )}
+              {b!.note && (
+                <>
+                  <dt>Note</dt>
+                  <dd>{b!.note}</dd>
+                </>
+              )}
+            </dl>
+          </details>
+        </section>
+      )}
     </article>
   );
 }

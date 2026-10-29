@@ -11,7 +11,7 @@ The specification lives in [`docs/spec/`](docs/spec/). Start with [`docs/IMPLEME
 
 Implemented and tested:
 
-- **Build** (M15): type what you want built or fixed and press Start. Claude Code's own engine does the work in a separate copy of your repository, and you watch its plan and each step live. Your approved checks run without asking; any other command waits for your OK in the app. Then you review the checks before and after and the diff, and keep the change (committed on its own branch), ask for changes, or discard it. Each task stops at its dollar limit within your monthly budget. The rail has four places: Build, Projects, Library and Settings.
+- **Build** (M15): type what you want built or fixed and press Start. Claude Code's own engine does the work in a separate copy of your repository, and you watch its plan and each step live. Your approved checks run without asking; any other command waits for your OK in the app. Then you get a report (M16): what happened in one line, checks passed, files and lines changed and the cost, the changed files with a coloured diff, the commands that ran, and what is left before it ships. Keep the change (committed on its own branch) or Undo it in one tap, or ask for changes. Each task stops at its dollar limit within your monthly budget. The rail has four places: Build, Projects, Library and Settings.
 
 - A Windows desktop app (Electron) with project creation, workflow runs with explicit states and blockers, an activity log, dark/light/system themes, a frosted-glass look, and a recovery screen for a damaged database.
 - A **read-only inventory of your Claude Code tools** (plugins, skills, commands, subagents, hooks, MCP servers) with conflict detection, on the Tools screen and in `iap tools scan`.
