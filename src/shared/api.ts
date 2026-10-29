@@ -166,6 +166,9 @@ export interface IapApi {
   buildLive(input: { buildId: string; since?: number }): Promise<Result<LiveState | null>>;
   answerBuildQuestion(input: { buildId: string; approvalId: string; allow: boolean }): Promise<Result<null>>;
   stopBuild(buildId: string): Promise<Result<null>>;
+  /** M17 M: holds running work before its next step, and lets it carry on. */
+  pauseBuild(buildId: string): Promise<Result<null>>;
+  resumeBuild(buildId: string): Promise<Result<null>>;
   recentBuilds(): Promise<Result<RecentBuild[]>>;
   /** Live preview (M16 H): the dev server or static page of a task's worktree. */
   previewState(buildId: string): Promise<Result<PreviewState>>;
@@ -340,6 +343,8 @@ export const IAP_METHODS = [
   'buildLive',
   'answerBuildQuestion',
   'stopBuild',
+  'pauseBuild',
+  'resumeBuild',
   'recentBuilds',
   'previewState',
   'startPreview',

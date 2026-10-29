@@ -701,6 +701,16 @@ export class AppService {
         if (!this.live.stop(str(buildId, 'Build id')!)) throw new ValidationError('This work is not running.');
         return null;
       }),
+    pauseBuild: (buildId) =>
+      wrap(() => {
+        if (!this.live.pause(str(buildId, 'Build id')!)) throw new ValidationError('This work is not running, or is already paused.');
+        return null;
+      }),
+    resumeBuild: (buildId) =>
+      wrap(() => {
+        if (!this.live.resume(str(buildId, 'Build id')!)) throw new ValidationError('This work is not paused.');
+        return null;
+      }),
     recentBuilds: () =>
       wrap(() => {
         const ws = this.workspace();

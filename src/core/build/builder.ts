@@ -167,6 +167,7 @@ export class Builder {
         options.hooks?.emit({ kind: 'step', tool: 'Setup', target: options.setup, ok: r.status === 'passed', note: r.status === 'passed' ? '' : r.output.slice(-600) });
         this.ws.updateBuild(buildId, {}, { type: 'build.setup', payload: { command: options.setup, status: r.status, exitCode: r.exitCode } });
       }
+      await options.hooks?.gate?.();
       if (build.checks.length) options.hooks?.emit({ kind: 'phase', text: 'Running the checks before any change' });
       await this.runChecks(buildId, 'baseline', options.hooks);
       return this.detail(buildId);
@@ -211,6 +212,7 @@ export class Builder {
     return this.exclusive(buildId, async () => {
       const build = this.ws.getBuild(buildId);
       if (build.status !== 'in_progress' && build.status !== 'review') throw new ValidationError('Start the work before verifying it.');
+      await hooks?.gate?.();
       hooks?.emit({ kind: 'phase', text: 'Checking the result' });
       const final = await this.runChecks(buildId, 'verify', hooks);
       const diff = await diffWorktree(build.worktree!, build.baseCommit!);

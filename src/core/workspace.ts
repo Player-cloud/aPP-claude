@@ -945,6 +945,8 @@ export const SETTINGS = {
   glass: { values: ['on', 'off'], default: 'on' },
   // Monthly cap in US dollars for billable model calls. "none" = no real calls (DEC-017).
   budget: { values: ['none', '20', '50', '100'], default: 'none' },
+  // The first-run tour of the rail on the Build screen (M17 N, DEC-034).
+  tour: { values: ['new', 'done'], default: 'new' },
 } as const satisfies Record<string, { values: readonly string[]; default: string }>;
 export type SettingKey = keyof typeof SETTINGS;
 export type Settings = { [K in SettingKey]: (typeof SETTINGS)[K]['values'][number] };
