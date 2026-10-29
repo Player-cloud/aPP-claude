@@ -6,7 +6,7 @@
 // site, or the file-based routes and route paths of an app. Each picture is a
 // real capture; a page that did not exist before has no "before" picture.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, rmdirSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
 import { request } from 'node:http';
 import { join, relative, sep } from 'node:path';
 import type { PreviewPlan } from './preview.ts';
@@ -125,6 +125,38 @@ export function routeSlug(route: string): string {
     .toLowerCase()
     .slice(0, 60);
   return s || 'home';
+}
+
+/**
+ * The copy of the code before the change has no installed packages, so a dev
+ * server could not start there. It borrows the task's own node_modules
+ * through a link (a junction on Windows, which needs no special rights).
+ * The packages may be a little newer than the old code expects; they are
+ * never changed, and the link is removed with `unsharePackages`.
+ */
+export function sharePackages(from: string, to: string): boolean {
+  const source = join(from, 'node_modules');
+  const link = join(to, 'node_modules');
+  if (!existsSync(source) || existsSync(link)) return false;
+  symlinkSync(source, link, process.platform === 'win32' ? 'junction' : 'dir');
+  return true;
+}
+
+/** Removes only the link, never what it points to, so removing the copy cannot reach the task's packages. */
+export function unsharePackages(dir: string): void {
+  const link = join(dir, 'node_modules');
+  let st;
+  try {
+    st = lstatSync(link);
+  } catch {
+    return;
+  }
+  if (!st.isSymbolicLink()) return;
+  try {
+    unlinkSync(link);
+  } catch {
+    rmdirSync(link);
+  }
 }
 
 /** The HTTP status a local page answers with, or 0 when nothing answers. */

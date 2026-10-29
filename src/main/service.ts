@@ -17,7 +17,7 @@ import { detectSetup } from '../core/build/checks.ts';
 import { runClaudeCode, type QueryFn } from '../core/build/claudeCode.ts';
 import { LiveRuns, type AgentHooks } from '../core/build/live.ts';
 import { detectPreview, Previews, type PreviewPlan } from '../core/build/preview.ts';
-import { capturePages, findRoutes, type PageSet } from '../core/build/pages.ts';
+import { capturePages, findRoutes, sharePackages, unsharePackages, type PageSet } from '../core/build/pages.ts';
 import { git } from '../core/build/git.ts';
 import { Releaser, type ReleaseInput } from '../core/release/releaser.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
@@ -842,9 +842,13 @@ export class AppService {
         try {
           if (build.repoPath && build.baseCommit) {
             // A detached copy of the code before the change; the person's checkout is never touched.
-            if (existsSync(baseDir)) await git(build.repoPath, ['worktree', 'remove', '--force', baseDir]).catch(() => undefined);
+            if (existsSync(baseDir)) {
+              unsharePackages(baseDir);
+              await git(build.repoPath, ['worktree', 'remove', '--force', baseDir]).catch(() => undefined);
+            }
             await git(build.repoPath, ['worktree', 'add', '--detach', baseDir, build.baseCommit]);
             const basePlan = detectPreview(baseDir);
+            if (basePlan?.kind === 'script') sharePackages(build.worktree, baseDir);
             if (!basePlan) before = { url: null, note: 'Before this change there was nothing to preview.' };
             else {
               const st = await this.startApprovedPreview(baseKey, `${build.title} (before the change)`, basePlan);
@@ -868,7 +872,10 @@ export class AppService {
           return set;
         } finally {
           await this.previews.stop(baseKey);
-          if (existsSync(baseDir) && build.repoPath) await git(build.repoPath, ['worktree', 'remove', '--force', baseDir]).catch(() => undefined);
+          if (existsSync(baseDir) && build.repoPath) {
+            unsharePackages(baseDir);
+            await git(build.repoPath, ['worktree', 'remove', '--force', baseDir]).catch(() => undefined);
+          }
         }
       }),
     pageSet: (buildId) =>
