@@ -1949,6 +1949,31 @@ button.status-pill {
 .palette-empty {
   padding: var(--space-3);
 }
+.palette-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-hint {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-error {
+  margin: var(--space-2) var(--space-3) 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+.palette-foot {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--glass-border);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
 
 /* Command Centre */
 .quick-actions {
@@ -3801,4 +3826,126 @@ button.status-pill {
 }
 .trouble p {
   margin: 0 0 var(--space-2);
+}
+
+/* ---- M17 K: to-dos kept from "Before it ships" (DEC-034) ---- */
+.todo-list.tracked li {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+}
+.todo-list.tracked input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent-fill);
+}
+.todo-list.tracked li[data-status="done"] .todo-text {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.todo-text {
+  cursor: default;
+}
+.todo-list.tracked .todo-text {
+  cursor: pointer;
+}
+.todo-from {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+.project-todos {
+  margin-top: var(--space-4);
+}
+
+/* ---- M17 K: the outcomes board (DEC-034) ---- */
+.outcome-board {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+.outcome-group-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+details.outcome-group > summary {
+  cursor: pointer;
+}
+.outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.outcome {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.outcome[data-selected="true"] {
+  border-color: var(--accent-fill);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-fill) 35%, transparent);
+}
+.outcome-main {
+  display: grid;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+.outcome-main:focus-visible {
+  outline: 2px solid var(--accent-fill);
+  outline-offset: 2px;
+}
+.outcome-picture {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  object-position: top;
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+}
+.outcome-nopicture {
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.outcome-title {
+  font-weight: 600;
+}
+.outcome-meta {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+.outcome-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.outcome-todos {
+  color: var(--warn);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.outcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
 }

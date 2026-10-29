@@ -12,10 +12,12 @@ export type { Finding, Severity } from '../core/conflicts.ts';
 export type { PlanningOverview, EgmStatus } from '../core/planner.ts';
 import type { BuildDetail, BuildInput } from '../core/build/builder.ts';
 import type { Diff } from '../core/build/git.ts';
-import type { Build } from '../core/workspace.ts';
+import type { Build, Todo, TodoStatus } from '../core/workspace.ts';
+import type { SearchHit } from '../core/search.ts';
+export type { SearchHit } from '../core/search.ts';
 export type { BuildDetail, BuildInput } from '../core/build/builder.ts';
 export type { Diff, ChangedFile } from '../core/build/git.ts';
-export type { Build, BuildAgentRun, CheckRun } from '../core/workspace.ts';
+export type { Build, BuildAgentRun, CheckRun, Todo, TodoStatus } from '../core/workspace.ts';
 export type { Risk } from '../core/build/review.ts';
 export type { Check } from '../core/build/checks.ts';
 export type { LiveEvent, LiveState } from '../core/build/live.ts';
@@ -166,16 +168,24 @@ export interface IapApi {
   buildLive(input: { buildId: string; since?: number }): Promise<Result<LiveState | null>>;
   answerBuildQuestion(input: { buildId: string; approvalId: string; allow: boolean }): Promise<Result<null>>;
   stopBuild(buildId: string): Promise<Result<null>>;
+  /** M17 K: what is left before changes ship, ticked off or turned into a new task. */
+  listTodos(input: { projectId?: string; buildId?: string; status?: TodoStatus }): Promise<Result<Todo[]>>;
+  setTodoDone(input: { id: string; done: boolean }): Promise<Result<Todo>>;
+  todoToTask(id: string): Promise<Result<Build>>;
   /** M17 M: holds running work before its next step, and lets it carry on. */
   pauseBuild(buildId: string): Promise<Result<null>>;
   resumeBuild(buildId: string): Promise<Result<null>>;
   recentBuilds(): Promise<Result<RecentBuild[]>>;
+  /** M17 L: tasks, changed files, open to-dos and lessons that contain every word typed. */
+  searchWork(query: string): Promise<Result<SearchHit[]>>;
   /** Live preview (M16 H): the dev server or static page of a task's worktree. */
   previewState(buildId: string): Promise<Result<PreviewState>>;
   /** Asks for approval in a native dialog the first time, then waits until the page answers. */
   startPreview(buildId: string): Promise<Result<PreviewState>>;
   /** A PNG data URL of the page at that size. */
   capturePreview(input: { buildId: string; width?: number; height?: number }): Promise<Result<string>>;
+  /** M17 K: the task's latest preview picture as a PNG data URL, or null when none was taken. */
+  buildPicture(buildId: string): Promise<Result<string | null>>;
   openPreview(buildId: string): Promise<Result<null>>;
   stopPreview(buildId: string): Promise<Result<null>>;
   /** Releases (M7): quality gate and ship-check. Preparing a release never deploys it. */
@@ -343,12 +353,17 @@ export const IAP_METHODS = [
   'buildLive',
   'answerBuildQuestion',
   'stopBuild',
+  'listTodos',
+  'setTodoDone',
+  'todoToTask',
   'pauseBuild',
   'resumeBuild',
   'recentBuilds',
+  'searchWork',
   'previewState',
   'startPreview',
   'capturePreview',
+  'buildPicture',
   'openPreview',
   'stopPreview',
   'listReleases',

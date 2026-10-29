@@ -299,7 +299,7 @@ export function App() {
           </ol>
           <button type="button" className="topbar-search" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Control+K">
             <Icon name="search" size={16} />
-            <span className="topbar-search-text">Search projects or go to…</span>
+            <span className="topbar-search-text">Search tasks, files and to-dos…</span>
             <kbd>Ctrl K</kbd>
           </button>
           <div className="topbar-actions">
@@ -376,6 +376,16 @@ export function App() {
         onGo={go}
         onOpen={openProject}
         onCreate={() => startCreating()}
+        project={projectId && projectName ? { id: projectId, name: projectName } : null}
+        openBuild={openBuild}
+        onOpenBuild={(id) => {
+          go('home');
+          setOpenBuild(id);
+        }}
+        onLessons={() => {
+          go('preferences');
+          setPrefTab('lessons');
+        }}
       />
     </div>
   );
