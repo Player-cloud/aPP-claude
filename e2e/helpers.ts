@@ -57,7 +57,9 @@ const contrast = (a: RGB, b: RGB) => {
  */
 export async function contrastFailures(app: ElectronApplication, page: Page): Promise<{ failures: ContrastFailure[]; checked: number }> {
   await page.evaluate(() => document.body.style.setProperty('visibility', 'hidden'));
-  await page.waitForTimeout(150);
+  // Two frames, so the capture never still holds the app's own pixels.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await page.waitForTimeout(250);
   const shot = await app.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]!;
     const img = await win.webContents.capturePage();
