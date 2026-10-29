@@ -173,7 +173,7 @@ test('M2-AC5: a corrupt database shows a recovery screen and changes nothing unt
     await page.getByRole('button', { name: 'Move it aside and start fresh' }).click();
     await page.getByText(/The damaged database was kept at/).waitFor();
     await page.getByRole('button', { name: 'Open the new workspace' }).click();
-    await page.getByLabel('What do you want to build?').waitFor();
+    await page.getByRole('textbox', { name: 'What do you want to build?' }).waitFor();
   } finally {
     await app.close();
   }

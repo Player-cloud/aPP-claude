@@ -887,10 +887,9 @@ export function BuildHome({ projects, agent, onProjectsChanged, openBuild, onOpe
   return (
     <div className="build-home">
       {empty ? (
-        <section className="build-hello" aria-labelledby="hello-title">
-          <h1 className="build-hello-title" id="hello-title">
-            What do you want to build?
-          </h1>
+        // Not a labelled region: the message bar's box already carries this name.
+        <div className="build-hello">
+          <h1 className="build-hello-title">What do you want to build?</h1>
           <p className="muted">Say it in one sentence. Claude works in a separate copy of your code, and you see every step.</p>
           <div className="chips" aria-label="Examples">
             {EXAMPLES.map((x) => (
@@ -899,7 +898,7 @@ export function BuildHome({ projects, agent, onProjectsChanged, openBuild, onOpe
               </button>
             ))}
           </div>
-        </section>
+        </div>
       ) : (
         <section aria-labelledby="work-title">
           <h2 className="card-title" id="work-title">
