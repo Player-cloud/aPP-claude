@@ -11,6 +11,7 @@ import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { CanvasFrame } from './Canvas.tsx';
+import { HelperCards } from './Helpers.tsx';
 import { Alert, Badge, relativeTime, type Tone } from '../ui.tsx';
 
 /** What a task's state means to the person, in their words. */
@@ -830,6 +831,12 @@ export function WorkView({
         <dl className="kv-mini">
           <dt>This task</dt>
           <dd>{simulated ? 'Free' : `$${cost.toFixed(2)}`}</dd>
+          {b.helpers?.length ? (
+            <>
+              <dt>Helpers</dt>
+              <dd>{b.helpers.length} · Free</dd>
+            </>
+          ) : null}
           {agent?.budgetUsd ? (
             <>
               <dt>This month</dt>
@@ -898,9 +905,18 @@ export function WorkView({
   // The steps column: how the work went, step by step, and the commands that ran.
   const stepsCol = b && (
     <div className="canvas-col" data-col="steps">
-      <h2 className="col-head">
-        Steps <span className="col-count">{steps}</span>
-      </h2>
+      {report && b.helpers?.length ? (
+        <>
+          <h2 className="col-head">
+            Helpers <span className="col-count">{b.helpers.length}</span>
+          </h2>
+          <HelperCards helpers={b.helpers} />
+        </>
+      ) : (
+        <h2 className="col-head">
+          Steps <span className="col-count">{steps}</span>
+        </h2>
+      )}
       {report ? (
         <section className="kcard">
           <details className="report-steps">

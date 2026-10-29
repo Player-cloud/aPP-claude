@@ -18,6 +18,7 @@ import { renderMarkdown, type PlanChange, type PlanDoc, type PlanKind, type Plan
 import type { Check, CheckResult } from './build/checks.ts';
 import type { ChangedFile } from './build/git.ts';
 import type { Risk } from './build/review.ts';
+import type { HelperRun } from './build/helpers.ts';
 import type { AgentStep } from './build/agent.ts';
 import type { DriftKind, Gate, GateException, ReleaseEvidence, ReleasePlan } from './release/gates.ts';
 import type { AssessmentReport, AssessmentScope } from './assess/assessor.ts';
@@ -34,7 +35,7 @@ import type { SkillProposal } from './learn/skills.ts';
 import type { AddonReview } from './learn/addons.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -739,6 +740,10 @@ const MIGRATIONS: Record<number, string> = {
     CREATE TRIGGER todos_no_delete BEFORE DELETE ON todos
       BEGIN SELECT RAISE(ABORT, 'to-dos are never deleted'); END;
   `,
+  18: `
+    -- M18 part 4 (DEC-036): what the helper agents found when the task was last checked.
+    ALTER TABLE builds ADD COLUMN helpers TEXT;
+  `,
 };
 
 export type TodoStatus = 'open' | 'done' | 'cleared' | 'dropped';
@@ -860,6 +865,8 @@ export interface Build {
   source: BuildSource | null;
   /** Platform work (M13): the person's separate approval for changes to protected areas. */
   protectedApproval: ProtectedApproval | null;
+  /** M18: the helper agents' results from the last check (scan, security, tests, spec drift). */
+  helpers: HelperRun[] | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -1593,7 +1600,7 @@ export class Workspace {
   /** Updates a build. Its definition (goal, checks, components) can only change while it is a draft. */
   updateBuild(
     id: string,
-    patch: Partial<Pick<Build, 'title' | 'goal' | 'requirementIds' | 'components' | 'checks' | 'repro' | 'status' | 'repoPath' | 'branch' | 'worktree' | 'baseCommit' | 'agent' | 'changedFiles' | 'risks' | 'note' | 'reportPath' | 'completedAt' | 'resultCommit' | 'referenceIds' | 'motion' | 'uiAudit' | 'protectedApproval'>>,
+    patch: Partial<Pick<Build, 'title' | 'goal' | 'requirementIds' | 'components' | 'checks' | 'repro' | 'status' | 'repoPath' | 'branch' | 'worktree' | 'baseCommit' | 'agent' | 'changedFiles' | 'risks' | 'note' | 'reportPath' | 'completedAt' | 'resultCommit' | 'referenceIds' | 'motion' | 'uiAudit' | 'protectedApproval' | 'helpers'>>,
     event?: { type: string; payload: Record<string, unknown> },
   ): Build {
     const build = this.getBuild(id);
@@ -1605,7 +1612,7 @@ export class Workspace {
         .prepare(
           `UPDATE builds SET title = ?, goal = ?, requirement_ids = ?, components = ?, checks = ?, repro = ?, status = ?, repo_path = ?, branch = ?, worktree = ?,
              base_commit = ?, agent = ?, changed_files = ?, risks = ?, note = ?, report_path = ?, completed_at = ?, result_commit = ?,
-             reference_ids = ?, motion = ?, ui_audit = ?, protected_approval = ?, updated_at = ? WHERE id = ?`,
+             reference_ids = ?, motion = ?, ui_audit = ?, protected_approval = ?, helpers = ?, updated_at = ? WHERE id = ?`,
         )
         .run(
           redactString(n.title),
@@ -1630,6 +1637,7 @@ export class Workspace {
           n.motion ? 1 : 0,
           n.uiAudit ? JSON.stringify(n.uiAudit) : null,
           n.protectedApproval ? JSON.stringify(redact(n.protectedApproval)) : null,
+          n.helpers ? JSON.stringify(redact(n.helpers)) : null,
           this.timestamp(),
           id,
         );
@@ -2632,6 +2640,7 @@ function toBuild(row: Record<string, unknown>): Build {
     uiAudit: json<UiAudit>(row.ui_audit),
     source: json<BuildSource>(row.source),
     protectedApproval: json<ProtectedApproval>(row.protected_approval),
+    helpers: json<HelperRun[]>(row.helpers),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     completedAt: (row.completed_at as string | null) ?? null,

@@ -1331,7 +1331,13 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     // The step list is folded away under the report.
     await report.getByText(/How Claude did it · \d+ steps?/).waitFor();
     // The task is a canvas (M18): the ask and Claude beside the steps, the evidence and the result.
-    assert.deepEqual(await report.locator('.col-head').evaluateAll((els) => els.map((e) => e.firstChild?.textContent?.trim())), ['Thread', 'Steps', 'Evidence']);
+    assert.deepEqual(await report.locator('.col-head').evaluateAll((els) => els.map((e) => e.firstChild?.textContent?.trim())), ['Thread', 'Helpers', 'Evidence']);
+    // The helpers (M18 parts 4-5) read the real worktree, diff and check output.
+    await report.getByRole('region', { name: 'Repository scan' }).getByText(/^\d+ files?( \(mostly .*\))?, \d+ test files?; this task changed \d+\.$/).waitFor();
+    await report.getByRole('region', { name: 'Security' }).getByText('Nothing risky found in the added lines.').waitFor();
+    await report.getByRole('region', { name: 'Tests' }).getByText('No checks ran.').waitFor();
+    await report.getByRole('region', { name: 'Spec drift' }).getByText(/^Compared with the ask/).waitFor();
+    await report.getByRole('region', { name: 'Claude' }).getByText('4 · Free').waitFor();
     await report.getByRole('region', { name: 'Your ask' }).getByText('Add a page that lists members').waitFor();
     await report.getByRole('region', { name: 'Claude' }).getByText('Simulated agent').waitFor();
     await report.getByRole('region', { name: 'Waiting for you' }).getByText('Keep or undo this change').waitFor();

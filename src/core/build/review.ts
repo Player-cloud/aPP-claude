@@ -27,7 +27,9 @@ export interface Risk {
     | 'motion_performance'
     | 'manual_check'
     // Platform work (M13, DEC-029)
-    | 'protected_change';
+    | 'protected_change'
+    // The security helper's serious findings (M18, DEC-036)
+    | 'security';
   detail: string;
 }
 

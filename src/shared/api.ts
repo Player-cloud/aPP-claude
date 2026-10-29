@@ -19,6 +19,7 @@ export type { BuildDetail, BuildInput } from '../core/build/builder.ts';
 export type { Diff, ChangedFile } from '../core/build/git.ts';
 export type { Build, BuildAgentRun, CheckRun, Todo, TodoStatus } from '../core/workspace.ts';
 export type { Risk } from '../core/build/review.ts';
+export type { HelperFinding, HelperId, HelperRun, HelperSeverity, TestCase } from '../core/build/helpers.ts';
 export type { Check } from '../core/build/checks.ts';
 export type { LiveEvent, LiveState } from '../core/build/live.ts';
 export type { PreviewKind, PreviewPlan, PreviewState } from '../core/build/preview.ts';
