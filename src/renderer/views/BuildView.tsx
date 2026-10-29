@@ -6,7 +6,7 @@
 // is left before it ships, and Keep or Undo in one tap.
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { AgentStatus, Build, BuildDetail, ChangedFile, Diff, LiveEvent, LiveState, Project, RecentBuild } from '../../shared/api.ts';
-import { formatDuration, groupFiles, keepNote, makeReport, type ReportCommand, type ReportTone } from '../../shared/report.ts';
+import { formatDuration, groupFiles, keepNote, makeReport, statusLine, type ReportCommand, type ReportTone } from '../../shared/report.ts';
 import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
 import { Alert, Badge, relativeTime, type Tone } from '../ui.tsx';
@@ -45,15 +45,17 @@ export function Composer({
   agent,
   onStarted,
   onProjectCreated,
+  initial = '',
 }: {
   projects: Project[];
   projectId?: string;
   agent: AgentStatus | null;
+  initial?: string;
   onStarted: (build: Build) => void;
   onProjectCreated?: () => void;
 }) {
   const usable = projects.filter((p) => p.kind !== 'maintenance' && p.status === 'active');
-  const [goal, setGoal] = useState('');
+  const [goal, setGoal] = useState(initial);
   const [chosen, setChosen] = useState(projectId ?? usable[0]?.id ?? '');
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -95,25 +97,39 @@ export function Composer({
     }
   };
 
+  // The box grows with the text, up to a few lines, like a chat message bar.
+  const grow = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  };
+
   return (
     <form className="task-composer" onSubmit={submit} aria-label="Start a task">
-      <label className="task-composer-title" htmlFor={`goal-${projectId ?? 'any'}`}>
+      <label className="visually-hidden" htmlFor={`goal-${projectId ?? 'any'}`}>
         What do you want to build?
       </label>
-      <textarea
-        id={`goal-${projectId ?? 'any'}`}
-        className="textarea task-composer-input"
-        rows={3}
-        placeholder="For example: add a page that lists sessional workers with their holiday hours, or fix the crash when the rota is empty"
-        value={goal}
-        onChange={(e) => setGoal(e.target.value)}
-        onKeyDown={onKey}
-        disabled={busy}
-      />
+      <div className="task-composer-bar">
+        <textarea
+          id={`goal-${projectId ?? 'any'}`}
+          className="task-composer-input"
+          rows={1}
+          placeholder={projectId ? 'What should Claude build or fix here?' : 'What do you want to build or fix?'}
+          value={goal}
+          onChange={(e) => {
+            setGoal(e.target.value);
+            grow(e.target);
+          }}
+          onKeyDown={onKey}
+          disabled={busy}
+        />
+        <button type="submit" className="btn btn-primary task-composer-go" disabled={busy || goal.trim().length < 3}>
+          {busy ? 'Starting…' : 'Start'}
+        </button>
+      </div>
       <div className="task-composer-row">
         {!projectId && usable.length > 0 && (
           <label className="task-composer-project">
-            <span>Project</span>
+            <span className="visually-hidden">Project</span>
             <select className="select" value={chosen} onChange={(e) => setChosen(e.target.value)} aria-label="Project">
               {usable.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -134,16 +150,14 @@ export function Composer({
             {budget.text}
           </span>
         )}
-        <span className="task-composer-spacer" />
         <kbd className="task-composer-kbd">Ctrl Enter</kbd>
-        <button type="submit" className="btn btn-primary" disabled={busy || goal.trim().length < 3}>
-          {busy ? 'Starting…' : 'Start'}
-        </button>
       </div>
       {error && <Alert tone="danger">{error}</Alert>}
     </form>
   );
 }
+
+const EXAMPLES = ['Add a page that lists members with their roles', 'Fix the crash when the rota is empty', 'Add a CSV export to the holiday report'];
 
 /** Tasks as rows: what, where, when, state. */
 export function WorkList({ builds, onOpen, showProject = true }: { builds: RecentBuild[]; onOpen: (id: string) => void; showProject?: boolean }) {
@@ -533,6 +547,7 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
       b && <RecordedSteps build={b} />
     );
   const steps = b?.agent?.steps.length ?? live.events.filter((e) => e.kind === 'step').length;
+  const now = running ? statusLine(live.events, live.state?.pending ?? null) : null;
 
   return (
     <article className="work-view" aria-label={b?.title ?? 'Task'}>
@@ -542,7 +557,13 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
         </button>
         <div className="work-head-text">
           <h1 className="page-title work-title">{b?.title ?? 'Loading…'}</h1>
-          {b && <p className="subtle">{b.goal !== b.title ? b.goal : ''}</p>}
+          {b && b.goal !== b.title && <p className="subtle">{b.goal}</p>}
+          {now && (
+            <p className="status-line" role="status" data-waiting={now.waiting}>
+              <span className="status-line-dot" aria-hidden="true" />
+              {now.text}
+            </p>
+          )}
         </div>
         <div className="work-head-actions">
           {status && <Badge tone={status.tone}>{status.label}</Badge>}
@@ -721,6 +742,8 @@ export function WorkView({ buildId, onBack, onChanged }: { buildId: string; onBa
 export function BuildHome({ projects, agent, onProjectsChanged, openBuild, onOpenBuild }: { projects: Project[] | null; agent: AgentStatus | null; onProjectsChanged: () => void; openBuild: string | null; onOpenBuild: (id: string | null) => void }) {
   const [builds, setBuilds] = useState<RecentBuild[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [draft, setDraftState] = useState({ n: 0, text: '' });
+  const setDraft = (text: string) => setDraftState((d) => ({ n: d.n + 1, text }));
   const reload = useCallback(() => {
     call(iap().recentBuilds())
       .then((b) => {
@@ -740,16 +763,35 @@ export function BuildHome({ projects, agent, onProjectsChanged, openBuild, onOpe
   }, [openBuild, builds, reload]);
 
   if (openBuild) return <WorkView buildId={openBuild} onBack={() => onOpenBuild(null)} />;
+  const empty = builds !== null && builds.length === 0;
   return (
     <div className="build-home">
-      <Composer projects={projects ?? []} agent={agent} onStarted={(b) => onOpenBuild(b.id)} onProjectCreated={onProjectsChanged} />
-      <section aria-labelledby="work-title">
-        <h2 className="card-title" id="work-title">
-          Your work
-        </h2>
-        {error && <Alert tone="danger">{error}</Alert>}
-        {builds && <WorkList builds={builds} onOpen={onOpenBuild} />}
-      </section>
+      {empty ? (
+        <section className="build-hello" aria-labelledby="hello-title">
+          <h1 className="build-hello-title" id="hello-title">
+            What do you want to build?
+          </h1>
+          <p className="muted">Say it in one sentence. Claude works in a separate copy of your code, and you see every step.</p>
+          <div className="chips" aria-label="Examples">
+            {EXAMPLES.map((x) => (
+              <button key={x} type="button" className="chip" onClick={() => setDraft(x)}>
+                {x}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section aria-labelledby="work-title">
+          <h2 className="card-title" id="work-title">
+            Your work
+          </h2>
+          {error && <Alert tone="danger">{error}</Alert>}
+          {builds && <WorkList builds={builds} onOpen={onOpenBuild} />}
+        </section>
+      )}
+      <div className="composer-dock">
+        <Composer key={draft.n} initial={draft.text} projects={projects ?? []} agent={agent} onStarted={(b) => onOpenBuild(b.id)} onProjectCreated={onProjectsChanged} />
+      </div>
     </div>
   );
 }

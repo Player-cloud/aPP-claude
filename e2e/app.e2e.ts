@@ -89,7 +89,11 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     await page.getByRole('button', { name: 'Build', exact: true }).click();
     await page.getByRole('form', { name: 'Start a task' }).getByLabel('What do you want to build?').waitFor();
     assert.equal(await page.getByRole('combobox', { name: 'Project' }).inputValue() !== '', true);
-    await page.getByText('Nothing yet. Your tasks appear here').waitFor();
+    // With no work yet, Build greets with examples; one fills the message bar. There is no side panel here.
+    await page.getByRole('heading', { name: 'What do you want to build?' }).waitFor();
+    assert.equal(await page.locator('.side').count(), 0);
+    await page.getByRole('button', { name: 'Fix the crash when the rota is empty' }).click();
+    assert.equal(await page.getByRole('textbox', { name: 'What do you want to build?' }).inputValue(), 'Fix the crash when the rota is empty');
     await shot(page, '09-home-dark-1280');
     await page.keyboard.press('Control+k');
     await page.getByRole('combobox', { name: 'Search projects or go to' }).fill('recipe');
@@ -104,7 +108,8 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
   // Restart: everything is still there (FR-APP-002).
   ({ app, page } = await launch(home));
   try {
-    // The project is listed in the side panel's explorer.
+    // The project is listed in the side panel's explorer (shown under Projects; Build has no side panel).
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await page.getByRole('navigation', { name: 'Projects' }).getByRole('button', { name: 'Recipe sharing app' }).click();
     await page.getByText('Run tracker (optional)').click();
     await page.getByRole('article', { name: /Initial plan, Planned/ }).waitFor();

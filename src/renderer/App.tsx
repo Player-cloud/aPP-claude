@@ -195,11 +195,10 @@ export function App() {
     go('projects');
     setCreating({ idea });
   };
-  const sideSection: Section = section === 'home' ? 'projects' : section;
   const group = groupOf(section);
 
   return (
-    <div className="shell">
+    <div className={section === 'home' ? 'shell no-side' : 'shell'}>
       <a className="skip-link" href="#main">
         Skip to content
       </a>
@@ -216,28 +215,30 @@ export function App() {
         <RailButton label={SETTINGS_GROUP.label} icon={SETTINGS_GROUP.icon} current={group.id === 'settings'} onClick={() => go('settings')} />
       </nav>
 
-      <SidePanel
-        section={sideSection}
-        projects={projects}
-        selected={section === 'activity' ? activityProject : section === 'home' ? '' : projectId}
-        onSelect={(p) => {
-          if (section === 'activity') setActivityProject(p?.id ?? null);
-          else if (p) openProject(p.id, p.name);
-          else go('projects');
-        }}
-        onCreate={() => startCreating()}
-        toolScan={toolScan ?? null}
-        toolFilter={toolFilter}
-        onToolFilter={setToolFilter}
-        studioFilter={studioFilter}
-        onStudioFilter={setStudioFilter}
-        improvementFilter={improvementFilter}
-        onImprovementFilter={setImprovementFilter}
-        updateFilter={updateFilter}
-        onUpdateFilter={setUpdateFilter}
-        prefTab={prefTab}
-        onPrefTab={setPrefTab}
-      />
+      {section !== 'home' && (
+        <SidePanel
+          section={section}
+          projects={projects}
+          selected={section === 'activity' ? activityProject : projectId}
+          onSelect={(p) => {
+            if (section === 'activity') setActivityProject(p?.id ?? null);
+            else if (p) openProject(p.id, p.name);
+            else go('projects');
+          }}
+          onCreate={() => startCreating()}
+          toolScan={toolScan ?? null}
+          toolFilter={toolFilter}
+          onToolFilter={setToolFilter}
+          studioFilter={studioFilter}
+          onStudioFilter={setStudioFilter}
+          improvementFilter={improvementFilter}
+          onImprovementFilter={setImprovementFilter}
+          updateFilter={updateFilter}
+          onUpdateFilter={setUpdateFilter}
+          prefTab={prefTab}
+          onPrefTab={setPrefTab}
+        />
+      )}
 
       <div className="main">
         <header className="topbar glass">

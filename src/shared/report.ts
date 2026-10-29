@@ -1,7 +1,7 @@
 // The finished task as a report (M16, DEC-033): one headline, the numbers that
 // matter, what changed, the commands that ran, and what is left before the
 // change ships. Pure, so the renderer and the tests share it.
-import type { Build, ChangedFile, CheckRun } from './api.ts';
+import type { Build, ChangedFile, CheckRun, LiveEvent, LiveState } from './api.ts';
 
 export type ReportTone = 'ok' | 'warn' | 'danger' | 'neutral';
 
@@ -165,4 +165,26 @@ export function formatDuration(ms: number): string {
   if (ms < 60_000) return `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)} s`;
   const m = Math.floor(ms / 60_000);
   return `${m} m ${Math.round((ms % 60_000) / 1_000)} s`;
+}
+
+/** One line for what is happening now, like "Adding the members page · 3 of 5 done · 12 steps". */
+export function statusLine(events: LiveEvent[], pending: LiveState['pending']): { text: string; waiting: boolean } {
+  if (pending) return { text: 'Waiting for you: Claude wants to run a command', waiting: true };
+  const steps = events.filter((e) => e.kind === 'step').length;
+  let plan: Extract<LiveEvent, { kind: 'plan' }> | null = null;
+  let phase = '';
+  for (const e of events) {
+    if (e.kind === 'plan') plan = e;
+    if (e.kind === 'phase') phase = e.text;
+  }
+  const parts: string[] = [];
+  if (plan && plan.items.length) {
+    const doing = plan.items.find((i) => i.status === 'in_progress');
+    const done = plan.items.filter((i) => i.status === 'completed').length;
+    parts.push(doing?.text || phase || 'Working', `${done} of ${plan.items.length} done`);
+  } else {
+    parts.push(phase || 'Starting');
+  }
+  if (steps) parts.push(`${steps} ${steps === 1 ? 'step' : 'steps'}`);
+  return { text: parts.join(' · '), waiting: false };
 }

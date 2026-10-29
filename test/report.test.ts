@@ -1,8 +1,8 @@
 // M16 (DEC-033): the finished task as a report.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatDuration, groupFiles, keepNote, makeReport, splitShipList } from '../src/shared/report.ts';
-import type { Build, CheckRun } from '../src/shared/api.ts';
+import { formatDuration, groupFiles, keepNote, makeReport, splitShipList, statusLine } from '../src/shared/report.ts';
+import type { Build, CheckRun, LiveEvent } from '../src/shared/api.ts';
 
 const build = (over: Partial<Build> = {}): Build =>
   ({
@@ -104,4 +104,17 @@ test('groupFiles groups by folder and formatDuration reads naturally', () => {
   assert.equal(formatDuration(4_100), '4.1 s');
   assert.equal(formatDuration(42_000), '42 s');
   assert.equal(formatDuration(134_000), '2 m 14 s');
+});
+
+test('statusLine says what is happening now in one line', () => {
+  const ev = (e: Record<string, unknown>, seq: number) => ({ seq, at: '', ...e }) as unknown as LiveEvent;
+  assert.deepEqual(statusLine([], null), { text: 'Starting', waiting: false });
+  const events = [
+    ev({ kind: 'phase', text: 'Claude is working' }, 1),
+    ev({ kind: 'step', tool: 'Read', target: 'a.ts', ok: true, note: '' }, 2),
+    ev({ kind: 'plan', items: [{ text: 'Add the page', status: 'completed' }, { text: 'Write a test', status: 'in_progress' }, { text: 'Run checks', status: 'pending' }] }, 3),
+    ev({ kind: 'step', tool: 'Edit', target: 'a.ts', ok: true, note: '' }, 4),
+  ];
+  assert.deepEqual(statusLine(events, null), { text: 'Write a test · 1 of 3 done · 2 steps', waiting: false });
+  assert.equal(statusLine(events, { approvalId: 'x', detail: 'npm ci' } as never).waiting, true);
 });
