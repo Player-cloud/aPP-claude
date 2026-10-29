@@ -177,9 +177,12 @@ test('a version 1 database is migrated forward without losing data', (t) => {
 
 test('M17-K: to-dos follow the latest list: new items open, unlisted open items clear, done stays done, none deleted', (t) => {
   const { home, cleanup } = tempHome();
-  t.after(cleanup);
   const ws = Workspace.open(home);
-  t.after(() => ws.close());
+  // Close before removing the folder: Windows keeps an open database file locked.
+  t.after(() => {
+    ws.close();
+    cleanup();
+  });
   const p = ws.createProject({ name: 'P' });
   const b = ws.createBuild({ projectId: p.id, kind: 'feature', title: 'T', goal: 'G', requirementIds: [], components: [], checks: [], repro: null });
   const first = ws.syncTodos(b.id, [
