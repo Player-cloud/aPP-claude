@@ -180,6 +180,8 @@ export interface IapApi {
   startPreview(buildId: string): Promise<Result<PreviewState>>;
   /** A PNG data URL of the page at that size. */
   capturePreview(input: { buildId: string; width?: number; height?: number }): Promise<Result<string>>;
+  /** M17 K: the task's latest preview picture as a PNG data URL, or null when none was taken. */
+  buildPicture(buildId: string): Promise<Result<string | null>>;
   openPreview(buildId: string): Promise<Result<null>>;
   stopPreview(buildId: string): Promise<Result<null>>;
   /** Releases (M7): quality gate and ship-check. Preparing a release never deploys it. */
@@ -356,6 +358,7 @@ export const IAP_METHODS = [
   'previewState',
   'startPreview',
   'capturePreview',
+  'buildPicture',
   'openPreview',
   'stopPreview',
   'listReleases',

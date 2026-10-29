@@ -7,7 +7,8 @@ import { PlanningPanel } from './PlanningPanel.tsx';
 import { BuildPanel } from './BuildPanel.tsx';
 import { ReleasePanel } from './ReleasePanel.tsx';
 import { AssessmentPanel } from './AssessmentPanel.tsx';
-import { Composer, TodoItems, WorkList, WorkView } from './BuildView.tsx';
+import { Composer, TodoItems, WorkView } from './BuildView.tsx';
+import { OutcomeBoard } from './OutcomeBoard.tsx';
 import { Alert, Empty, formatDate, formatTime, needsPerson, StateBadge, stateLabel } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
@@ -286,6 +287,7 @@ function nextStep(project: Project, planning: PlanningOverview | null, runs: Run
 
 export function ProjectDetail({ projectId, onLoaded, agent }: { projectId: string; onLoaded: (name: string) => void; agent?: AgentStatus | null }) {
   const [openBuild, setOpenBuild] = useState<string | null>(null);
+  const [askOpen, setAskOpen] = useState(false);
   // Folded away unless opened, or a run is waiting for the person.
   const [trackerOpen, setTrackerOpen] = useState(false);
   const project = useAsync(() => call(iap().getProject(projectId)), [projectId]);
@@ -328,12 +330,19 @@ export function ProjectDetail({ projectId, onLoaded, agent }: { projectId: strin
     return (
       <WorkView
         buildId={openBuild}
-        onBack={() => setOpenBuild(null)}
+        onBack={() => {
+          setOpenBuild(null);
+          setAskOpen(false);
+        }}
         onChanged={() => {
           void builds.reload();
           void todos.reload();
         }}
-        onOpenTask={setOpenBuild}
+        onOpenTask={(id) => {
+          setAskOpen(false);
+          setOpenBuild(id);
+        }}
+        focusAsk={askOpen}
       />
     );
 
@@ -346,7 +355,20 @@ export function ProjectDetail({ projectId, onLoaded, agent }: { projectId: strin
       {p.kind !== 'maintenance' && (
         <section id="project-work" className="project-work" aria-label="Tasks">
           <Composer projects={[p]} projectId={p.id} agent={agent ?? null} onStarted={(b) => setOpenBuild(b.id)} />
-          {builds.data && builds.data.length > 0 && <WorkList builds={builds.data.map((b) => ({ ...b, projectName: p.name, running: false }))} onOpen={setOpenBuild} showProject={false} />}
+          {builds.data && (
+            <OutcomeBoard
+              builds={builds.data}
+              todos={todos.data ?? []}
+              onOpen={(id, ask) => {
+                setAskOpen(Boolean(ask));
+                setOpenBuild(id);
+              }}
+              onChanged={() => {
+                void builds.reload();
+                void todos.reload();
+              }}
+            />
+          )}
           {todos.data && todos.data.length > 0 && (
             <section className="card project-todos" aria-labelledby="todos-title">
               <h2 className="card-title" id="todos-title">

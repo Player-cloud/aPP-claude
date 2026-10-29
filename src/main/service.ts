@@ -3,6 +3,7 @@
 // treated as untrusted and validated here, the security boundary (ARCH §3.2):
 // UI controls are not relied on for authorization or validation.
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
@@ -420,6 +421,14 @@ export class AppService {
     });
   }
 
+  /** Where a task's latest preview picture is kept, next to its report. */
+  private picturePath(buildId: string): string {
+    const build = this.workspace().getBuild(buildId);
+    const dir = join(this.workspace().getProject(build.projectId).workspacePath, 'docs', 'builds');
+    mkdirSync(dir, { recursive: true });
+    return join(dir, `${build.id}.preview.png`);
+  }
+
   /** Starts a task from one sentence: the person approves the commands, then it runs in the background (M15). */
   private async startQuick(projectId: string, goal: string): Promise<Build> {
     this.agentEngine(); // Fails early when a budget is set but no key is stored.
@@ -788,7 +797,20 @@ export class AppService {
         if (!this.capturePage) throw new ValidationError('Pictures of the preview need the desktop app.');
         const width = Math.min(Math.max(Number(i.width) || 1280, 320), 2560);
         const height = Math.min(Math.max(Number(i.height) || 800, 240), 1600);
-        return await this.capturePage(url, { width, height });
+        const shot = await this.capturePage(url, { width, height });
+        // The latest picture stays with the task, for its card on the outcomes board (M17 K).
+        try {
+          const m = /^data:image\/png;base64,(.+)$/.exec(shot);
+          if (m) writeFileSync(this.picturePath(str(i.buildId, 'Build id')!), Buffer.from(m[1]!, 'base64'));
+        } catch {
+          /* a picture that cannot be kept is still shown */
+        }
+        return shot;
+      }),
+    buildPicture: (buildId) =>
+      wrap(() => {
+        const path = this.picturePath(str(buildId, 'Build id')!);
+        return existsSync(path) ? `data:image/png;base64,${readFileSync(path).toString('base64')}` : null;
       }),
     openPreview: (buildId) =>
       wrapAsync(async () => {

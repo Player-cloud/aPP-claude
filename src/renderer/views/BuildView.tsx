@@ -697,7 +697,20 @@ export function TodoItems({
   );
 }
 
-export function WorkView({ buildId, onBack, onChanged, onOpenTask }: { buildId: string; onBack: () => void; onChanged?: () => void; onOpenTask?: (buildId: string) => void }) {
+export function WorkView({
+  buildId,
+  onBack,
+  onChanged,
+  onOpenTask,
+  focusAsk = false,
+}: {
+  buildId: string;
+  onBack: () => void;
+  onChanged?: () => void;
+  onOpenTask?: (buildId: string) => void;
+  /** Opened to ask Claude for changes: the ask bar gets focus once the report is shown (M17 K). */
+  focusAsk?: boolean;
+}) {
   const [detail, setDetail] = useState<BuildDetail | null>(null);
   const [diff, setDiff] = useState<Diff | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -752,6 +765,11 @@ export function WorkView({ buildId, onBack, onChanged, onOpenTask }: { buildId: 
       setBusy(null);
     }
   };
+
+  const askReady = Boolean(report && b?.status === 'review');
+  useEffect(() => {
+    if (focusAsk && askReady) followRef.current?.focus();
+  }, [focusAsk, askReady]);
 
   const ask = (text: string) => {
     setFollowUp(text);

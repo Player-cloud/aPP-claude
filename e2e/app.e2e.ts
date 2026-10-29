@@ -1354,7 +1354,9 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     // The project page leads with the same composer and its own tasks.
     await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await page.getByRole('navigation', { name: 'Projects' }).getByRole('button', { name: 'Club HR' }).click();
-    await page.getByRole('region', { name: 'Tasks' }).getByRole('list', { name: 'Your work' }).getByRole('button', { name: /Add a page that lists members/ }).waitFor();
+    // Its tasks are an outcomes board (M17 K): the kept task's card shows the last picture of its page.
+    const kept = page.getByRole('region', { name: 'Tasks' }).getByRole('list', { name: 'Kept' });
+    await kept.getByRole('img', { name: 'The page from “Add a page that lists members”' }).waitFor();
     await shot(page, '38-project-tasks-dark-1280');
 
     // Settings holds the maintenance screens as tabs.
@@ -1543,7 +1545,29 @@ test('M17-K: what is left before it ships is kept as to-dos on the project, tick
     await page.waitForFunction(() => document.querySelectorAll('[aria-label="Left to do"] input[type=checkbox]').length === 1);
     // The other becomes a new task of its own.
     await left.getByRole('button', { name: /^Start a task for: No check commands were found/ }).click();
-    await page.getByRole('article', { name: /^No check commands were found/ }).getByRole('region', { name: 'Report' }).waitFor({ timeout: 30_000 });
+    const fromTodo = page.getByRole('article', { name: /^No check commands were found/ });
+    await fromTodo.getByRole('region', { name: 'Report' }).waitFor({ timeout: 30_000 });
+    await fromTodo.getByRole('button', { name: '← All work' }).click();
+
+    // On the board, selecting a card shows the actions for that task only.
+    const waiting = page.getByRole('list', { name: 'Waiting for you' });
+    const card = waiting.getByRole('button', { name: /^No check commands were found/ });
+    assert.equal(await page.getByRole('toolbar').count(), 0, 'no actions until a card is selected');
+    await card.click();
+    const tools = page.getByRole('toolbar', { name: /^Actions for No check commands were found/ });
+    assert.deepEqual(await tools.getByRole('button').allTextContents(), ['Open report', 'Ask Claude', 'Preview', 'Undo', 'Keep']);
+    await shot(page, '54-board-selected-light-1280');
+    // Ask Claude opens the report ready to type.
+    await tools.getByRole('button', { name: 'Ask Claude' }).click();
+    await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'What to change');
+    await fromTodo.getByRole('button', { name: '← All work' }).click();
+    await card.click();
+    await page.keyboard.press('Escape');
+    await tools.waitFor({ state: 'detached' });
+    await card.click();
+    await tools.getByRole('button', { name: 'Undo' }).click();
+    await page.getByRole('group').or(page.locator('details.outcome-group')).filter({ hasText: 'Undone' }).first().waitFor();
+    assert.equal(await page.getByRole('list', { name: 'Waiting for you' }).count(), 0);
   } finally {
     await app.close();
   }
