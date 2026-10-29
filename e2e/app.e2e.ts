@@ -1058,7 +1058,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.21.1', { exact: true }).waitFor();
+    await kg.getByText('0.21.2', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.

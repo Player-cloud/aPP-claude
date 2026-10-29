@@ -3200,10 +3200,39 @@ button.status-pill {
   background: var(--danger);
 }
 .report-summary {
-  margin: 0;
   max-width: 78ch;
   color: var(--text-muted);
-  white-space: pre-wrap;
+}
+/* Claude's text with its Markdown shown as formatting (v0.21.2). */
+.prose {
+  display: grid;
+  gap: var(--space-2);
+  overflow-wrap: anywhere;
+}
+.prose p,
+.prose ul,
+.prose ol {
+  margin: 0;
+}
+.prose ul,
+.prose ol {
+  padding-left: 1.25em;
+}
+.prose li + li {
+  margin-top: 2px;
+}
+.prose .prose-h,
+.prose strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.prose code,
+.todo-text code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
 }
 .stat-row {
   display: grid;
@@ -5343,6 +5372,7 @@ details.outcome-group > summary {
   color: var(--danger);
 }
 .spark {
+  position: relative;
   display: block;
   width: 100%;
   height: 34px;
@@ -5356,6 +5386,23 @@ details.outcome-group > summary {
 }
 .spark[data-tone="bad"] .spark-line {
   stroke: var(--danger);
+}
+.spark > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* One dot per day with runs, placed over the stretched line so it stays round. */
+.spark-dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.spark[data-tone="bad"] .spark-dot {
+  background: var(--danger);
 }
 .spark-fill {
   fill: var(--accent-soft);

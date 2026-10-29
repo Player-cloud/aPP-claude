@@ -19,16 +19,24 @@ const LOOP: { label: string; statuses: ImprovementStatus[] }[] = [
 
 const OUTCOME_LABEL: Record<RunOutcome, string> = { clean: 'Clean', stepped: 'You stepped in', failed: 'Failed' };
 
+/** Only days with runs are plotted; a day with none is a gap, not a zero (v0.21.2). */
 function Spark({ days, tone }: { days: (number | null)[]; tone: 'good' | 'bad' | 'neutral' }) {
-  const vals = days.map((d) => d ?? 0);
-  const max = Math.max(1e-9, ...vals);
-  const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * 100},${28 - (v / max) * 24}`);
-  if (days.every((d) => d === null)) return <span className="spark spark-empty" aria-hidden="true" />;
+  const max = Math.max(1e-9, ...days.map((d) => d ?? 0));
+  const pts = days.flatMap((v, i) => (v === null ? [] : [{ x: 3 + (i / (days.length - 1)) * 94, y: 26 - (v / max) * 22 }]));
+  if (pts.length === 0) return <span className="spark spark-empty" aria-hidden="true" />;
+  const line = pts.map((p) => `${p.x},${p.y}`).join(' ');
   return (
-    <svg className="spark" data-tone={tone} viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
-      <polyline points={`0,30 ${pts.join(' ')} 100,30`} className="spark-fill" />
-      <polyline points={pts.join(' ')} className="spark-line" />
-    </svg>
+    <span className="spark" data-tone={tone} aria-hidden="true">
+      {pts.length > 1 && (
+        <svg viewBox="0 0 100 30" preserveAspectRatio="none">
+          <polyline points={`${pts[0]!.x},30 ${line} ${pts.at(-1)!.x},30`} className="spark-fill" />
+          <polyline points={line} className="spark-line" />
+        </svg>
+      )}
+      {pts.map((p) => (
+        <i key={p.x} className="spark-dot" style={{ left: `${p.x}%`, top: `${(p.y / 30) * 100}%` }} />
+      ))}
+    </span>
   );
 }
 

@@ -12,7 +12,7 @@ import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { CanvasFrame } from './Canvas.tsx';
 import { HelperCards } from './Helpers.tsx';
-import { Alert, Badge, relativeTime, type Tone } from '../ui.tsx';
+import { Alert, Badge, InlineText, Prose, relativeTime, type Tone } from '../ui.tsx';
 
 /** What a task's state means to the person, in their words. */
 export function workStatus(b: Build, running: boolean): { label: string; tone: Tone } {
@@ -674,7 +674,7 @@ export function TodoItems({
                 onChange={(e) => void run(t.id, () => call(iap().setTodoDone({ id: t.id, done: e.currentTarget.checked })))}
               />
               <label className="todo-text" htmlFor={`todo-${t.id}`}>
-                {t.text}
+                <InlineText text={t.text} />
                 {from && <span className="todo-from">From “{from}”</span>}
               </label>
               {t.status === 'open' &&
@@ -875,7 +875,9 @@ export function WorkView({
           <h3 className="report-title" id={`trouble-${buildId}`}>
             What went wrong
           </h3>
-          <p>{report.trouble.what}</p>
+          <p>
+            <InlineText text={report.trouble.what} />
+          </p>
           <h3 className="report-title">What you can do</h3>
           <p>{report.trouble.next}</p>
           {report.trouble.ask && (
@@ -1002,7 +1004,7 @@ export function WorkView({
     </div>
   );
 
-  // The result column: the answer first, then what changed and what is left.
+  // The result column: the answer and its numbers first, then Claude's words, what is left and what changed.
   const result = b && (
     <div className="canvas-col" data-col="result">
       {report ? (
@@ -1015,7 +1017,6 @@ export function WorkView({
             <h2 className="report-headline" data-tone={report.tone}>
               {report.headline}
             </h2>
-            {report.summary && <p className="report-summary">{report.summary}</p>}
           </header>
           <dl className="stat-row" aria-label="At a glance">
             <div data-tone={report.checks.total === 0 ? 'neutral' : STAT_TONE[report.checks.passed === report.checks.total ? 'ok' : 'danger']}>
@@ -1037,6 +1038,8 @@ export function WorkView({
               <dd>{b.agent?.model === 'simulated' ? 'Free' : `$${report.costUsd.toFixed(2)}`}</dd>
             </div>
           </dl>
+          {/* The numbers come before Claude's own words, so the bar at the bottom does not cover them on a first look (v0.21.2). */}
+          {report.summary && <Prose className="report-summary" text={report.summary} />}
           <section className="kcard" aria-labelledby={`ships-${buildId}`}>
             <h3 className="kcard-title" id={`ships-${buildId}`}>
               Before it ships
@@ -1048,7 +1051,9 @@ export function WorkView({
                 {report.todos.map((t, i) => (
                   <li key={i}>
                     <span className="todo-dot" aria-hidden="true" />
-                    <span className="todo-text">{t}</span>
+                    <span className="todo-text">
+                      <InlineText text={t} />
+                    </span>
                     {b.status === 'review' && (
                       <button type="button" className="btn btn-ghost btn-sm" onClick={() => ask(t)} aria-label={`Ask Claude to handle: ${t}`}>
                         Ask Claude
