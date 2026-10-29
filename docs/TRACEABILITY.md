@@ -261,3 +261,14 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M15-AC7 | The rail has four places (Build, Projects, Library, Settings) and every earlier screen is still reachable | Verified | `e2e/app.e2e.ts` M15 and all earlier e2e tests, screenshot `39-settings-tabs-dark-1280` |
 | M15-AC8 | The installed Windows app loads the engine and runs its binary | Verified in CI | `ci.yml` installer smoke test (`engine.ok`, `claude --version`); packaged Linux build checked locally |
 | M15-AC9 | Build a real feature on joshua's PC with Claude Code's engine, answering at least one command question | **Not done** | — |
+
+
+## Milestone M16 acceptance criteria (Zephium-level look, results and live preview)
+
+| AC | Criterion | Status | Evidence |
+|---|---|---|---|
+| M16-AC1 | A finished task is a report: headline, checks passed, files changed, lines, cost; the timeline folds away under it | Verified | `report.test.ts`; `e2e/app.e2e.ts` M15, screenshot `36-build-review-dark-1280` |
+| M16-AC2 | Changed files show as a tree with +/- counts, and the chosen file's diff has syntax colouring | Verified | `e2e/app.e2e.ts` M15 (tree, `.hl-k`, `.hl-c`) |
+| M16-AC3 | The commands that ran show as a terminal with pass or fail and check times | Verified | `report.test.ts` "makeReport counts…" |
+| M16-AC4 | "Before it ships" lists Claude's own closing list and the review's risks, each with Ask Claude | Verified | `report.test.ts` "splitShipList…", "makeReport headlines…"; `e2e/app.e2e.ts` M15 |
+| M16-AC5 | Keep and Undo are one tap; a change with open risks kept without a note still records what was open | Verified | `report.test.ts` "keepNote…"; `e2e/app.e2e.ts` M15 |
