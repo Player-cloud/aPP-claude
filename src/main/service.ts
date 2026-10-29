@@ -36,6 +36,7 @@ import { defaultScanRoots, type ScanRoots } from '../core/inventory.ts';
 import { appPaths } from '../core/paths.ts';
 import { runToolScan } from '../core/tools.ts';
 import { allowedTransitions, isRunState } from '../core/workflow.ts';
+import { searchWork } from '../core/search.ts';
 import { moveCorruptStateAside, Workspace, type Build, type Fact, type TodoStatus, type WorkflowRun } from '../core/workspace.ts';
 import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
@@ -754,6 +755,13 @@ export class AppService {
           .flatMap((p) => ws.listBuilds(p.id).map((b) => ({ ...b, projectName: p.name, running: this.live.isRunning(b.id) })))
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
           .slice(0, 30);
+      }),
+    searchWork: (query) =>
+      wrap(() => {
+        const ws = this.workspace();
+        const projects = ws.listProjects().filter((p) => p.kind !== 'maintenance');
+        const builds = projects.flatMap((p) => ws.listBuilds(p.id));
+        return searchWork(str(query, 'Search', true) ?? '', { projects, builds, todos: ws.listTodos({ status: 'open' }), sources: ws.listLearningSources({ archived: false }) });
       }),
     verifyBuild: (buildId) => wrapAsync(() => this.builder().verify(str(buildId, 'Build id')!)),
     completeBuild: (input) =>

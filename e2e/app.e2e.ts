@@ -96,7 +96,7 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     assert.equal(await page.getByRole('textbox', { name: 'What do you want to build?' }).inputValue(), 'Fix the crash when the rota is empty');
     await shot(page, '09-home-dark-1280');
     await page.keyboard.press('Control+k');
-    await page.getByRole('combobox', { name: 'Search projects or go to' }).fill('recipe');
+    await page.getByRole('combobox', { name: /^Search tasks/ }).fill('recipe');
     await page.keyboard.press('Enter');
     await page.getByRole('heading', { level: 1, name: 'Recipe sharing app' }).waitFor();
     await page.getByRole('navigation', { name: 'Project phases' }).getByRole('button', { name: /Plan/ }).first().waitFor();
@@ -1041,7 +1041,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.19.0', { exact: true }).waitFor();
+    await kg.getByText('0.20.0', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.
@@ -1568,6 +1568,72 @@ test('M17-K: what is left before it ships is kept as to-dos on the project, tick
     await tools.getByRole('button', { name: 'Undo' }).click();
     await page.getByRole('group').or(page.locator('details.outcome-group')).filter({ hasText: 'Undone' }).first().waitFor();
     assert.equal(await page.getByRole('list', { name: 'Waiting for you' }).count(), 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('M17-L: Ctrl K finds tasks and to-dos by their words, starts a task from what was typed, and stops it', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 800);
+    await page.getByRole('complementary', { name: 'Getting around' }).getByRole('button', { name: 'Got it' }).click();
+    const composer = page.getByRole('form', { name: 'Start a task' });
+    await composer.getByLabel('What do you want to build?').fill('Add a page that lists members');
+    await composer.getByLabel('New project name').fill('Club HR');
+    await composer.getByRole('button', { name: 'Start' }).click();
+    const work = page.getByRole('article', { name: 'Add a page that lists members' });
+    const report = work.getByRole('region', { name: 'Report' });
+    await report.getByRole('heading', { name: 'Nothing changed' }).waitFor({ timeout: 30_000 });
+    // A slow test, so the next task is still running when it is stopped.
+    const worktree = (await report.locator('.kv-list dd.mono').last().textContent())!.trim();
+    const repo = join(execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: worktree, encoding: 'utf8' }).trim(), '..');
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "setTimeout(() => {}, 8000)"' } }));
+    execFileSync('git', ['add', 'package.json'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'slow test'], { cwd: repo });
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox;
+    });
+    await work.getByRole('button', { name: '← All work' }).click();
+
+    const launcher = page.getByRole('dialog', { name: 'Search and go' });
+    const search = launcher.getByRole('combobox', { name: /^Search tasks/ });
+    // Before anything is typed, recent work is one key away.
+    await page.keyboard.press('Control+k');
+    await launcher.getByRole('option', { name: /^Add a page that lists members Recent task · Club HR/ }).waitFor();
+    // Every word counts, in any order; a to-do is found by its own words.
+    await search.fill('tested change');
+    await launcher.getByRole('option', { name: /nothing tested the change.*To-do · Add a page that lists members/ }).waitFor();
+    await search.fill('members lists');
+    await launcher.getByRole('option', { name: /^Add a page that lists members Task · Club HR/ }).waitFor();
+    await shot(page, '55-launcher-search-light-1280');
+    await page.keyboard.press('Enter');
+    await launcher.waitFor({ state: 'hidden' });
+    await report.waitFor();
+    await work.getByRole('button', { name: '← All work' }).click();
+
+    // Text that names nothing becomes a task, started in the project last worked on.
+    await page.keyboard.press('Control+k');
+    await search.fill('Show member birthdays');
+    const start = launcher.getByRole('option', { name: /^Start a task: “Show member birthdays” New task in Club HR/ });
+    await start.waitFor();
+    assert.equal(await launcher.getByRole('option').count(), 1);
+    await page.keyboard.press('Enter');
+    const birthdays = page.getByRole('article', { name: 'Show member birthdays' });
+    await birthdays.waitFor();
+
+    // While it runs, the launcher offers to stop it.
+    await page.keyboard.press('Control+k');
+    await launcher.getByRole('option', { name: /^Stop “Show member birthdays”/ }).click();
+    await launcher.waitFor({ state: 'hidden' });
+    await birthdays.getByText('Stopped', { exact: true }).first().waitFor({ timeout: 15_000 });
+
+    // The shortcuts are listed in Settings.
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const keys = page.getByRole('region', { name: 'Keyboard shortcuts' });
+    await keys.getByText(/^Search tasks, files, to-dos and lessons/).waitFor();
   } finally {
     await app.close();
   }

@@ -13,6 +13,8 @@ export type { PlanningOverview, EgmStatus } from '../core/planner.ts';
 import type { BuildDetail, BuildInput } from '../core/build/builder.ts';
 import type { Diff } from '../core/build/git.ts';
 import type { Build, Todo, TodoStatus } from '../core/workspace.ts';
+import type { SearchHit } from '../core/search.ts';
+export type { SearchHit } from '../core/search.ts';
 export type { BuildDetail, BuildInput } from '../core/build/builder.ts';
 export type { Diff, ChangedFile } from '../core/build/git.ts';
 export type { Build, BuildAgentRun, CheckRun, Todo, TodoStatus } from '../core/workspace.ts';
@@ -174,6 +176,8 @@ export interface IapApi {
   pauseBuild(buildId: string): Promise<Result<null>>;
   resumeBuild(buildId: string): Promise<Result<null>>;
   recentBuilds(): Promise<Result<RecentBuild[]>>;
+  /** M17 L: tasks, changed files, open to-dos and lessons that contain every word typed. */
+  searchWork(query: string): Promise<Result<SearchHit[]>>;
   /** Live preview (M16 H): the dev server or static page of a task's worktree. */
   previewState(buildId: string): Promise<Result<PreviewState>>;
   /** Asks for approval in a native dialog the first time, then waits until the page answers. */
@@ -355,6 +359,7 @@ export const IAP_METHODS = [
   'pauseBuild',
   'resumeBuild',
   'recentBuilds',
+  'searchWork',
   'previewState',
   'startPreview',
   'capturePreview',

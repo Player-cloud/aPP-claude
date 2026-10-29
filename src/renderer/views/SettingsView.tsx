@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { AppStatus, Settings } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Alert } from '../ui.tsx';
@@ -14,6 +14,14 @@ const THEMES: { id: Settings['theme']; label: string }[] = [
 const GLASS: { id: Settings['glass']; label: string }[] = [
   { id: 'on', label: 'Frosted glass' },
   { id: 'off', label: 'Solid panels' },
+];
+
+const SHORTCUTS: [string[], string][] = [
+  [['Ctrl', 'K'], 'Search tasks, files, to-dos and lessons, go anywhere, or start a task'],
+  [['↑', '↓', 'Enter'], 'Move through the search results and run one'],
+  [['Ctrl', 'Enter'], 'Send what you typed to Claude'],
+  [['Esc'], 'Close the search, or clear the selected card on a board'],
+  [['Tab'], 'Move between buttons and fields'],
 ];
 
 export function SettingsView({ status, settings, onSettings }: { status: AppStatus; settings: Settings; onSettings: (s: Settings) => void }) {
@@ -97,6 +105,26 @@ export function SettingsView({ status, settings, onSettings }: { status: AppStat
               )}
             </dl>
             {health.error && <Alert tone="danger">{health.error}</Alert>}
+          </section>
+          <section className="card" aria-labelledby="keys-title">
+            <h2 className="card-title" id="keys-title">
+              Keyboard shortcuts
+            </h2>
+            <dl className="kv shortcuts">
+              {SHORTCUTS.map(([keys, what]) => (
+                <Fragment key={what}>
+                  <dt>
+                    {keys.map((k, i) => (
+                      <Fragment key={k}>
+                        {i > 0 && ' '}
+                        <kbd>{k}</kbd>
+                      </Fragment>
+                    ))}
+                  </dt>
+                  <dd>{what}</dd>
+                </Fragment>
+              ))}
+            </dl>
           </section>
         </aside>
       </div>

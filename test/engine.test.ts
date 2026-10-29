@@ -365,3 +365,41 @@ test('M17-K: what is left before a change ships is kept as to-dos, ticked off, t
   const after = h.listTodos({ buildId: task.value.id });
   assert.ok(after.ok && after.value.every((x) => x.status === 'dropped'));
 });
+
+test('M17-L: the launcher finds tasks, the files they changed, open to-dos and lessons by every word typed', async (t) => {
+  const { home, cleanup } = tempHome();
+  const s = new AppService(home, '0.0.0-test');
+  t.after(() => {
+    s.close();
+    cleanup();
+  });
+  const h = s.handlers;
+  const p = h.createProject({ name: 'Club HR' });
+  assert.ok(p.ok);
+  const b = await h.quickBuild({ projectId: p.value.id, goal: 'Add a page that lists members' });
+  assert.ok(b.ok);
+  await settle(h, b.value.id);
+  const built = h.getBuild(b.value.id);
+  assert.ok(built.ok);
+
+  const empty = h.searchWork('  ');
+  assert.ok(empty.ok && empty.value.length === 0, 'nothing is listed before something is typed');
+  const tasks = h.searchWork('MEMBERS page');
+  assert.ok(tasks.ok);
+  assert.deepEqual(
+    tasks.value.filter((x) => x.kind === 'task').map((x) => x.kind === 'task' && x.title),
+    [built.value.build.title],
+    'every word must appear, in any case and order',
+  );
+  const none = h.searchWork('members invoices');
+  assert.ok(none.ok && none.value.length === 0);
+  const todo = h.listTodos({ buildId: b.value.id, status: 'open' });
+  assert.ok(todo.ok && todo.value.length);
+  const word = todo.value[0]!.text.split(/\s+/).find((w) => w.length > 5)!;
+  const found = h.searchWork(word);
+  assert.ok(found.ok && found.value.some((x) => x.kind === 'todo' && x.todoId === todo.value[0]!.id));
+  // A done to-do is no longer offered.
+  assert.ok(h.setTodoDone({ id: todo.value[0]!.id, done: true }).ok);
+  const again = h.searchWork(word);
+  assert.ok(again.ok && !again.value.some((x) => x.kind === 'todo' && x.todoId === todo.value[0]!.id));
+});

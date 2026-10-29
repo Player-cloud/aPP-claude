@@ -295,3 +295,7 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M17-AC9 | A to-do can be ticked off in the report or on the project page, and an open one can become a new task linked to it | Verified | `engine.test.ts` M17-K (todoToTask); `e2e/app.e2e.ts` M17-K, screenshot `53-project-todos-light-1280` |
 | M17-AC10 | A project's tasks are a board of cards grouped by what they need, each with the last picture of its page, its changes, cost, status and open to-dos | Verified | `e2e/app.e2e.ts` M15 (picture on the kept card), M17-K; screenshot `38-project-tasks-dark-1280` |
 | M17-AC11 | Selecting a card shows only that task's actions (open, ask Claude, preview, undo, keep); Escape hides them; Ask Claude opens the report ready to type | Verified | `e2e/app.e2e.ts` M17-K, screenshot `54-board-selected-light-1280` |
+| M17-AC12 | Ctrl K finds tasks, changed files, open to-dos and lessons by every word typed, and lists recent tasks before anything is typed | Verified | `search.test.ts`, `engine.test.ts` M17-L; `e2e/app.e2e.ts` M17-L, screenshot `55-launcher-search-light-1280` |
+| M17-AC13 | Ctrl K runs only safe actions: start a task from the typed text, open a preview, stop the running task; a failure keeps it open with the error | Verified | `e2e/app.e2e.ts` M17-L (start, stop) |
+| M17-AC14 | Settings lists the keyboard shortcuts | Verified | `e2e/app.e2e.ts` M17-L |
+| M17-AC15 | Run M17 on joshua's PC: board, to-dos, Pause and Ctrl K on a real Claude task | Open | Needs v0.20.0 on joshua's PC |
