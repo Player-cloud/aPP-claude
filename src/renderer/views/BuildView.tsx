@@ -9,6 +9,7 @@ import type { AgentStatus, Build, BuildDetail, ChangedFile, Diff, LiveEvent, Liv
 import { describeStep, formatDuration, groupFiles, keepNote, makeReport, progressStages, statusLine, type ReportCommand, type ReportTone } from '../../shared/report.ts';
 import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
+import { Icon } from '../icons.tsx';
 import { Alert, Badge, relativeTime, type Tone } from '../ui.tsx';
 
 /** What a task's state means to the person, in their words. */
@@ -122,8 +123,8 @@ export function Composer({
           onKeyDown={onKey}
           disabled={busy}
         />
-        <button type="submit" className="btn btn-primary task-composer-go" disabled={busy || goal.trim().length < 3}>
-          {busy ? 'Starting…' : 'Start'}
+        <button type="submit" className="task-composer-go" aria-label={busy ? 'Starting…' : 'Start'} title="Start (Ctrl Enter)" disabled={busy || goal.trim().length < 3}>
+          <Icon name="arrowUp" size={16} />
         </button>
       </div>
       <div className="task-composer-row">

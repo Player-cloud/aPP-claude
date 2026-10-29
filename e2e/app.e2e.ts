@@ -1282,9 +1282,10 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
   const { app, page } = await launch(home);
   try {
     await resize(app, 1280, 800);
-    // Four places in the rail, the rest one level down.
+    // Four places in the rail, the rest one level down (M15); search, project tiles and day/night beside them (M18).
     const rail = page.getByRole('navigation', { name: 'Primary' });
-    assert.deepEqual(await rail.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Projects', 'Library', 'Settings']);
+    assert.deepEqual(await rail.getByRole('group', { name: 'Places' }).getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Projects', 'Library']);
+    assert.deepEqual(await rail.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Projects', 'Library', 'Search', 'Add a project', 'Switch to the night sky', 'Settings']);
 
     // With no project yet, the composer asks for a name and makes one.
     const composer = page.getByRole('form', { name: 'Start a task' });
@@ -1300,6 +1301,16 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     // No checks were found, so nothing tested it; that is listed before it ships.
     await report.getByRole('list', { name: 'Before it ships' }).getByText(/nothing tested the change/).waitFor();
     await report.getByLabel('At a glance').getByText('None set up').waitFor();
+    // The Kiln shell (M18): the project gets a tile that says it waits for you, and the status pill names the task.
+    await rail.getByRole('button', { name: 'Project Club HR, waiting for you' }).waitFor();
+    const pill = page.getByRole('status').filter({ hasText: /^1 ready for you/ });
+    await pill.getByText('“Add a page that lists members”').waitFor();
+    assert.equal(await pill.getByRole('button', { name: 'Open' }).count(), 0, 'no Open for the task already on screen');
+    // Day and night are one tap, and the choice is saved.
+    await rail.getByRole('button', { name: 'Switch to the night sky' }).click();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+    await rail.getByRole('button', { name: 'Switch to the day sky' }).click();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
 
     // Stand in for Claude's edit, so the report has files, lines and a coloured diff to show.
     const worktree = (await report.locator('.kv-list dd.mono').last().textContent())!.trim();

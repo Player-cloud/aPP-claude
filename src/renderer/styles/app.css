@@ -3949,3 +3949,215 @@ details.outcome-group > summary {
   flex-wrap: wrap;
   gap: var(--space-1);
 }
+
+/* ---- M18 part 1: the Kiln shell (DEC-036) ----
+   A segmented group of places, project tiles with a colour of their own, a
+   day/night switch, a centred status pill with the agent's orb, and a glass
+   message dock, as in the Kiln Workspace v2 mockup. */
+.rail-seg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-2);
+  padding: 3px;
+  border-radius: 14px;
+  background: var(--glass-bg);
+  box-shadow: inset 0 0 0 1px var(--glass-border);
+}
+.rail-seg .rail-item {
+  width: 38px;
+  height: 38px;
+}
+.rail-rule {
+  width: 24px;
+  margin: var(--space-2) 0;
+  border: 0;
+  border-top: 1px solid var(--glass-border);
+}
+.rail-project {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  color: #fff;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 650;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+.rail-project:hover {
+  transform: translateY(-1px);
+}
+.rail-project[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 14px;
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+.rail-project-add {
+  border: 1px dashed var(--glass-border-strong);
+  background: transparent;
+  color: var(--text-muted);
+  text-shadow: none;
+}
+.rail-project-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.rail-project-dot[data-tone="live"] {
+  background: var(--accent);
+  animation: kiln-pulse 1.8s ease-in-out infinite;
+}
+.rail-project:hover .rail-tip,
+.rail-project:focus-visible .rail-tip {
+  opacity: 1;
+  translate: 0 -50%;
+}
+@keyframes kiln-pulse {
+  50% {
+    transform: scale(0.7);
+    opacity: 0.6;
+  }
+}
+
+.breadcrumbs {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.breadcrumbs [aria-current="page"] {
+  color: var(--text);
+}
+.breadcrumbs li:not([aria-current]) {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.agent-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: min(520px, 100%);
+  height: 40px;
+  margin-inline: auto;
+  padding: 0 5px 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  backdrop-filter: blur(24px) saturate(1.5);
+  box-shadow: var(--shadow-float), inset 0 0 0 1px var(--glass-border);
+}
+.orb {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--agent-orb);
+  box-shadow: inset 0 -3px 6px rgba(0, 0, 0, 0.25), inset 0 2px 4px rgba(255, 255, 255, 0.55), 0 2px 8px -2px rgba(80, 90, 255, 0.6);
+}
+.orb::after {
+  content: "";
+  position: absolute;
+  inset: 5px 7px 11px 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  filter: blur(2px);
+}
+.orb[data-busy="true"] {
+  animation: kiln-spin 8s linear infinite;
+}
+@keyframes kiln-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.agent-pill-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-pill-text b {
+  color: var(--text);
+  font-weight: 600;
+}
+.agent-pill-open,
+.agent-pill-key {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  flex: none;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: var(--card-shadow, var(--glass-shadow));
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.agent-pill-key {
+  padding: 0 var(--space-2);
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The message dock: one glass bar floating over the work. */
+.task-composer {
+  max-width: 720px;
+  width: 100%;
+  margin-inline: auto;
+  padding: 6px 8px 6px var(--space-4);
+  border: 0;
+  border-radius: 20px;
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(26px) saturate(1.6);
+  backdrop-filter: blur(26px) saturate(1.6);
+  box-shadow: var(--shadow-float), inset 0 0 0 1px var(--glass-border);
+}
+.task-composer:focus-within {
+  box-shadow: var(--shadow-float), inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.task-composer-bar {
+  align-items: center;
+}
+.task-composer-go {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: var(--primary-bg);
+  box-shadow: var(--primary-glow, 0 6px 16px -6px rgba(13, 22, 38, 0.45));
+  color: var(--primary-text);
+  cursor: pointer;
+}
+.task-composer-go:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.project-work .task-composer {
+  max-width: none;
+}

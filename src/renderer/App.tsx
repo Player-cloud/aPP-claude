@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AgentStatus, AppStatus, Project, Settings, ToolScan } from '../shared/api.ts';
+import type { AgentStatus, AppStatus, Project, RecentBuild, Settings, ToolScan } from '../shared/api.ts';
 import { call, iap } from './api.ts';
 import { CommandPalette } from './CommandPalette.tsx';
 import { Icon } from './icons.tsx';
@@ -51,10 +51,36 @@ export const SECTION_LABEL: Record<Section, string> = {
   settings: 'Settings',
 };
 
+function resolveTheme(theme: Settings['theme']): 'light' | 'dark' {
+  return theme === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme;
+}
 function applyTheme(theme: Settings['theme']) {
-  const resolved =
-    theme === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme;
-  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.theme = resolveTheme(theme);
+}
+
+// Project tiles in the rail (M18, DEC-036): a letter on a colour that stays with the project.
+const TILE_COLOURS = [
+  ['#5d8bff', '#7a5cff'],
+  ['#ffb36b', '#ef5f7d'],
+  ['#3fd1b5', '#2b8fd6'],
+  ['#f7c948', '#f08a3c'],
+  ['#8ee07a', '#2fa46b'],
+  ['#d38cff', '#6f5cff'],
+];
+function tileColour(id: string): string {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const [a, b] = TILE_COLOURS[h % TILE_COLOURS.length]!;
+  return `linear-gradient(140deg, ${a}, ${b})`;
+}
+
+/** What the agent is doing, in one line for the status pill: the running task first, then work waiting for the person. */
+function agentLine(builds: RecentBuild[], agent: AgentStatus | null): { lead: string; rest: string; build: RecentBuild | null; tone: 'live' | 'warn' | 'idle' } {
+  const running = builds.filter((b) => b.running);
+  if (running[0]) return { lead: 'Claude is working', rest: `on “${running[0].title}”${running.length > 1 ? ` and ${running.length - 1} more` : ''}`, build: running[0], tone: 'live' };
+  const waiting = builds.filter((b) => b.status === 'review');
+  if (waiting[0]) return { lead: `${waiting.length} ready for you`, rest: `“${waiting[0].title}”`, build: waiting[0], tone: 'warn' };
+  return { lead: 'Nothing running', rest: agent?.mode === 'needs_key' ? 'add an API key in Settings to use Claude' : 'ask for a change below', build: null, tone: 'idle' };
 }
 
 // First-run tour (M17 N, DEC-034): what each rail item is for, once, until dismissed.
@@ -100,13 +126,12 @@ function Tour({ onDone }: { onDone: () => void }) {
   );
 }
 
-function RailButton({ label, icon, current, onClick }: { label: string; icon: NavIcon; current: boolean; onClick: () => void }) {
-  const name = label;
+function RailButton({ label, tip, icon, current, onClick }: { label: string; tip?: string; icon: NavIcon | 'search' | 'sun' | 'moon'; current: boolean; onClick: () => void }) {
   return (
-    <button type="button" className="rail-item" aria-current={current ? 'page' : undefined} aria-label={name} onClick={onClick}>
+    <button type="button" className="rail-item" aria-current={current ? 'page' : undefined} aria-label={label} onClick={onClick}>
       <Icon name={icon} size={20} />
       <span className="rail-tip" aria-hidden="true">
-        {name}
+        {tip ?? label}
       </span>
     </button>
   );
@@ -135,6 +160,21 @@ export function App() {
   const [openBuild, setOpenBuild] = useState<string | null>(null);
   const [agent, setAgent] = useState<AgentStatus | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Every task's state, for the status pill and the project tiles; refreshed often while anything runs.
+  const [work, setWork] = useState<RecentBuild[]>([]);
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      call(iap().recentBuilds())
+        .then((b) => live && setWork(b))
+        .catch(() => undefined);
+    void load();
+    const t = setInterval(load, work.some((b) => b.running) ? 1_500 : 5_000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [section, projectId, openBuild, work.some((b) => b.running)]);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -249,12 +289,57 @@ export function App() {
         <div className="brand-mark" title="Iterative Platform">
           <Icon name="logo" />
         </div>
-        <div className="rail-group">
+        <div className="rail-seg" role="group" aria-label="Places">
           {NAV.map((n) => (
             <RailButton key={n.id} label={n.label} icon={n.icon} current={group.id === n.id} onClick={() => go(n.id)} />
           ))}
         </div>
+        <RailButton label="Search" tip="Search  Ctrl K" icon="search" current={false} onClick={() => setPaletteOpen(true)} />
+        {(projects?.length ?? 0) > 0 && <hr className="rail-rule" />}
+        {(projects ?? [])
+          .filter((p) => p.kind !== 'maintenance')
+          .slice(0, 5)
+          .map((p) => {
+            const mine = work.filter((b) => b.projectId === p.id);
+            const state = mine.some((b) => b.running) ? 'live' : mine.some((b) => b.status === 'review') ? 'warn' : null;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                className="rail-project"
+                style={{ background: tileColour(p.id) }}
+                aria-current={projectId === p.id ? 'page' : undefined}
+                aria-label={`Project ${p.name}${state === 'live' ? ', working' : state === 'warn' ? ', waiting for you' : ''}`}
+                onClick={() => openProject(p.id, p.name)}
+              >
+                <span aria-hidden="true">{p.name.trim().charAt(0).toUpperCase() || '?'}</span>
+                {state && <span className="rail-project-dot" data-tone={state} aria-hidden="true" />}
+                <span className="rail-tip" aria-hidden="true">
+                  {p.name}
+                </span>
+              </button>
+            );
+          })}
+        <button type="button" className="rail-project rail-project-add" aria-label="Add a project" onClick={() => startCreating()}>
+          <Icon name="plus" size={16} />
+          <span className="rail-tip" aria-hidden="true">
+            New or imported project
+          </span>
+        </button>
         <div className="rail-spacer" />
+        {settings && (
+          <RailButton
+            label={resolveTheme(settings.theme) === 'dark' ? 'Switch to the day sky' : 'Switch to the night sky'}
+            tip="Day / night"
+            icon={resolveTheme(settings.theme) === 'dark' ? 'sun' : 'moon'}
+            current={false}
+            onClick={() =>
+              void call(iap().updateSetting({ key: 'theme', value: resolveTheme(settings.theme) === 'dark' ? 'light' : 'dark' }))
+                .then(setSettings)
+                .catch(() => undefined)
+            }
+          />
+        )}
         <RailButton label={SETTINGS_GROUP.label} icon={SETTINGS_GROUP.icon} current={group.id === 'settings'} onClick={() => go('settings')} />
       </nav>
 
@@ -297,11 +382,32 @@ export function App() {
             </li>
             {projectId && <li aria-current="page">{projectName ?? 'Project'}</li>}
           </ol>
-          <button type="button" className="topbar-search" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Control+K">
-            <Icon name="search" size={16} />
-            <span className="topbar-search-text">Search tasks, files and to-dos…</span>
-            <kbd>Ctrl K</kbd>
-          </button>
+          {(() => {
+            const line = agentLine(work, agent);
+            return (
+              <div className="agent-pill" role="status" data-tone={line.tone}>
+                <span className="orb" data-busy={line.tone === 'live'} aria-hidden="true" />
+                <span className="agent-pill-text">
+                  <b>{line.lead}</b> {line.rest}
+                </span>
+                {line.build && line.build.id !== openBuild && (
+                  <button
+                    type="button"
+                    className="agent-pill-open"
+                    onClick={() => {
+                      go('home');
+                      setOpenBuild(line.build!.id);
+                    }}
+                  >
+                    Open
+                  </button>
+                )}
+                <button type="button" className="agent-pill-key" onClick={() => setPaletteOpen(true)} aria-label="Search (Ctrl K)" aria-keyshortcuts="Control+K">
+                  <kbd>Ctrl K</kbd>
+                </button>
+              </div>
+            );
+          })()}
           <div className="topbar-actions">
             {agent && (
               <span className="status-pill" data-tone={agent.mode === 'claude' ? 'ok' : 'neutral'} title={agent.mode === 'claude' ? agent.model : undefined}>

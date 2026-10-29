@@ -299,3 +299,5 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M17-AC13 | Ctrl K runs only safe actions: start a task from the typed text, open a preview, stop the running task; a failure keeps it open with the error | Verified | `e2e/app.e2e.ts` M17-L (start, stop) |
 | M17-AC14 | Settings lists the keyboard shortcuts | Verified | `e2e/app.e2e.ts` M17-L |
 | M17-AC15 | Run M17 on joshua's PC: board, to-dos, Pause and Ctrl K on a real Claude task | Open | Needs v0.20.0 on joshua's PC |
+| M18-AC1 | The app uses the bundled Geist fonts, and the rail has a places segment, Search, project tiles with run and review dots, Add a project, a day/night switch and Settings | Verified | `e2e/app.e2e.ts` M15 (rail order, tile state, day/night switch) |
+| M18-AC2 | The status pill shows the agent's orb and what is running or waiting, with Open for that task | Verified | `e2e/app.e2e.ts` M15 |

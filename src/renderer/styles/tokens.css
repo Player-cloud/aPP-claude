@@ -10,10 +10,23 @@
  * Themes: [data-theme="dark"] (default), [data-theme="light"]; "system" is
  * resolved in the renderer from prefers-color-scheme.
  */
+/* Geist and Geist Mono (SIL Open Font License, fonts/OFL.txt), bundled so the app never fetches a font (M18, DEC-036). */
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
 :root {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "Cascadia Code", Consolas, ui-monospace, monospace;
+  --font-sans: "Geist", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  --font-display: "Geist", "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  --font-mono: "Geist Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
 
   /* Type: badge 11-12, metadata 12-13, body 14-16, card 15-17, section 19-23, page 26-32. */
   --text-2xs: 0.6875rem;
