@@ -39,6 +39,7 @@ import { appPaths } from '../core/paths.ts';
 import { runToolScan } from '../core/tools.ts';
 import { allowedTransitions, isRunState } from '../core/workflow.ts';
 import { searchWork } from '../core/search.ts';
+import { runStats } from '../core/iterate/runs.ts';
 import { moveCorruptStateAside, Workspace, type Build, type Fact, type TodoStatus, type WorkflowRun } from '../core/workspace.ts';
 import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../shared/api.ts';
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
@@ -776,6 +777,16 @@ export class AppService {
           .flatMap((p) => ws.listBuilds(p.id).map((b) => ({ ...b, projectName: p.name, running: this.live.isRunning(b.id) })))
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
           .slice(0, 30);
+      }),
+    // The Improve dashboard (M18 part 9): how the work has been going, from the app's own records.
+    runStats: () =>
+      wrap(() => {
+        const ws = this.workspace();
+        const builds = ws
+          .listProjects()
+          .filter((p) => p.kind !== 'maintenance')
+          .flatMap((p) => ws.listBuilds(p.id));
+        return runStats(builds, ws.listEvents({ limit: 10_000 }).filter((e) => e.type === 'build.agent'));
       }),
     searchWork: (query) =>
       wrap(() => {

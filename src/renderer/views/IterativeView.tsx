@@ -8,6 +8,7 @@ import type { Improvement, ImprovementDetail, ImprovementStatus, ImprovementsOve
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { Alert, Badge, Empty, formatDate, type Tone } from '../ui.tsx';
+import { ImproveDashboard } from './ImproveDashboard.tsx';
 
 export type ImprovementFilter = 'all' | ImprovementStatus;
 
@@ -502,6 +503,7 @@ export function IterativeView({ filter, onFilter, onOpenPreferences }: { filter:
         The app reads what went wrong in its runs, agent tasks, builds, checks, assessments and tool scans, and proposes improvements. You decide what is approved. Approving an item records
         your decision; it does not change the app.
       </p>
+      <ImproveDashboard counts={overview?.counts ?? null} />
       <div className="content-grid">
         <div>
           <div className="ref-toolbar glass">

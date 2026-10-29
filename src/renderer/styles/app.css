@@ -5257,3 +5257,171 @@ details.outcome-group > summary {
   border-radius: 8px;
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.08);
 }
+
+/* ---- M18 part 9: the Improve dashboard (DEC-036) ----
+   The improvement loop with the backlog's counts, four numbers against last
+   week with a line for each day, and a strip of the last runs. */
+.improve {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+.loop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.loop li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.loop li + li::before {
+  content: "";
+  width: 26px;
+  height: 1px;
+  margin: 0 10px;
+  background: var(--card-edge);
+}
+.loop-n {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1.5px solid var(--text-subtle);
+  border-radius: 11px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.loop li[data-has="true"] {
+  color: var(--text);
+}
+.loop li[data-has="true"] .loop-n {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--space-4);
+}
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kpi-label {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.kpi-value {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.kpi-delta {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.kpi-delta[data-good="true"] {
+  color: var(--ok);
+}
+.kpi-delta[data-good="false"] {
+  color: var(--danger);
+}
+.spark {
+  display: block;
+  width: 100%;
+  height: 34px;
+  margin-top: 8px;
+}
+.spark-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+.spark[data-tone="bad"] .spark-line {
+  stroke: var(--danger);
+}
+.spark-fill {
+  fill: var(--accent-soft);
+  stroke: none;
+}
+.spark[data-tone="bad"] .spark-fill {
+  fill: var(--danger-soft);
+}
+.run-strip-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.run-strip-head .kcard-title {
+  margin: 0;
+}
+.run-legend {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.run-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.run-legend i,
+.runs li {
+  display: block;
+  border-radius: 3px;
+  background: var(--ok);
+  opacity: 0.75;
+}
+.run-legend i {
+  width: 9px;
+  height: 9px;
+}
+.runs {
+  display: grid;
+  grid-template-columns: repeat(60, minmax(0, 1fr));
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.runs li {
+  height: 22px;
+}
+.run-legend i[data-outcome="stepped"],
+.runs li[data-outcome="stepped"] {
+  background: var(--warn);
+}
+.run-legend i[data-outcome="failed"],
+.runs li[data-outcome="failed"] {
+  background: var(--danger);
+  opacity: 0.85;
+}
+.run-dates {
+  display: flex;
+  justify-content: space-between;
+  margin: 6px 0 0;
+  font: 0.6875rem/1.4 var(--font-mono);
+  color: var(--text-muted);
+}

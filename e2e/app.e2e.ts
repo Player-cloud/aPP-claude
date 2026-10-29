@@ -1058,7 +1058,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.20.0', { exact: true }).waitFor();
+    await kg.getByText('0.21.0', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.
@@ -1433,6 +1433,17 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     const tabs = page.getByRole('navigation', { name: 'Settings sections' });
     assert.deepEqual(await tabs.getByRole('button').allTextContents(), ['General', 'Activity', 'Tools', 'Updates', 'Improvements', 'Platform']);
     await shot(page, '39-settings-tabs-dark-1280');
+
+    // The Improve dashboard (M18 part 9) counts the task that just ran: one clean run, kept.
+    await tabs.getByRole('button', { name: 'Improvements' }).click();
+    const worked = page.getByRole('region', { name: 'Runs that worked' });
+    await worked.getByText('100%').waitFor();
+    await worked.getByText('No runs the week before').waitFor();
+    await page.getByRole('region', { name: 'Median cost per run' }).getByText('$0.00').waitFor();
+    await page.getByRole('heading', { name: 'Last 1 run' }).waitFor();
+    await page.getByRole('list', { name: 'Runs, oldest first' }).getByText('Add a page that lists members: Clean').waitFor({ state: 'attached' });
+    await page.getByRole('list', { name: 'Improvement loop' }).waitFor();
+    await shot(page, '60-improve-dashboard-dark-1280');
   } finally {
     await app.close();
   }

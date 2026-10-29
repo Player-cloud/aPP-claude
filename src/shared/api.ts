@@ -4,6 +4,7 @@
 import type { AgentTask, AuditEvent, Fact, Project, Settings, WorkflowRun } from '../core/workspace.ts';
 import type { ToolScan } from '../core/tools.ts';
 import type { PageSet } from '../core/build/pages.ts';
+import type { RunStats } from '../core/iterate/runs.ts';
 import type { PlanningOverview } from '../core/planner.ts';
 import type { PlanChange, PlanDoc } from '../core/planning.ts';
 import type { RunState, Workflow } from '../core/workflow.ts';
@@ -16,6 +17,7 @@ import type { Diff } from '../core/build/git.ts';
 import type { Build, Todo, TodoStatus } from '../core/workspace.ts';
 import type { SearchHit } from '../core/search.ts';
 export type { SearchHit } from '../core/search.ts';
+export type { Kpi, RunMark, RunOutcome, RunStats } from '../core/iterate/runs.ts';
 export type { BuildDetail, BuildInput } from '../core/build/builder.ts';
 export type { Diff, ChangedFile } from '../core/build/git.ts';
 export type { Build, BuildAgentRun, CheckRun, Todo, TodoStatus } from '../core/workspace.ts';
@@ -179,6 +181,8 @@ export interface IapApi {
   pauseBuild(buildId: string): Promise<Result<null>>;
   resumeBuild(buildId: string): Promise<Result<null>>;
   recentBuilds(): Promise<Result<RecentBuild[]>>;
+  /** M18 Improve: the last runs and this week's numbers against last week's, from the app's own records. */
+  runStats(): Promise<Result<RunStats>>;
   /** M17 L: tasks, changed files, open to-dos and lessons that contain every word typed. */
   searchWork(query: string): Promise<Result<SearchHit[]>>;
   /** Live preview (M16 H): the dev server or static page of a task's worktree. */
@@ -369,6 +373,7 @@ export const IAP_METHODS = [
   'resumeBuild',
   'recentBuilds',
   'searchWork',
+  'runStats',
   'previewState',
   'startPreview',
   'capturePreview',
