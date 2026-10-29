@@ -28,6 +28,38 @@ protocol.registerSchemesAsPrivileged([{ scheme: REF_SCHEME, privileges: { standa
 const smokeTest = process.argv.includes('--smoke-test');
 
 /** Proves the installed app can load Claude Code's engine and run its binary (DEC-032), without calling the API. */
+
+/**
+ * A picture of a local preview page (M16 H). The page loads in its own hidden,
+ * sandboxed window with its own session, can only move between local
+ * addresses, and is closed after the picture is taken.
+ */
+async function capturePreview(url: string, size: { width: number; height: number }): Promise<string> {
+  const local = (u: string) => /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d+(?:\/|$)/.test(u);
+  if (!local(url)) throw new Error('Only a local preview can be captured.');
+  const win = new BrowserWindow({
+    show: false,
+    width: size.width,
+    height: size.height,
+    useContentSize: true,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, offscreen: true, partition: 'preview', spellcheck: false },
+  });
+  try {
+    win.webContents.on('will-navigate', (event, next) => {
+      if (!local(next)) event.preventDefault();
+    });
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    win.webContents.setAudioMuted(true);
+    await Promise.race([win.loadURL(url), new Promise((_, fail) => setTimeout(() => fail(new Error('The preview took too long to load.')), 20_000))]);
+    // Give scripts a moment to draw.
+    await new Promise((r) => setTimeout(r, 900));
+    const image = await win.webContents.capturePage();
+    return image.toDataURL();
+  } finally {
+    win.destroy();
+  }
+}
+
 async function engineCheck(): Promise<{ ok: boolean; executable: string | null; version: string | null; error?: string }> {
   const executable = bundledExecutable((id) => require.resolve(id)) ?? null;
   try {
@@ -145,6 +177,24 @@ if (smokeTest) {
       claudeCommand: process.env.IAP_CLAUDE_COMMAND ? (JSON.parse(process.env.IAP_CLAUDE_COMMAND) as string[]) : undefined,
       // Tests answer the update sources from a file instead of the network (M12).
       fetcher: process.env.IAP_UPDATE_FIXTURE ? fixtureFetcher(process.env.IAP_UPDATE_FIXTURE) : undefined,
+      // M16 H: a project's dev server runs with the person's rights, so they approve it in a native dialog first.
+      confirmPreview: async ({ title, command, folder }) => {
+        const options = {
+          type: 'warning' as const,
+          title: 'Start the preview?',
+          message: `To preview "${title}", the app will run this command from the project on your computer, with your permissions:`,
+          detail: `  ${command}\n\nIt runs in the task's separate copy (git worktree) of the project:\n${folder}\n\nIt keeps running until you stop the preview, keep or undo the task, or close the app. Only approve it if you trust this project.`,
+          buttons: ['Start the preview', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const parent = BrowserWindow.getFocusedWindow();
+        const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+        return response === 0;
+      },
+      capturePage: (url, size) => capturePreview(url, size),
+      openExternal: (url) => shell.openExternal(url),
       // M11: changes to the person's Claude Code setup are approved in a native dialog the page cannot click.
       confirmCleanup: async ({ title, lines }) => {
         const options = {

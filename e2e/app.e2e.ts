@@ -1041,7 +1041,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.18.0', { exact: true }).waitFor();
+    await kg.getByText('0.19.0', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.
@@ -1305,19 +1305,29 @@ test('M15: say what to build, watch the steps, review and keep the change (simul
     mkdirSync(join(worktree, 'src'), { recursive: true });
     writeFileSync(join(worktree, 'src', 'members.ts'), "// Lists the club's members.\nexport function members(rows: string[]): string[] {\n  const out = rows.filter((r) => r.trim().length > 0);\n  return out.sort();\n}\n");
     writeFileSync(join(worktree, 'README.md'), '# Club HR\n\nA members page.\n');
+    writeFileSync(join(worktree, 'index.html'), '<!doctype html><title>Members</title><body style="font:24px sans-serif;padding:40px;background:#f5f7fb"><h1>Members</h1><ul><li>Ana · Coach</li><li>Ben · Treasurer</li></ul></body>');
     await work.getByRole('button', { name: '← All work' }).click();
     await page.getByRole('list', { name: 'Your work' }).getByRole('button', { name: /Add a page that lists members/ }).click();
     await report.getByRole('heading', { name: 'Ready for your review' }).waitFor();
     const tree = report.getByRole('list', { name: 'Changed files' });
-    assert.deepEqual((await tree.getByRole('button').allTextContents()).map((t) => t.replace(/\s+/g, '')), ['AREADME.md+3', 'Amembers.ts+5']);
+    assert.deepEqual((await tree.getByRole('button').allTextContents()).map((t) => t.replace(/\s+/g, '')), ['AREADME.md+3', 'Aindex.html+1', 'Amembers.ts+5']);
     await tree.getByRole('button', { name: /members\.ts/ }).click();
     const code = report.getByLabel('Changes to src/members.ts');
     await code.locator('.hl-k', { hasText: 'export' }).first().waitFor();
     await code.locator('.hl-c').first().waitFor();
-    await report.getByLabel('At a glance').locator('.diff-add', { hasText: '+8' }).waitFor();
+    await report.getByLabel('At a glance').locator('.diff-add', { hasText: '+9' }).waitFor();
     // The step list is folded away under the report.
     await report.getByText(/How Claude did it · \d+ steps?/).waitFor();
     assert.equal(await work.getByText('Ready for your review.').isVisible(), false);
+    // Live preview (M16 H): a plain index.html is served by the app, so no command needs approving.
+    const preview = report.getByRole('region', { name: 'Preview' });
+    await preview.getByText(/Preview runs its index\.html/).waitFor();
+    await preview.getByRole('button', { name: 'Start preview' }).click();
+    await preview.getByText(/Running on 127\.0\.0\.1:\d+/).waitFor();
+    await preview.getByRole('img', { name: 'The page as it looks now' }).waitFor({ timeout: 30_000 });
+    assert.match((await preview.getByRole('img').getAttribute('src'))!, /^data:image\/png;base64,/);
+    await shot(page, '40-build-preview-dark-1280');
+    await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
     await shot(page, '36-build-review-dark-1280');
 
     // Keeping is one tap; the record still says what was open.

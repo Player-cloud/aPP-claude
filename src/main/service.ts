@@ -15,6 +15,7 @@ import { DEFAULT_RUN_CAP_USD } from '../core/build/agent.ts';
 import { detectSetup } from '../core/build/checks.ts';
 import { runClaudeCode, type QueryFn } from '../core/build/claudeCode.ts';
 import { LiveRuns, type AgentHooks } from '../core/build/live.ts';
+import { detectPreview, Previews } from '../core/build/preview.ts';
 import { Releaser, type ReleaseInput } from '../core/release/releaser.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
 import { Assessor } from '../core/assess/assessor.ts';
@@ -39,7 +40,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
+type AsyncMethod = 'startPreview' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -113,6 +114,14 @@ export interface ServiceOptions {
   agentQuery?: QueryFn;
   /** Where the Claude Code binary is, when it is not where the SDK looks itself (an installed app). */
   engineExecutable?: () => string | undefined;
+  /**
+   * Live preview (M16 H): asks the person, outside the renderer, before a
+   * project's dev server first runs for a task; takes a picture of the page;
+   * and opens it in the browser. The desktop app supplies all three.
+   */
+  confirmPreview?: (request: { title: string; command: string; folder: string }) => Promise<boolean>;
+  capturePage?: (url: string, size: { width: number; height: number }) => Promise<string>;
+  openExternal?: (url: string) => Promise<void>;
 }
 
 /** The Claude Agent SDK, loaded only when real work starts. */
@@ -195,6 +204,12 @@ export class AppService {
   private readonly agentQuery: QueryFn;
   private readonly engineExecutable: () => string | undefined;
   private readonly live = new LiveRuns();
+  private readonly previews = new Previews();
+  /** Tasks whose dev server the person approved in this session. */
+  private readonly previewApproved = new Set<string>();
+  private readonly confirmPreview: NonNullable<ServiceOptions['confirmPreview']>;
+  private readonly capturePage: ServiceOptions['capturePage'];
+  private readonly openExternal: ServiceOptions['openExternal'];
 
   constructor(home: string, version: string, options: ServiceOptions = {}) {
     this.home = home;
@@ -211,6 +226,9 @@ export class AppService {
     this.bundled = options.bundled;
     this.agentQuery = options.agentQuery ?? sdkQuery;
     this.engineExecutable = options.engineExecutable ?? (() => undefined);
+    this.confirmPreview = options.confirmPreview ?? (async () => false);
+    this.capturePage = options.capturePage;
+    this.openExternal = options.openExternal;
     this.listModels =
       options.listModels ??
       (async (apiKey) => {
@@ -404,6 +422,7 @@ export class AppService {
 
   close(): void {
     this.live.stopAll();
+    this.previews.stopAll();
     this.ws?.close();
     this.ws = null;
   }
@@ -696,12 +715,59 @@ export class AppService {
     completeBuild: (input) =>
       wrapAsync(async () => {
         const i = obj(input, 'Completion');
-        return this.builder().complete(str(i.buildId, 'Build id')!, str(i.note, 'Note', true) ?? null);
+        const id = str(i.buildId, 'Build id')!;
+        const done = await this.builder().complete(id, str(i.note, 'Note', true) ?? null);
+        this.previews.stop(id);
+        return done;
       }),
     abandonBuild: (input) =>
       wrap(() => {
         const i = obj(input, 'Abandon');
-        return this.builder().abandon(str(i.buildId, 'Build id')!, str(i.reason, 'Reason', true) ?? null);
+        const id = str(i.buildId, 'Build id')!;
+        const done = this.builder().abandon(id, str(i.reason, 'Reason', true) ?? null);
+        this.previews.stop(id);
+        return done;
+      }),
+    // Live preview (M16 H, DEC-033): the project's dev server, or its static page, in the task's worktree.
+    previewState: (buildId) =>
+      wrap(() => {
+        const build = this.workspace().getBuild(str(buildId, 'Build id')!);
+        return this.previews.get(build.id, build.worktree ? detectPreview(build.worktree) : null);
+      }),
+    startPreview: (buildId) =>
+      wrapAsync(async () => {
+        const build = this.workspace().getBuild(str(buildId, 'Build id')!);
+        if (!build.worktree || build.status === 'abandoned') throw new ValidationError('This task has no work folder to preview.');
+        const plan = detectPreview(build.worktree);
+        if (!plan) throw new ValidationError('Nothing to preview: the project has no dev, start or preview script and no index.html.');
+        if (plan.kind === 'script' && !this.previewApproved.has(build.id)) {
+          if (!(await this.confirmPreview({ title: build.title, command: plan.command!, folder: build.worktree }))) {
+            throw new ValidationError('The preview command was not approved, so nothing ran.');
+          }
+          this.previewApproved.add(build.id);
+        }
+        return await this.previews.start(build.id, plan);
+      }),
+    capturePreview: (input) =>
+      wrapAsync(async () => {
+        const i = obj(input, 'Capture');
+        const url = this.previews.url(str(i.buildId, 'Build id')!);
+        if (!this.capturePage) throw new ValidationError('Pictures of the preview need the desktop app.');
+        const width = Math.min(Math.max(Number(i.width) || 1280, 320), 2560);
+        const height = Math.min(Math.max(Number(i.height) || 800, 240), 1600);
+        return await this.capturePage(url, { width, height });
+      }),
+    openPreview: (buildId) =>
+      wrapAsync(async () => {
+        const url = this.previews.url(str(buildId, 'Build id')!);
+        if (!this.openExternal) throw new ValidationError('Opening the browser needs the desktop app.');
+        await this.openExternal(url);
+        return null;
+      }),
+    stopPreview: (buildId) =>
+      wrap(() => {
+        this.previews.stop(str(buildId, 'Build id')!);
+        return null;
       }),
     buildDiff: (buildId) => wrapAsync(() => this.builder().diff(str(buildId, 'Build id')!)),
     // Releases (M7). Content is validated in releaser.ts.
