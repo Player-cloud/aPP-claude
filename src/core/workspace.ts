@@ -941,7 +941,7 @@ function toAgentTask(row: Record<string, unknown>): AgentTask {
 // Known settings and their allowed values. Unknown keys are rejected so the
 // settings table cannot become an unvalidated dumping ground.
 export const SETTINGS = {
-  theme: { values: ['system', 'dark', 'light'], default: 'dark' },
+  theme: { values: ['system', 'dark', 'light'], default: 'light' },
   glass: { values: ['on', 'off'], default: 'on' },
   // Monthly cap in US dollars for billable model calls. "none" = no real calls (DEC-017).
   budget: { values: ['none', '20', '50', '100'], default: 'none' },

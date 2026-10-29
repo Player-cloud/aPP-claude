@@ -80,7 +80,7 @@ if (smokeTest) {
       height: 800,
       minWidth: 960,
       minHeight: 600,
-      backgroundColor: '#0b1020',
+      backgroundColor: '#dfe9f7',
       title: 'Iterative Platform',
       show: false,
       webPreferences: {

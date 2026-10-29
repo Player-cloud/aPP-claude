@@ -89,7 +89,11 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     await page.getByRole('button', { name: 'Build', exact: true }).click();
     await page.getByRole('form', { name: 'Start a task' }).getByLabel('What do you want to build?').waitFor();
     assert.equal(await page.getByRole('combobox', { name: 'Project' }).inputValue() !== '', true);
-    await page.getByText('Nothing yet. Your tasks appear here').waitFor();
+    // With no work yet, Build greets with examples; one fills the message bar. There is no side panel here.
+    await page.getByRole('heading', { name: 'What do you want to build?' }).waitFor();
+    assert.equal(await page.locator('.side').count(), 0);
+    await page.getByRole('button', { name: 'Fix the crash when the rota is empty' }).click();
+    assert.equal(await page.getByRole('textbox', { name: 'What do you want to build?' }).inputValue(), 'Fix the crash when the rota is empty');
     await shot(page, '09-home-dark-1280');
     await page.keyboard.press('Control+k');
     await page.getByRole('combobox', { name: 'Search projects or go to' }).fill('recipe');
@@ -104,7 +108,8 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
   // Restart: everything is still there (FR-APP-002).
   ({ app, page } = await launch(home));
   try {
-    // The project is listed in the side panel's explorer.
+    // The project is listed in the side panel's explorer (shown under Projects; Build has no side panel).
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await page.getByRole('navigation', { name: 'Projects' }).getByRole('button', { name: 'Recipe sharing app' }).click();
     await page.getByText('Run tracker (optional)').click();
     await page.getByRole('article', { name: /Initial plan, Planned/ }).waitFor();
@@ -119,22 +124,26 @@ test('M2-AC6: theme preference applies immediately and persists', async (t) => {
   let { app, page } = await launch(home);
   try {
     await resize(app, 1280, 800);
-    assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+    // The day sky is the default (M16); the night sky is one click away.
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await shot(page, '04-settings-light-1280');
+    await page.getByRole('radio', { name: 'Dark' }).check();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+    await shot(page, '04-settings-night-1280');
     await page.getByRole('radio', { name: 'Light' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
-    await shot(page, '04-settings-light-1280');
     await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await shot(page, '05-projects-empty-light-1280');
 
     // Frosted glass is on by default and can be switched to solid panels.
     assert.equal(await page.evaluate(() => document.documentElement.dataset.glass), 'on');
     const blur = () => page.locator('.rail').evaluate((el) => getComputedStyle(el).backdropFilter);
-    assert.match(await blur(), /blur\(18px\)/);
+    assert.match(await blur(), /blur\(24px\)/);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('radio', { name: 'Solid panels' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.glass === 'off');
-    assert.doesNotMatch(await blur(), /blur\(18px\)/);
+    assert.doesNotMatch(await blur(), /blur\(24px\)/);
     await shot(page, '07-settings-solid-light-1280');
     await page.getByRole('radio', { name: 'Frosted glass' }).check();
     await page.waitForFunction(() => document.documentElement.dataset.glass === 'on');

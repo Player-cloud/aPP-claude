@@ -145,17 +145,17 @@ test('M2-AC6: settings are validated, persisted and audited', (t) => {
   const { home, cleanup } = tempHome();
   t.after(cleanup);
   let ws = Workspace.open(home, { actor: 'tester' });
-  assert.deepEqual(ws.getSettings(), { theme: 'dark', glass: 'on', budget: 'none' });
+  assert.deepEqual(ws.getSettings(), { theme: 'light', glass: 'on', budget: 'none' });
   assert.throws(() => ws.updateSetting('glass', 'maybe'), ValidationError);
   assert.throws(() => ws.updateSetting('theme', 'neon'), ValidationError);
   assert.throws(() => ws.updateSetting('telemetry', 'on'), ValidationError);
-  ws.updateSetting('theme', 'light');
-  ws.updateSetting('theme', 'light'); // no-op: no duplicate audit event
+  ws.updateSetting('theme', 'dark');
+  ws.updateSetting('theme', 'dark'); // no-op: no duplicate audit event
   ws.close();
   ws = Workspace.open(home);
-  assert.equal(ws.getSettings().theme, 'light');
+  assert.equal(ws.getSettings().theme, 'dark');
   const changes = ws.listEvents().filter((e) => e.type === 'setting.changed');
-  assert.deepEqual(changes.map((e) => e.payload), [{ key: 'theme', from: 'dark', to: 'light' }]);
+  assert.deepEqual(changes.map((e) => e.payload), [{ key: 'theme', from: 'light', to: 'dark' }]);
   ws.close();
 });
 

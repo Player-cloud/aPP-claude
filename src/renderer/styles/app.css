@@ -146,12 +146,10 @@ body {
   background: var(--glass-inset-hover);
   color: var(--text);
 }
-/* Active: glowing glass pill with an indicator bar on the rail's edge (reference 03). */
+/* Active: a soft pill with an indicator bar on the rail's edge (quieted in M16). */
 .rail-item[aria-current="page"] {
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   background: var(--accent-soft);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 30%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  color: var(--text);
+  color: var(--accent);
 }
 .rail-item[aria-current="page"]::before {
   content: "";
@@ -162,7 +160,6 @@ body {
   width: 3px;
   border-radius: var(--radius-pill);
   background: var(--accent);
-  box-shadow: 0 0 10px var(--accent);
 }
 .rail-tip {
   position: absolute;
@@ -209,8 +206,8 @@ body {
 .side-title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: 700;
+  font-size: var(--text-lg);
+  font-weight: 650;
   letter-spacing: -0.02em;
 }
 .icon-btn {
@@ -369,6 +366,23 @@ body {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  background: var(--main-bg);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+/* Inside the work surface the top bar is part of the panel, not a box of its own. */
+.main > .topbar {
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .topbar {
@@ -443,10 +457,10 @@ body {
 .page-title {
   margin: 0 0 var(--space-2);
   font-family: var(--font-display);
-  font-size: clamp(1.75rem, 1.2rem + 1.3vw, 2.375rem);
-  font-weight: 700;
-  line-height: 1.15;
-  letter-spacing: -0.025em;
+  font-size: clamp(1.5rem, 1.2rem + 0.6vw, 1.875rem);
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
 }
 .page-title .accent {
   background: linear-gradient(120deg, var(--accent) 0%, var(--accent-strong) 50%, var(--blue) 120%);
@@ -3460,4 +3474,130 @@ button.status-pill {
 }
 .report-done p {
   margin: 0;
+}
+
+/* ---- M16: one sidebar, the message bar at the bottom, a status line (DEC-033) ---- */
+.shell.no-side {
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+}
+.build-home {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  margin-bottom: 0;
+}
+.build-hello {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: center;
+  margin: auto 0 0;
+  padding-top: var(--space-7);
+  text-align: center;
+}
+.build-hello-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.build-hello .chips {
+  justify-content: center;
+}
+.composer-dock {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  padding-top: var(--space-3);
+}
+.task-composer {
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--raised-bg);
+  box-shadow: var(--glass-shadow);
+}
+.task-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.task-composer-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+.task-composer-input {
+  flex: 1;
+  min-height: 0;
+  max-height: 160px;
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+}
+.task-composer-input::placeholder {
+  color: var(--text-subtle);
+}
+.task-composer-go {
+  border-radius: var(--radius-pill);
+}
+.task-composer-row {
+  gap: var(--space-2);
+  padding-right: var(--space-2);
+}
+.task-composer-project .select {
+  min-width: 0;
+  min-height: 28px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+}
+.task-composer-budget {
+  flex: 1 1 200px;
+  font-size: var(--text-xs);
+}
+.project-work .composer-dock,
+.project-work > .task-composer {
+  position: static;
+}
+.status-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 4px var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--cyan-soft);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.status-line[data-waiting="true"] {
+  background: var(--warn-soft);
+}
+.status-line-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cyan);
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+.status-line[data-waiting="true"] .status-line-dot {
+  background: var(--warn);
+}
+@keyframes status-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-line-dot {
+    animation: none;
+  }
 }
