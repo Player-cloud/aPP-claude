@@ -9,6 +9,9 @@ files:
   - "!dist/**/*.map"
   - package.json
 asar: true
+# Claude Code's engine (DEC-032) is a program, which cannot run from inside the archive.
+asarUnpack:
+  - "node_modules/@anthropic-ai/claude-agent-sdk-*/**"
 win:
   target:
     - target: nsis

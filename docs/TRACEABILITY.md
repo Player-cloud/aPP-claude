@@ -247,3 +247,17 @@ Status legend: **Verified** (implemented, automated tests pass) · **Implemented
 | M14-AC17 | The core product works the same with every add-on missing or turned off | Verified | `lessons.test.ts` M14-AC17 |
 | M14-AC18 | Read a real transcript or PDF with Claude, propose a skill from real repeated work and review the add-ons on joshua's PC | **Not done** | — |
 
+
+## Milestone M15 acceptance criteria (live building on Claude Code's engine, simpler app)
+
+| AC | Criterion | Status | Evidence |
+|---|---|---|---|
+| M15-AC1 | Real build work runs on Claude Code's engine in the build's worktree; files outside it and `.git` are refused, approved checks run without asking, other commands wait for the person, other tools are refused | Verified (with a fake engine) | `engine.test.ts` "files stay inside the worktree…", "with real calls on…" |
+| M15-AC2 | The engine gets none of the person's keys, Claude Code settings, plugins or MCP servers, and keeps no sessions | Verified | `engine.test.ts` "the engine gets none…", "steps stream…" (options) |
+| M15-AC3 | Each run is capped by the per-run limit and what is left of the monthly budget; its cost is recorded on the ledger | Verified (with a fake engine) | `engine.test.ts` "with real calls on…" |
+| M15-AC4 | Steps, Claude's text and plan, questions and stages appear live while the work runs; stopping answers any question with no | Verified | `engine.test.ts` "steps stream…", "a question waits…"; `e2e/app.e2e.ts` M15 |
+| M15-AC5 | One sentence becomes a task: repository, checks and dependency install found, commands approved in the native dialog, then setup, baseline, agent and review run by themselves | Verified | `engine.test.ts` "one sentence becomes a task…", "checks and dependency setup…"; `e2e/app.e2e.ts` M15, screenshot `36-build-review-dark-1280` |
+| M15-AC6 | The review shows checks before and after, the coloured diff and what to look at; keep takes a one-tap reason when there are risks; ask for changes runs Claude again in the same work | Verified | `e2e/app.e2e.ts` M15, `engine.test.ts` follow-up |
+| M15-AC7 | The rail has four places (Build, Projects, Library, Settings) and every earlier screen is still reachable | Verified | `e2e/app.e2e.ts` M15 and all earlier e2e tests, screenshot `39-settings-tabs-dark-1280` |
+| M15-AC8 | The installed Windows app loads the engine and runs its binary | Verified in CI | `ci.yml` installer smoke test (`engine.ok`, `claude --version`); packaged Linux build checked locally |
+| M15-AC9 | Build a real feature on joshua's PC with Claude Code's engine, answering at least one command question | **Not done** | — |

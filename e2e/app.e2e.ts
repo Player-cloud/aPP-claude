@@ -27,8 +27,11 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
   let { app, page } = await launch(home);
   try {
     await resize(app, 1280, 800);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await page.getByRole('heading', { name: 'No projects yet' }).waitFor();
     await shot(page, '01-projects-empty-dark-1280');
+
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
 
     await page.getByRole('button', { name: 'New project' }).click();
     // Server-side validation is shown, not bypassed by the UI.
@@ -47,6 +50,8 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     assert.deepEqual(await page.getByRole('list', { name: 'Confirmed facts' }).getByRole('listitem').allTextContents(), ['Windows desktop first', 'Single user']);
     assert.deepEqual(await page.getByRole('list', { name: 'Assumptions' }).getByRole('listitem').allTextContents(), ['Users want offline access']);
 
+    // The run tracker is optional and folded away until opened.
+    await page.getByText('Run tracker (optional)').click();
     await page.getByLabel('Title').fill('Initial plan');
     await page.getByRole('button', { name: 'Start run' }).click();
     const run = page.getByRole('article', { name: /Initial plan/ });
@@ -68,6 +73,8 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     await run.getByRole('button', { name: 'Resume (Planned)' }).click();
     await run.getByText('Planned', { exact: true }).waitFor();
 
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+
     await page.getByRole('button', { name: 'Activity', exact: true }).click();
     // The log loads asynchronously: wait for the entry rather than reading the table once.
     await page.getByRole('cell', { name: 'Run moved planned → blocked: EGM is not installed' }).waitFor();
@@ -78,11 +85,11 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
     await page.getByRole('list', { name: 'All projects' }).getByRole('button', { name: /Recipe sharing app/ }).waitFor();
     await shot(page, '08-projects-overview-dark-1280');
 
-    // Command Centre: the run shows on the board under its real state, and the palette opens a project.
-    await page.getByRole('button', { name: 'Home', exact: true }).click();
-    const board = page.getByRole('region', { name: /^Planning, 1/ });
-    await board.getByRole('button', { name: /Initial plan, Recipe sharing app/ }).waitFor();
-    await page.getByRole('region', { name: 'Recent activity' }).getByText(/Run moved blocked → planned/).waitFor();
+    // Build (M15): the home is the task composer and the person's work, and the palette opens a project.
+    await page.getByRole('button', { name: 'Build', exact: true }).click();
+    await page.getByRole('form', { name: 'Start a task' }).getByLabel('What do you want to build?').waitFor();
+    assert.equal(await page.getByRole('combobox', { name: 'Project' }).inputValue() !== '', true);
+    await page.getByText('Nothing yet. Your tasks appear here').waitFor();
     await shot(page, '09-home-dark-1280');
     await page.keyboard.press('Control+k');
     await page.getByRole('combobox', { name: 'Search projects or go to' }).fill('recipe');
@@ -99,6 +106,7 @@ test('M2-AC3/AC4: create a project, run a workflow with a blocker, and find it a
   try {
     // The project is listed in the side panel's explorer.
     await page.getByRole('navigation', { name: 'Projects' }).getByRole('button', { name: 'Recipe sharing app' }).click();
+    await page.getByText('Run tracker (optional)').click();
     await page.getByRole('article', { name: /Initial plan, Planned/ }).waitFor();
   } finally {
     await app.close();
@@ -156,7 +164,7 @@ test('M2-AC5: a corrupt database shows a recovery screen and changes nothing unt
     await page.getByRole('button', { name: 'Move it aside and start fresh' }).click();
     await page.getByText(/The damaged database was kept at/).waitFor();
     await page.getByRole('button', { name: 'Open the new workspace' }).click();
-    await page.getByRole('heading', { name: 'No projects yet' }).waitFor();
+    await page.getByLabel('What do you want to build?').waitFor();
   } finally {
     await app.close();
   }
@@ -212,13 +220,13 @@ test('M2-AC7/AC9: keyboard navigation, visible focus, and layouts at target size
       const style = getComputedStyle(el);
       return { label: el.getAttribute('aria-label'), outline: style.outlineStyle, width: style.outlineWidth };
     });
-    assert.equal(focused.label, 'Home');
+    assert.equal(focused.label, 'Build');
     assert.equal(focused.outline, 'solid');
     assert.notEqual(focused.width, '0px');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Enter');
-    await page.getByRole('heading', { level: 1, name: 'Activity' }).waitFor();
+    await page.getByRole('navigation', { name: 'Library sections' }).getByRole('button', { name: 'Learning Studio' }).and(page.locator('[aria-current="page"]')).waitFor();
 
     for (const [w, h] of [
       [1920, 1080],
@@ -237,8 +245,8 @@ test('M2-AC7/AC9: keyboard navigation, visible focus, and layouts at target size
       if (w === 1024) assert.equal(layout.side, 0, `side panel should be hidden at ${w}px`);
       else assert.ok(layout.side >= 200, `side panel should be shown at ${w}px`);
       await shot(page, `07-projects-dark-${w}`);
-      await page.getByRole('button', { name: 'Home', exact: true }).click();
-      await page.getByRole('heading', { level: 1, name: 'Welcome back' }).waitFor();
+      await page.getByRole('button', { name: 'Build', exact: true }).click();
+      await page.getByRole('heading', { name: 'What do you want to build?' }).or(page.getByText('What do you want to build?')).first().waitFor();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, `home overflows at ${w}x${h}`);
       await shot(page, `07-home-dark-${w}`);
     }
@@ -256,6 +264,7 @@ test('M4: the Tools screen scans a Claude Code setup read-only and explains conf
   const { app, page } = await launch(join(home, 'app'), { CLAUDE_CONFIG_DIR: fixture.configDir });
   try {
     await resize(app, 1280, 800);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Tools', exact: true }).click();
     await page.getByRole('heading', { name: 'No scan yet' }).waitFor();
     await page.getByRole('button', { name: 'Scan now' }).click();
@@ -275,6 +284,7 @@ test('M4: the Tools screen scans a Claude Code setup read-only and explains conf
 
     // The scan is stored: it is still there after switching away and back.
     await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Tools', exact: true }).click();
     await page.getByText('Plugin ghost@acme is enabled but not installed').waitFor();
   } finally {
@@ -288,9 +298,11 @@ test('M3: the main agent runs on a started run and is clearly labelled simulated
   const { app, page } = await launch(home);
   try {
     await resize(app, 1280, 800);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await page.getByRole('button', { name: 'New project' }).click();
     await page.getByLabel('Name').fill('Agent demo');
     await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByText('Run tracker (optional)').click();
     await page.getByLabel('Title').fill('Build the importer');
     await page.getByRole('button', { name: 'Start run' }).click();
     const run = page.getByRole('article', { name: /Build the importer/ });
@@ -329,6 +341,7 @@ test('M5: plan a project from brief to specification, with versions and a record
   const { app, page } = await launch(home);
   try {
     await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await page.getByRole('button', { name: 'New project' }).click();
     await page.getByLabel('Name').fill('Recipe box');
     await page.getByLabel('Idea').fill('A private recipe box for home cooks');
@@ -389,6 +402,7 @@ test('M6: fix a bug in a worktree, with commands approved in a native dialog and
   const { app, page } = await launch(home);
   try {
     await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await page.getByRole('button', { name: 'New project' }).click();
     await page.getByLabel('Name').fill('Fix demo');
     await page.getByRole('button', { name: 'Create project' }).click();
@@ -451,6 +465,7 @@ test('M7: a ship-check shows each gate with its evidence, needs exceptions for f
   const { app, page } = await launch(home);
   try {
     await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await page.getByRole('button', { name: 'New project' }).click();
     await page.getByLabel('Name').fill('Ship demo');
     await page.getByRole('button', { name: 'Create project' }).click();
@@ -594,6 +609,7 @@ test('M9: collect design references in the Learning Studio, with a suggestion th
     await page.evaluate(() => window.iap.createProject({ name: 'Club HR' }));
     await page.reload();
     await page.waitForSelector('#main');
+    await page.getByRole('button', { name: 'Library', exact: true }).click();
     await page.getByRole('button', { name: 'Learning Studio' }).click();
     await page.getByRole('heading', { name: 'No references yet' }).waitFor();
 
@@ -706,6 +722,8 @@ test('M9: polish the UI with an audit of the design system, a chosen reference a
     await form.getByRole('button', { name: 'Import' }).click();
     await page.getByRole('heading', { name: 'Club HR', level: 1 }).waitFor();
 
+    await page.getByRole('button', { name: 'Library', exact: true }).click();
+
     await page.getByRole('button', { name: 'Learning Studio' }).click();
     await app.evaluate(({ dialog }, path) => {
       dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog;
@@ -776,6 +794,7 @@ test('M10: the app assesses its own records in three layers, and the person move
     });
     await page.reload();
     await page.waitForSelector('#main');
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Improvements', exact: true }).first().click();
     await page.getByRole('heading', { name: 'The backlog is empty' }).waitFor();
 
@@ -844,6 +863,7 @@ test('M11: resolve tool conflicts with a dry run, a native approval, a verified 
   });
   try {
     await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Tools', exact: true }).click();
     await page.getByRole('button', { name: 'Scan now' }).click();
     const finding = page.locator('details.finding', { hasText: '2 tools answer /deploy' });
@@ -941,9 +961,12 @@ test('M12: check trusted sources for updates, approve one, see it installed by t
   });
   try {
     await resize(app, 1280, 900);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Tools', exact: true }).click();
     await page.getByRole('button', { name: 'Scan now' }).click();
     await page.locator('details.finding').first().waitFor();
+
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
 
     await page.getByRole('button', { name: 'Updates', exact: true }).first().click();
     await page.getByRole('heading', { name: 'No check yet' }).waitFor();
@@ -1003,12 +1026,13 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox;
     });
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Platform', exact: true }).first().click();
     await page.getByRole('heading', { name: 'Set up platform maintenance' }).waitFor();
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.17.0', { exact: true }).waitFor();
+    await kg.getByText('0.18.0', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.
@@ -1020,12 +1044,15 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
       const a = await window.iap.moveImprovement({ id: i.value.id, to: 'approved' });
       if (!a.ok) throw new Error(a.error.message);
     });
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Improvements', exact: true }).first().click();
     await page.getByRole('list', { name: 'Improvements' }).getByRole('button', { name: /Sums are wrong/ }).click();
     const inspector = page.getByRole('region', { name: /IMP-1 Sums are wrong/ });
     await inspector.getByRole('button', { name: 'Build as platform work' }).click();
     await inspector.getByText(/is a draft in the platform-maintenance project/).waitFor();
     await inspector.getByText('In progress', { exact: true }).first().waitFor();
+
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
 
     await page.getByRole('button', { name: 'Platform', exact: true }).first().click();
     await page.getByRole('list', { name: 'Platform builds' }).getByText(/IMP-1: Sums are wrong/).waitFor();
@@ -1060,6 +1087,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }), '', 'the source checkout is never edited');
 
     // A backup before installing the new version, and a recovery drill on a copy.
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Platform', exact: true }).first().click();
     await page.getByRole('button', { name: 'Take a backup' }).click();
     const backups = page.getByRole('list', { name: 'Backups' });
@@ -1089,6 +1117,7 @@ test('M14: feedback about the work becomes an approved preference, a duplicate n
     });
 
     // One feedback box: feedback about how the work is done becomes a proposed preference.
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Improvements', exact: true }).first().click();
     await page.getByRole('radio', { name: 'How I want work done' }).check();
     await page.getByLabel('What would you like done differently?').fill('Please use British English in the interface text');
@@ -1171,6 +1200,7 @@ test('M14: lessons from a transcript are cited and kept apart from suggestions, 
     });
     await page.reload();
     await page.waitForSelector('#main');
+    await page.getByRole('button', { name: 'Library', exact: true }).click();
     await page.getByRole('button', { name: 'Preferences and lessons' }).click();
     await page.getByRole('button', { name: 'Lessons', exact: true }).first().click();
 
@@ -1231,6 +1261,57 @@ test('M14: lessons from a transcript are cited and kept apart from suggestions, 
     await cache.getByText('exclude', { exact: true }).waitFor();
     await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
     await shot(page, '35-addons-dark-1280');
+  } finally {
+    await app.close();
+  }
+});
+
+test('M15: say what to build, watch the steps, review and keep the change (simulated)', async (t) => {
+  const { home, cleanup } = tempHome();
+  t.after(cleanup);
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, 1280, 800);
+    // Four places in the rail, the rest one level down.
+    const rail = page.getByRole('navigation', { name: 'Primary' });
+    assert.deepEqual(await rail.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Build', 'Projects', 'Library', 'Settings']);
+
+    // With no project yet, the composer asks for a name and makes one.
+    const composer = page.getByRole('form', { name: 'Start a task' });
+    await composer.getByLabel('What do you want to build?').fill('Add a page that lists members');
+    await composer.getByLabel('New project name').fill('Club HR');
+    await composer.getByRole('button', { name: 'Start' }).click();
+
+    const work = page.getByRole('article', { name: 'Add a page that lists members' });
+    await work.getByRole('list', { name: 'What Claude is doing' }).getByText('Setting up a separate copy of your code').waitFor();
+    await work.getByText('Ready for your review.').waitFor({ timeout: 30_000 });
+    await work.getByRole('heading', { name: 'Keep this change?' }).waitFor();
+    // No checks were found, so the review says nothing tested it, and keeping needs a reason.
+    await work.getByRole('list', { name: 'Risks' }).getByText(/nothing tested the change/).waitFor();
+    const keep = work.getByRole('button', { name: 'Keep the change' });
+    assert.equal(await keep.isDisabled(), true);
+    await shot(page, '36-build-review-dark-1280');
+    await work.getByRole('radio', { name: 'OK for now' }).click();
+    await keep.click();
+    await work.getByRole('heading', { name: 'Kept' }).waitFor();
+    await work.getByText(/nothing was merged or pushed for you/).waitFor();
+
+    await work.getByRole('button', { name: '← All work' }).click();
+    const list = page.getByRole('list', { name: 'Your work' });
+    await list.getByRole('button', { name: /Add a page that lists members.*Club HR.*Kept/ }).waitFor();
+    await shot(page, '37-build-home-dark-1280');
+
+    // The project page leads with the same composer and its own tasks.
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Projects' }).getByRole('button', { name: 'Club HR' }).click();
+    await page.getByRole('region', { name: 'Tasks' }).getByRole('list', { name: 'Your work' }).getByRole('button', { name: /Add a page that lists members/ }).waitFor();
+    await shot(page, '38-project-tasks-dark-1280');
+
+    // Settings holds the maintenance screens as tabs.
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const tabs = page.getByRole('navigation', { name: 'Settings sections' });
+    assert.deepEqual(await tabs.getByRole('button').allTextContents(), ['General', 'Activity', 'Tools', 'Updates', 'Improvements', 'Platform']);
+    await shot(page, '39-settings-tabs-dark-1280');
   } finally {
     await app.close();
   }

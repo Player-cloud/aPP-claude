@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, sessi
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { bundledExecutable } from '../core/build/claudeCode.ts';
 import { resolveAppHome } from '../core/paths.ts';
 import { fixtureFetcher } from '../core/updates/updates.ts';
 import { channel, IAP_METHODS } from '../shared/api.ts';
@@ -26,19 +27,35 @@ protocol.registerSchemesAsPrivileged([{ scheme: REF_SCHEME, privileges: { standa
 
 const smokeTest = process.argv.includes('--smoke-test');
 
+/** Proves the installed app can load Claude Code's engine and run its binary (DEC-032), without calling the API. */
+async function engineCheck(): Promise<{ ok: boolean; executable: string | null; version: string | null; error?: string }> {
+  const executable = bundledExecutable((id) => require.resolve(id)) ?? null;
+  try {
+    const sdk = await import('@anthropic-ai/claude-agent-sdk');
+    if (typeof sdk.query !== 'function') throw new Error('The engine did not load.');
+    if (!executable) throw new Error('The Claude Code binary is missing.');
+    const { execFileSync } = await import('node:child_process');
+    const version = execFileSync(executable, ['--version'], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, CLAUDE_CONFIG_DIR: join(home, 'claude-engine') } }).trim();
+    return { ok: version.length > 0, executable, version };
+  } catch (e) {
+    return { ok: false, executable, version: null, error: String(e) };
+  }
+}
+
 // `--smoke-test`: open the workspace, report health, exit. Used by CI to prove
 // that an installed build launches and can read and write its data directory
 // (FR-APP-001) without needing a display.
 if (smokeTest) {
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     let code = 1;
     let report: unknown;
     try {
       const service = new AppService(home, app.getVersion());
       const status = service.status();
       const health = service.handlers.health();
-      report = { status, health, versions: { electron: process.versions.electron, node: process.versions.node } };
-      code = status.state === 'ready' && health.ok && health.value.integrity === 'ok' ? 0 : 1;
+      const engine = await engineCheck();
+      report = { status, health, engine, versions: { electron: process.versions.electron, node: process.versions.node } };
+      code = status.state === 'ready' && health.ok && health.value.integrity === 'ok' && engine.ok ? 0 : 1;
       service.close();
     } catch (e) {
       report = { error: String(e) };
@@ -99,6 +116,8 @@ if (smokeTest) {
     // No camera, microphone, notifications etc. until a feature needs them.
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     service = new AppService(home, app.getVersion(), {
+      // The Claude Code binary ships with the app, unpacked so it can run (DEC-032).
+      engineExecutable: () => bundledExecutable((id) => require.resolve(id)),
       keyStore: new EncryptedFileKeyStore(join(home, 'secrets', 'anthropic-api-key.bin'), {
         // On Linux without a keyring Electron falls back to a fixed password, which is not real protection.
         isEncryptionAvailable: () =>

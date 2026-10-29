@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { Build, PlanningOverview, Project, Release, RunState, RunWithNext, Workflow } from '../../shared/api.ts';
+import type { AgentStatus, Build, PlanningOverview, Project, Release, RunState, RunWithNext, Workflow } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { AgentPanel } from './AgentPanel.tsx';
@@ -7,6 +7,7 @@ import { PlanningPanel } from './PlanningPanel.tsx';
 import { BuildPanel } from './BuildPanel.tsx';
 import { ReleasePanel } from './ReleasePanel.tsx';
 import { AssessmentPanel } from './AssessmentPanel.tsx';
+import { Composer, WorkList, WorkView } from './BuildView.tsx';
 import { Alert, Empty, formatDate, formatTime, needsPerson, StateBadge, stateLabel } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
 
@@ -265,8 +266,8 @@ function PhaseStepper({ phases }: { phases: Phase[] }) {
 }
 
 /** One safe next action, worked out from the project's records. */
-function nextStep(project: Project, planning: PlanningOverview | null, runs: RunWithNext[] | null, assessed: boolean | null): { title: string; detail: string; target: string } | null {
-  if (!planning || !runs || assessed === null) return null;
+function nextStep(project: Project, planning: PlanningOverview | null, runs: RunWithNext[] | null, assessed: boolean | null, builds: Build[] | null): { title: string; detail: string; target: string } | null {
+  if (!planning || !runs || assessed === null || !builds) return null;
   if (project.kind === 'maintenance') return { title: 'Build an approved platform item', detail: 'Platform work starts from an approved improvement or update. It runs in a worktree of the app\u2019s source; the running app is not changed.', target: 'phase-build' };
   if (project.origin === 'imported' && !assessed) return { title: 'Assess the repository', detail: 'See what the imported code already has, read-only, before planning changes.', target: 'phase-assess' };
   const waiting = runs.filter((r) => needsPerson(r.state));
@@ -276,14 +277,17 @@ function nextStep(project: Project, planning: PlanningOverview | null, runs: Run
       detail: waiting.map((r) => `${r.title} (${stateLabel(r.state).toLowerCase()})`).join(', '),
       target: 'runs-title',
     };
-  if (!planning.brief.approved) return { title: 'Approve the concept brief', detail: 'Draft it, fill the placeholders and approve it.', target: 'phase-plan' };
-  if (!planning.spec.approved) return { title: 'Approve the specification', detail: 'The brief is approved. Draft the specification next.', target: 'phase-plan' };
+  const toReview = builds.filter((b) => b.status === 'review');
+  if (toReview.length) return { title: `${toReview.length} ${toReview.length === 1 ? 'task is' : 'tasks are'} ready to review`, detail: toReview.map((b) => b.title).join(', '), target: 'project-work' };
   if (planning.specOutdated) return { title: 'Update the specification', detail: 'The brief changed after the spec was approved.', target: 'phase-plan' };
-  if (!project.repoPath) return { title: 'Choose a repository', detail: 'Build work needs the git repository this project lives in.', target: 'phase-build' };
-  return { title: 'Start a feature or bug fix', detail: 'Planning is approved and a repository is set.', target: 'phase-build' };
+  if (builds.length === 0) return { title: 'Describe your first task', detail: 'Type what you want built in the box above. Planning a brief and specification first is optional.', target: 'project-work' };
+  return { title: 'Describe the next task', detail: 'Or plan the project first: the brief and specification are optional.', target: 'project-work' };
 }
 
-export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLoaded: (name: string) => void }) {
+export function ProjectDetail({ projectId, onLoaded, agent }: { projectId: string; onLoaded: (name: string) => void; agent?: AgentStatus | null }) {
+  const [openBuild, setOpenBuild] = useState<string | null>(null);
+  // Folded away unless opened, or a run is waiting for the person.
+  const [trackerOpen, setTrackerOpen] = useState(false);
   const project = useAsync(() => call(iap().getProject(projectId)), [projectId]);
   const runs = useAsync(() => call(iap().listRuns(projectId)), [projectId]);
   const planning = useAsync(() => call(iap().getPlanning(projectId)), [projectId]);
@@ -316,8 +320,10 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
   const p = project.data;
   const confirmed = p.facts.filter((f) => f.kind === 'confirmed');
   const assumptions = p.facts.filter((f) => f.kind === 'assumption');
-  const next = nextStep(p, planning.data, runs.data, assessments.data ? assessments.data.some((a) => a.status === 'completed') : null);
+  const next = nextStep(p, planning.data, runs.data, assessments.data ? assessments.data.some((a) => a.status === 'completed') : null, builds.data);
   const assessmentPanel = <AssessmentPanel project={p} onChanged={() => void assessments.reload()} />;
+
+  if (openBuild) return <WorkView buildId={openBuild} onBack={() => setOpenBuild(null)} onChanged={() => void builds.reload()} />;
 
   return (
     <>
@@ -325,6 +331,12 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
         {p.name} {p.kind === 'maintenance' && <span className="pill">Platform maintenance</span>}
       </h1>
       <p className="page-lede">{p.idea ?? 'No idea recorded yet.'}</p>
+      {p.kind !== 'maintenance' && (
+        <section id="project-work" className="project-work" aria-label="Tasks">
+          <Composer projects={[p]} projectId={p.id} agent={agent ?? null} onStarted={(b) => setOpenBuild(b.id)} />
+          {builds.data && builds.data.length > 0 && <WorkList builds={builds.data.map((b) => ({ ...b, projectName: p.name, running: false }))} onOpen={setOpenBuild} showProject={false} />}
+        </section>
+      )}
       <PhaseStepper phases={phasesFor(planning.data, builds.data, runs.data, releases.data)} />
       <div className="content-grid">
         <div>
@@ -339,10 +351,13 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
           <BuildPanel project={p} onProjectChanged={async () => void (await project.reload())} onChanged={() => void builds.reload()} />
           <ReleasePanel project={p} onChanged={() => void releases.reload()} />
           {p.origin !== 'imported' && assessmentPanel}
-          <section className="card" aria-labelledby="runs-title">
-            <h2 className="card-title" id="runs-title">
-              Workflow runs {runs.data && <span className="count-pill">{runs.data.length}</span>}
-            </h2>
+          <details className="card run-tracker" open={trackerOpen || Boolean(runs.data?.some((r) => needsPerson(r.state)))} onToggle={(e) => setTrackerOpen(e.currentTarget.open)}>
+            <summary>
+              <h2 className="card-title" id="runs-title">
+                Run tracker (optional) {runs.data && <span className="count-pill">{runs.data.length}</span>}
+              </h2>
+            </summary>
+            <p className="subtle">A manual checklist for your own stages of work. Claude's work happens in the tasks above; moving a run does not start or change any task.</p>
             {runs.error && <Alert tone="danger">{runs.error}</Alert>}
             {runs.data && runs.data.length === 0 && <Empty title="No runs yet">Start a workflow run to track a piece of work through its states.</Empty>}
             {runs.data && runs.data.length > 0 && (
@@ -352,7 +367,32 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
                 ))}
               </div>
             )}
-          </section>
+          <section className="run-start" aria-labelledby="start-title">
+              <h3 className="subtle" id="start-title">
+                Start a run
+              </h3>
+              <form onSubmit={start}>
+                {startError && <Alert tone="danger">{startError}</Alert>}
+                <div className="field">
+                  <label htmlFor="run-workflow">Workflow</label>
+                  <select id="run-workflow" className="select" value={workflow} onChange={(e) => setWorkflow(e.target.value as Workflow)}>
+                    {WORKFLOWS.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="run-title">Title</label>
+                  <input id="run-title" className="input" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} placeholder="Optional" />
+                </div>
+                <button type="submit" className="btn btn-primary">
+                  Start run
+                </button>
+              </form>
+            </section>
+          </details>
           <section className="card" aria-labelledby="facts-title">
             <h2 className="card-title" id="facts-title">
               What we know
@@ -390,31 +430,6 @@ export function ProjectDetail({ projectId, onLoaded }: { projectId: string; onLo
               </button>
             </section>
           )}
-          <section className="card card-glass" aria-labelledby="start-title">
-            <h2 className="card-title" id="start-title">
-              Start a run
-            </h2>
-            <form onSubmit={start}>
-              {startError && <Alert tone="danger">{startError}</Alert>}
-              <div className="field">
-                <label htmlFor="run-workflow">Workflow</label>
-                <select id="run-workflow" className="select" value={workflow} onChange={(e) => setWorkflow(e.target.value as Workflow)}>
-                  {WORKFLOWS.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label htmlFor="run-title">Title</label>
-                <input id="run-title" className="input" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} placeholder="Optional" />
-              </div>
-              <button type="submit" className="btn btn-primary">
-                Start run
-              </button>
-            </form>
-          </section>
           {references.data && references.data.length > 0 && (
             <section className="card" aria-labelledby="refs-title">
               <h2 className="card-title" id="refs-title">

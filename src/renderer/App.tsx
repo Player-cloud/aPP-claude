@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AgentStatus, AppStatus, Project, RunWithNext, Settings, ToolScan } from '../shared/api.ts';
+import type { AgentStatus, AppStatus, Project, Settings, ToolScan } from '../shared/api.ts';
 import { call, iap } from './api.ts';
 import { CommandPalette } from './CommandPalette.tsx';
 import { Icon } from './icons.tsx';
 import { SidePanel } from './SidePanel.tsx';
-import { needsPerson } from './ui.tsx';
 import { ActivityView } from './views/ActivityView.tsx';
-import { HomeView } from './views/HomeView.tsx';
+import { BuildHome } from './views/BuildView.tsx';
 import { IterativeView, type ImprovementFilter } from './views/IterativeView.tsx';
 import { LearningStudioView, type StudioFilter } from './views/LearningStudioView.tsx';
 import { ProjectDetail } from './views/ProjectDetail.tsx';
@@ -22,25 +21,25 @@ export type Section = 'home' | 'projects' | 'activity' | 'studio' | 'preferences
 
 type NavIcon = 'home' | 'projects' | 'activity' | 'studio' | 'bookmark' | 'tools' | 'radar' | 'iterate' | 'shield' | 'settings';
 
-// Groups are separated by a divider in the rail: Project Layer, then Iterative Layer.
-const NAV: { id: Section; label: string; icon: NavIcon; tag?: string }[][] = [
-  [
-    { id: 'home', label: 'Home', icon: 'home' },
-    { id: 'projects', label: 'Projects', icon: 'projects' },
-    { id: 'activity', label: 'Activity', icon: 'activity' },
-    { id: 'studio', label: 'Learning Studio', icon: 'studio' },
-    { id: 'preferences', label: 'Preferences and lessons', icon: 'bookmark' },
-  ],
-  [
-    { id: 'tools', label: 'Tools', icon: 'tools' },
-    { id: 'updates', label: 'Updates', icon: 'radar' },
-    { id: 'iterative', label: 'Improvements', icon: 'iterate' },
-    { id: 'platform', label: 'Platform', icon: 'shield' },
-  ],
+/**
+ * Four places (M15): Build, Projects, Library and Settings. Less-used screens
+ * sit one level down, as tabs of Library and Settings, instead of competing
+ * with the work in the rail.
+ */
+type Group = { id: Section; label: string; icon: NavIcon; tabs?: Section[] };
+const NAV: Group[] = [
+  { id: 'home', label: 'Build', icon: 'home' },
+  { id: 'projects', label: 'Projects', icon: 'projects' },
+  { id: 'studio', label: 'Library', icon: 'studio', tabs: ['studio', 'preferences'] },
 ];
+const SETTINGS_GROUP: Group = { id: 'settings', label: 'Settings', icon: 'settings', tabs: ['settings', 'activity', 'tools', 'updates', 'iterative', 'platform'] };
+
+const TAB_LABEL: Partial<Record<Section, string>> = { settings: 'General', preferences: 'Preferences and lessons' };
+
+const groupOf = (s: Section): Group => [...NAV, SETTINGS_GROUP].find((g) => g.id === s || g.tabs?.includes(s))!;
 
 export const SECTION_LABEL: Record<Section, string> = {
-  home: 'Home',
+  home: 'Build',
   projects: 'Projects',
   activity: 'Activity',
   studio: 'Learning Studio',
@@ -58,8 +57,8 @@ function applyTheme(theme: Settings['theme']) {
   document.documentElement.dataset.theme = resolved;
 }
 
-function RailButton({ label, icon, tag, current, onClick }: { label: string; icon: NavIcon; tag?: string; current: boolean; onClick: () => void }) {
-  const name = tag ? `${label} (${tag})` : label;
+function RailButton({ label, icon, current, onClick }: { label: string; icon: NavIcon; current: boolean; onClick: () => void }) {
+  const name = label;
   return (
     <button type="button" className="rail-item" aria-current={current ? 'page' : undefined} aria-label={name} onClick={onClick}>
       <Icon name={icon} size={20} />
@@ -89,8 +88,8 @@ export function App() {
   const [improvementFilter, setImprovementFilter] = useState<ImprovementFilter>('all');
   const [updateFilter, setUpdateFilter] = useState<UpdateFilter>('all');
   const [prefTab, setPrefTab] = useState<PreferencesTab>('preferences');
-  // Runs of every project, for the top bar's run status and the Command Centre.
-  const [runs, setRuns] = useState<Record<string, RunWithNext[]> | null>(null);
+  // The task open on the Build screen, if any.
+  const [openBuild, setOpenBuild] = useState<string | null>(null);
   const [agent, setAgent] = useState<AgentStatus | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -120,22 +119,12 @@ export function App() {
     void refreshStatus();
   }, [refreshStatus]);
 
-  const loadRuns = useCallback(async (list: Project[]) => {
-    try {
-      const all = await Promise.all(list.map(async (p) => [p.id, await call(iap().listRuns(p.id))] as const));
-      setRuns(Object.fromEntries(all));
-    } catch {
-      setRuns(null);
-    }
-  }, []);
-
-  // Refreshed on every navigation, so the run status never lags behind a change made on another screen.
+  // Refreshed on every navigation, so the model and budget never lag behind a change made on another screen.
   useEffect(() => {
-    if (projects) void loadRuns(projects);
     call(iap().agentStatus())
       .then(setAgent)
       .catch(() => setAgent(null));
-  }, [projects, section, projectId, loadRuns]);
+  }, [projects, section, projectId, openBuild]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -149,7 +138,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if ((section !== 'tools' && section !== 'home') || toolScan !== undefined) return;
+    if (section !== 'tools' || toolScan !== undefined) return;
     call(iap().getToolScan())
       .then(setToolScan)
       .catch((e: Error) => setToolError(e.message));
@@ -194,6 +183,7 @@ export function App() {
     setActivityProject(null);
     setToolFilter('all');
     setStudioFilter('all');
+    setOpenBuild(null);
   };
   const openProject = (id: string, name: string) => {
     setSection('projects');
@@ -205,10 +195,8 @@ export function App() {
     go('projects');
     setCreating({ idea });
   };
-  const allRuns = runs ? Object.values(runs).flat() : [];
-  const waiting = allRuns.filter((r) => needsPerson(r.state)).length;
-  const working = allRuns.filter((r) => r.state === 'running' || r.state === 'verification').length;
   const sideSection: Section = section === 'home' ? 'projects' : section;
+  const group = groupOf(section);
 
   return (
     <div className="shell">
@@ -219,15 +207,13 @@ export function App() {
         <div className="brand-mark" title="Iterative Platform">
           <Icon name="logo" />
         </div>
-        {NAV.map((group, i) => (
-          <div key={i} className="rail-group" role="group" aria-label={i === 0 ? 'Project Layer' : 'Iterative Layer'}>
-            {group.map((n) => (
-              <RailButton key={n.id} label={n.label} icon={n.icon} tag={n.tag} current={section === n.id} onClick={() => go(n.id)} />
-            ))}
-          </div>
-        ))}
+        <div className="rail-group">
+          {NAV.map((n) => (
+            <RailButton key={n.id} label={n.label} icon={n.icon} current={group.id === n.id} onClick={() => go(n.id)} />
+          ))}
+        </div>
         <div className="rail-spacer" />
-        <RailButton label="Settings" icon="settings" current={section === 'settings'} onClick={() => go('settings')} />
+        <RailButton label={SETTINGS_GROUP.label} icon={SETTINGS_GROUP.icon} current={group.id === 'settings'} onClick={() => go('settings')} />
       </nav>
 
       <SidePanel
@@ -273,12 +259,6 @@ export function App() {
             <kbd>Ctrl K</kbd>
           </button>
           <div className="topbar-actions">
-            {runs && (waiting > 0 || working > 0) && (
-              <button type="button" className="status-pill" data-tone={waiting > 0 ? 'warn' : 'live'} onClick={() => go('home')}>
-                <span className="status-dot" aria-hidden="true" />
-                {waiting > 0 ? `${waiting} ${waiting === 1 ? 'run needs' : 'runs need'} you` : `${working} ${working === 1 ? 'run' : 'runs'} working`}
-              </button>
-            )}
             {agent && (
               <span className="status-pill" data-tone={agent.mode === 'claude' ? 'ok' : 'neutral'} title={agent.mode === 'claude' ? agent.model : undefined}>
                 <span className="status-dot" aria-hidden="true" />
@@ -289,18 +269,16 @@ export function App() {
           </div>
         </header>
         <main className="content" id="main" tabIndex={-1}>
-          {section === 'home' && (
-            <HomeView
-              projects={projects}
-              projectsError={projectsError}
-              runs={runs}
-              toolScan={toolScan}
-              agent={agent}
-              onCreate={() => startCreating()}
-              onOpen={openProject}
-              onGo={go}
-            />
+          {group.tabs && (
+            <nav className="section-tabs" aria-label={`${group.label} sections`}>
+              {group.tabs.map((t) => (
+                <button key={t} type="button" className="section-tab" aria-current={section === t ? 'page' : undefined} onClick={() => go(t)}>
+                  {TAB_LABEL[t] ?? SECTION_LABEL[t]}
+                </button>
+              ))}
+            </nav>
           )}
+          {section === 'home' && <BuildHome projects={projects} agent={agent} onProjectsChanged={() => void loadProjects()} openBuild={openBuild} onOpenBuild={setOpenBuild} />}
           {section === 'projects' && !projectId && (
             <ProjectsView
               projects={projects}
@@ -315,7 +293,7 @@ export function App() {
               onOpen={openProject}
             />
           )}
-          {section === 'projects' && projectId && <ProjectDetail projectId={projectId} onLoaded={setProjectName} />}
+          {section === 'projects' && projectId && <ProjectDetail projectId={projectId} onLoaded={setProjectName} agent={agent} />}
           {section === 'activity' && (
             <ActivityView projectId={activityProject} projectName={projects?.find((p) => p.id === activityProject)?.name ?? null} />
           )}
