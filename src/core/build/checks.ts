@@ -7,6 +7,8 @@
 // Results are real: a check that did not run is "not_run", never "passed".
 
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { redactString } from '../redact.ts';
 import { ValidationError } from '../errors.ts';
 
@@ -128,4 +130,54 @@ export function runCheck(cwd: string, check: Check, opts: { timeoutMs?: number; 
  */
 export function ranNoTests(output: string): boolean {
   return /^\s*(?:ℹ|#)\s*tests 0\s*$/m.test(output) || /No tests found|No test files found|^\s*0 passing\b/m.test(output);
+}
+
+/**
+ * Checks to suggest for a repository, from its own files (M15). The person
+ * still approves them before anything runs.
+ */
+export function detectChecks(root: string): Check[] {
+  const out: Check[] = [];
+  const pkg = readJson(join(root, 'package.json'));
+  if (pkg) {
+    const scripts = (pkg.scripts ?? {}) as Record<string, unknown>;
+    const run = runner(root);
+    const real = (name: string) => typeof scripts[name] === 'string' && !/no test specified/i.test(scripts[name] as string);
+    if (real('typecheck')) out.push({ id: 'typecheck', command: `${run} run typecheck` });
+    if (real('lint')) out.push({ id: 'lint', command: `${run} run lint` });
+    if (real('test')) out.push({ id: 'test', command: `${run} test` });
+  } else if (existsSync(join(root, 'Cargo.toml'))) {
+    out.push({ id: 'test', command: 'cargo test' });
+  } else if (existsSync(join(root, 'go.mod'))) {
+    out.push({ id: 'test', command: 'go test ./...' });
+  } else if (['pyproject.toml', 'pytest.ini', 'setup.cfg'].some((f) => existsSync(join(root, f)))) {
+    out.push({ id: 'test', command: 'python -m pytest' });
+  }
+  return out;
+}
+
+/** The command that installs a Node project's dependencies in a fresh worktree, if it has any. */
+export function detectSetup(root: string): string | null {
+  const pkg = readJson(join(root, 'package.json'));
+  if (!pkg) return null;
+  const deps = { ...(pkg.dependencies as object | undefined), ...(pkg.devDependencies as object | undefined) };
+  if (Object.keys(deps).length === 0) return null;
+  if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm install --frozen-lockfile';
+  if (existsSync(join(root, 'yarn.lock'))) return 'yarn install --frozen-lockfile';
+  return existsSync(join(root, 'package-lock.json')) ? 'npm ci --no-audit --no-fund' : 'npm install --no-audit --no-fund';
+}
+
+function runner(root: string): string {
+  if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (existsSync(join(root, 'yarn.lock'))) return 'yarn';
+  return 'npm';
+}
+
+function readJson(file: string): Record<string, unknown> | null {
+  try {
+    const value = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }

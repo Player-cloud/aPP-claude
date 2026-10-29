@@ -4,12 +4,17 @@
 // UI controls are not relied on for authorization or validation.
 
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import { CLAUDE_MODEL, ClaudeModel, type ClaudeClient } from '../core/agents/claude.ts';
 import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
 import { Planner } from '../core/planner.ts';
-import { Builder, type BuildInput } from '../core/build/builder.ts';
+import { Builder, type AgentEngine, type BuildInput } from '../core/build/builder.ts';
+import { DEFAULT_RUN_CAP_USD } from '../core/build/agent.ts';
+import { detectSetup } from '../core/build/checks.ts';
+import { runClaudeCode, type QueryFn } from '../core/build/claudeCode.ts';
+import { LiveRuns, type AgentHooks } from '../core/build/live.ts';
 import { Releaser, type ReleaseInput } from '../core/release/releaser.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
 import { Assessor } from '../core/assess/assessor.ts';
@@ -34,7 +39,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
+type AsyncMethod = 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -104,7 +109,18 @@ export interface ServiceOptions {
    * a native dialog.
    */
   confirmAction?: (request: { title: string; lines: string[]; button: string }) => Promise<boolean>;
+  /** Claude Code's engine (DEC-032). Tests pass a fake so nothing is spawned or billed. */
+  agentQuery?: QueryFn;
+  /** Where the Claude Code binary is, when it is not where the SDK looks itself (an installed app). */
+  engineExecutable?: () => string | undefined;
 }
+
+/** The Claude Agent SDK, loaded only when real work starts. */
+const sdkQuery: QueryFn = (params) =>
+  (async function* () {
+    const sdk = await import('@anthropic-ai/claude-agent-sdk');
+    yield* sdk.query(params as Parameters<typeof sdk.query>[0]);
+  })();
 
 /** What the native approval dialog shows: the exact command or move, and what else changes. */
 function cleanupLines(p: CleanupPlan): string[] {
@@ -176,6 +192,9 @@ export class AppService {
   private readonly fetcher: Fetcher;
   private readonly listModels: (apiKey: string) => Promise<ModelInfo[]>;
   private readonly bundled: Record<string, string | null> | undefined;
+  private readonly agentQuery: QueryFn;
+  private readonly engineExecutable: () => string | undefined;
+  private readonly live = new LiveRuns();
 
   constructor(home: string, version: string, options: ServiceOptions = {}) {
     this.home = home;
@@ -190,6 +209,8 @@ export class AppService {
     this.claudeCommand = options.claudeCommand;
     this.fetcher = options.fetcher ?? httpFetcher();
     this.bundled = options.bundled;
+    this.agentQuery = options.agentQuery ?? sdkQuery;
+    this.engineExecutable = options.engineExecutable ?? (() => undefined);
     this.listModels =
       options.listModels ??
       (async (apiKey) => {
@@ -269,6 +290,68 @@ export class AppService {
     return new ClaudeModel(this.claudeClient(key));
   }
 
+  /**
+   * The engine for build work: Claude Code's engine for real calls (DEC-032),
+   * otherwise the free simulated agent. A real run is capped at what is left
+   * of the monthly budget, and what it cost is recorded when it ends.
+   */
+  private agentEngine(): AgentEngine | undefined {
+    const status = this.agentStatus();
+    if (status.mode === 'simulated') return undefined;
+    const key = this.keys.get();
+    if (!key) {
+      throw new ValidationError('A monthly budget is set but no API key is stored. Add your Anthropic API key in Settings → AI usage, or choose "No real calls" to use the simulated agent.');
+    }
+    const ws = this.workspace();
+    return {
+      id: CLAUDE_MODEL,
+      run: async (input) => {
+        const left = Math.max(0, (ws.monthlyBudgetUsd() ?? 0) - ws.spentThisMonth());
+        const cap = Math.min(input.maxCostUsd ?? DEFAULT_RUN_CAP_USD, left);
+        if (cap < 0.1) {
+          return { status: 'blocked', summary: `Only $${left.toFixed(2)} of this month's budget is left.`, steps: [], checkResults: [], filesWritten: [], resolution: 'Raise the monthly budget in Settings → AI usage, or wait until next month.', costUsd: 0 };
+        }
+        const outcome = await runClaudeCode(this.agentQuery, { ...input, apiKey: key, maxCostUsd: cap, executable: this.engineExecutable(), configDir: join(this.home, 'claude-engine') });
+        ws.recordSpend({ taskId: null, model: CLAUDE_MODEL, inputTokens: outcome.inputTokens, outputTokens: outcome.outputTokens, costUsd: outcome.costUsd });
+        const { inputTokens: _i, outputTokens: _o, ...rest } = outcome;
+        return rest;
+      },
+    };
+  }
+
+  /** Runs build work in the background with live progress; the renderer follows it with buildLive. */
+  private launch(buildId: string, work: (hooks: AgentHooks, signal: AbortSignal) => Promise<void>): void {
+    const signal = this.live.begin(buildId);
+    const hooks = this.live.hooks(buildId);
+    void (async () => {
+      try {
+        await work(hooks, signal);
+        if (signal.aborted) return this.live.end(buildId, 'stopped', 'Stopped. What changed so far is still in the work folder.');
+        const b = this.workspace().getBuild(buildId);
+        const agent = b.agent;
+        this.live.end(buildId, 'review', !agent || agent.status === 'done' ? 'Ready for your review.' : `Claude stopped early: ${agent.summary}${agent.resolution ? ` ${agent.resolution}` : ''}`);
+      } catch (e) {
+        this.live.end(buildId, signal.aborted ? 'stopped' : 'failed', (e as Error).message);
+      }
+    })();
+  }
+
+  /** Agent, then verification: what "Build" and a follow-up both do once the work folder exists. */
+  private async agentThenVerify(buildId: string, hooks: AgentHooks, signal: AbortSignal, followUp: string | null): Promise<void> {
+    const engine = this.agentEngine();
+    const model = engine ? new SimulatedModel() : this.agentModel();
+    await this.builder(model).runAgent(buildId, { engine, hooks, signal, followUp });
+    if (signal.aborted) return;
+    await this.builder().verify(buildId, hooks);
+  }
+
+  /** The repository a quick task works in: the project's own, or its folder made into one. */
+  private async ensureRepo(projectId: string) {
+    const project = this.workspace().getProject(projectId);
+    if (project.repoPath) return project;
+    return await this.builder().initProjectRepo(projectId);
+  }
+
   /** For the main process's reference protocol only: the app's copy of a reference and its type. Never exposed over IPC. */
   referenceFile(id: string): { path: string; mediaType: string } | null {
     if (!/^ref_[0-9a-f-]{36}$/.test(id) || !this.ws) return null;
@@ -320,6 +403,7 @@ export class AppService {
   }
 
   close(): void {
+    this.live.stopAll();
     this.ws?.close();
     this.ws = null;
   }
@@ -528,7 +612,86 @@ export class AppService {
         return this.builder().edit(str(i.buildId, 'Build id')!, buildInput(input));
       }),
     startBuild: (buildId) => wrapAsync(() => this.startBuild(str(buildId, 'Build id')!)),
-    runBuildAgent: (buildId) => wrapAsync(() => this.builder(this.agentModel()).runAgent(str(buildId, 'Build id')!)),
+    runBuildAgent: (buildId) =>
+      wrapAsync(async () => {
+        const id = str(buildId, 'Build id')!;
+        const engine = this.agentEngine();
+        const signal = this.live.begin(id);
+        try {
+          const detail = await this.builder(engine ? new SimulatedModel() : this.agentModel()).runAgent(id, { engine, hooks: this.live.hooks(id), signal });
+          this.live.end(id, 'review', 'Claude finished. Verify the change to review it.');
+          return detail;
+        } catch (e) {
+          this.live.end(id, 'failed', (e as Error).message);
+          throw e;
+        }
+      }),
+    quickBuild: (input) =>
+      wrapAsync(async () => {
+        const i = (input ?? {}) as Record<string, unknown>;
+        const projectId = str(i.projectId, 'Project id')!;
+        const goal = str(i.goal, 'What to build')!;
+        this.agentEngine(); // Fails early when a budget is set but no key is stored.
+        const project = await this.ensureRepo(projectId);
+        const builder = this.builder();
+        const build = builder.quick(projectId, goal);
+        const setup = detectSetup(project.repoPath!);
+        const commands = [...(setup ? [setup] : []), ...build.checks.map((c) => c.command)];
+        if (commands.length) {
+          const approved = await this.confirmChecks({ title: build.title, commands, folder: project.repoPath! });
+          if (!approved) {
+            builder.abandon(build.id, 'The commands were not approved.');
+            throw new ValidationError('The commands were not approved, so nothing ran.');
+          }
+        }
+        this.launch(build.id, async (hooks, signal) => {
+          hooks.emit({ kind: 'phase', text: 'Setting up a separate copy of your code' });
+          await this.builder().start(build.id, { setup, hooks });
+          if (signal.aborted) return;
+          await this.agentThenVerify(build.id, hooks, signal, null);
+        });
+        return this.workspace().getBuild(build.id);
+      }),
+    followUpBuild: (input) =>
+      wrapAsync(async () => {
+        const i = (input ?? {}) as Record<string, unknown>;
+        const id = str(i.buildId, 'Build id')!;
+        const text = str(i.text, 'What to change')!;
+        if (text.trim().length < 3) throw new ValidationError('Say what Claude should change.');
+        const build = this.workspace().getBuild(id);
+        if (build.status !== 'review' && build.status !== 'in_progress') throw new ValidationError(`This work is ${build.status.replace('_', ' ')}; start a new task instead.`);
+        this.agentEngine();
+        this.launch(id, (hooks, signal) => this.agentThenVerify(id, hooks, signal, text));
+        return this.workspace().getBuild(id);
+      }),
+    buildLive: (input) =>
+      wrap(() => {
+        const i = (input ?? {}) as Record<string, unknown>;
+        const since = typeof i.since === 'number' && Number.isFinite(i.since) ? i.since : 0;
+        return this.live.get(str(i.buildId, 'Build id')!, since);
+      }),
+    answerBuildQuestion: (input) =>
+      wrap(() => {
+        const i = (input ?? {}) as Record<string, unknown>;
+        if (typeof i.allow !== 'boolean') throw new ValidationError('Answer with allow true or false.');
+        if (!this.live.answer(str(i.buildId, 'Build id')!, str(i.approvalId, 'Question id')!, i.allow)) throw new ValidationError('That question is no longer waiting.');
+        return null;
+      }),
+    stopBuild: (buildId) =>
+      wrap(() => {
+        if (!this.live.stop(str(buildId, 'Build id')!)) throw new ValidationError('This work is not running.');
+        return null;
+      }),
+    recentBuilds: () =>
+      wrap(() => {
+        const ws = this.workspace();
+        return ws
+          .listProjects()
+          .filter((p) => p.kind !== 'maintenance')
+          .flatMap((p) => ws.listBuilds(p.id).map((b) => ({ ...b, projectName: p.name, running: this.live.isRunning(b.id) })))
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+          .slice(0, 30);
+      }),
     verifyBuild: (buildId) => wrapAsync(() => this.builder().verify(str(buildId, 'Build id')!)),
     completeBuild: (input) =>
       wrapAsync(async () => {

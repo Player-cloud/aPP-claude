@@ -8,7 +8,7 @@ mkdirSync('dist/renderer', { recursive: true });
 
 // Exact versions of the libraries built into this copy, for the update monitor (M12).
 const bundled = {};
-for (const pkg of ['@anthropic-ai/sdk', 'electron', 'react', 'react-dom']) {
+for (const pkg of ['@anthropic-ai/sdk', '@anthropic-ai/claude-agent-sdk', 'electron', 'react', 'react-dom']) {
   try {
     bundled[pkg] = JSON.parse(readFileSync(`node_modules/${pkg}/package.json`, 'utf8')).version;
   } catch {
@@ -17,7 +17,7 @@ for (const pkg of ['@anthropic-ai/sdk', 'electron', 'react', 'react-dom']) {
 }
 
 const common = { bundle: true, sourcemap: !prod, minify: prod, logLevel: 'warning', legalComments: 'none' };
-const node = { ...common, platform: 'node', format: 'cjs', target: 'node22', external: ['electron'], define: { __IAP_BUNDLED__: JSON.stringify(JSON.stringify(bundled)) } };
+const node = { ...common, platform: 'node', format: 'cjs', target: 'node22', external: ['electron', '@anthropic-ai/claude-agent-sdk'], define: { __IAP_BUNDLED__: JSON.stringify(JSON.stringify(bundled)) } };
 
 await Promise.all([
   build({ ...node, entryPoints: ['src/main/main.ts'], outfile: 'dist/main.cjs' }),
