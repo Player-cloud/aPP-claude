@@ -202,22 +202,24 @@ export class Previews {
       await new Promise((r) => setTimeout(r, 500));
     }
     if (run.state.status === 'starting') {
-      this.kill(run);
+      await this.kill(run);
       run.state = { ...run.state, status: 'failed', log: `${run.state.log}\nNothing answered within ${Math.round((opts.timeoutMs ?? START_TIMEOUT_MS) / 1000)} s.` };
     }
     return { ...run.state };
   }
 
-  stop(buildId: string): boolean {
+  /** Stops the preview and resolves once its process has exited, so its folder is free again (Windows locks a process's working folder). */
+  async stop(buildId: string): Promise<boolean> {
     const run = this.runs.get(buildId);
     if (!run) return false;
-    this.kill(run);
+    const exited = this.kill(run);
     run.state = { ...run.state, status: 'stopped', url: null };
+    await exited;
     return true;
   }
 
-  stopAll(): void {
-    for (const id of [...this.runs.keys()]) this.stop(id);
+  async stopAll(): Promise<void> {
+    await Promise.all([...this.runs.keys()].map((id) => this.stop(id)));
   }
 
   /** The address of a running preview, for opening in the browser. Only ever a local http address. */
@@ -227,17 +229,31 @@ export class Previews {
     return url;
   }
 
-  private kill(run: Running): void {
+  /** Ends the server and the whole process tree; resolves when the process has exited, or after a few seconds. */
+  private kill(run: Running): Promise<void> {
     run.server?.close();
     run.server = null;
-    const pid = run.child?.pid;
+    const child = run.child;
     run.child = null;
-    if (pid === undefined) return;
+    const pid = child?.pid;
+    if (!child || pid === undefined || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    const exited = new Promise<void>((ok) => {
+      const timer = setTimeout(ok, 5_000);
+      child.once('close', () => {
+        clearTimeout(timer);
+        ok();
+      });
+    });
     try {
-      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-      else process.kill(-pid, 'SIGTERM');
+      if (process.platform === 'win32') {
+        // taskkill ends the tree; wait for it too, since grandchildren can outlive the shell.
+        const tk = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+        return Promise.all([exited, new Promise<void>((ok) => (tk.once('close', () => ok()), tk.once('error', () => ok())))]).then(() => undefined);
+      }
+      process.kill(-pid, 'SIGTERM');
     } catch {
       /* already gone */
     }
+    return exited;
   }
 }

@@ -40,7 +40,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'startPreview' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
+type AsyncMethod = 'startPreview' | 'stopPreview' | 'abandonBuild' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -422,7 +422,7 @@ export class AppService {
 
   close(): void {
     this.live.stopAll();
-    this.previews.stopAll();
+    void this.previews.stopAll();
     this.ws?.close();
     this.ws = null;
   }
@@ -716,17 +716,15 @@ export class AppService {
       wrapAsync(async () => {
         const i = obj(input, 'Completion');
         const id = str(i.buildId, 'Build id')!;
-        const done = await this.builder().complete(id, str(i.note, 'Note', true) ?? null);
-        this.previews.stop(id);
-        return done;
+        await this.previews.stop(id);
+        return await this.builder().complete(id, str(i.note, 'Note', true) ?? null);
       }),
     abandonBuild: (input) =>
-      wrap(() => {
+      wrapAsync(async () => {
         const i = obj(input, 'Abandon');
         const id = str(i.buildId, 'Build id')!;
-        const done = this.builder().abandon(id, str(i.reason, 'Reason', true) ?? null);
-        this.previews.stop(id);
-        return done;
+        await this.previews.stop(id);
+        return this.builder().abandon(id, str(i.reason, 'Reason', true) ?? null);
       }),
     // Live preview (M16 H, DEC-033): the project's dev server, or its static page, in the task's worktree.
     previewState: (buildId) =>
@@ -765,8 +763,8 @@ export class AppService {
         return null;
       }),
     stopPreview: (buildId) =>
-      wrap(() => {
-        this.previews.stop(str(buildId, 'Build id')!);
+      wrapAsync(async () => {
+        await this.previews.stop(str(buildId, 'Build id')!);
         return null;
       }),
     buildDiff: (buildId) => wrapAsync(() => this.builder().diff(str(buildId, 'Build id')!)),

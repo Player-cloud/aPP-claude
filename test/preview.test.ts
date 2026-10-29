@@ -48,13 +48,16 @@ test('the static server serves the folder and nothing outside it', async (t) => 
 
 test('a dev server starts on a free port without keys, answers, and stops', async (t) => {
   const { home: root, cleanup } = tempHome();
-  t.after(cleanup);
+  const previews = new Previews();
+  // Stop the server before removing its folder: Windows keeps a running process's folder locked.
+  t.after(async () => {
+    await previews.stopAll();
+    cleanup();
+  });
   writeFileSync(
     join(root, 'server.js'),
     `require('http').createServer((q, s) => s.end('key=' + (process.env.ANTHROPIC_API_KEY || 'none'))).listen(process.env.PORT, '127.0.0.1', () => console.log('ready on http://localhost:' + process.env.PORT));`,
   );
-  const previews = new Previews();
-  t.after(() => previews.stopAll());
   process.env.ANTHROPIC_API_KEY = 'sk-test-should-not-leak';
   t.after(() => delete process.env.ANTHROPIC_API_KEY);
   const state = await previews.start('b1', { kind: 'script', command: 'node server.js', folder: root });
@@ -64,16 +67,18 @@ test('a dev server starts on a free port without keys, answers, and stops', asyn
   assert.equal(previews.url('b1'), state.url);
   // Starting again while it runs returns the same preview.
   assert.equal((await previews.start('b1', { kind: 'script', command: 'node server.js', folder: root })).url, state.url);
-  previews.stop('b1');
+  await previews.stop('b1');
   assert.equal(previews.get('b1', null).status, 'stopped');
   assert.throws(() => previews.url('b1'), /not running/);
 });
 
 test('a dev server that exits or never answers is reported with its output', async (t) => {
   const { home: root, cleanup } = tempHome();
-  t.after(cleanup);
   const previews = new Previews();
-  t.after(() => previews.stopAll());
+  t.after(async () => {
+    await previews.stopAll();
+    cleanup();
+  });
   const crashed = await previews.start('b1', { kind: 'script', command: 'node -e "console.error(\'Cannot find module vite\'); process.exit(1)"', folder: root });
   assert.equal(crashed.status, 'failed');
   assert.match(crashed.log, /Cannot find module vite/);
