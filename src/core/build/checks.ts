@@ -68,7 +68,7 @@ export function checkEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Proces
  * because the person approved it as typed (for example "npm test", which is a
  * .cmd file on Windows). Never pass text from the model here.
  */
-export function runCheck(cwd: string, check: Check, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<CheckResult> {
+export function runCheck(cwd: string, check: Check, opts: { timeoutMs?: number; signal?: AbortSignal; env?: Record<string, string> } = {}): Promise<CheckResult> {
   const startedAt = new Date().toISOString();
   const started = Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
@@ -90,7 +90,7 @@ export function runCheck(cwd: string, check: Check, opts: { timeoutMs?: number; 
       });
     let child;
     try {
-      child = spawn(check.command, { cwd, shell: true, env: checkEnv(), windowsHide: true, detached: process.platform !== 'win32' });
+      child = spawn(check.command, { cwd, shell: true, env: { ...checkEnv(), ...opts.env }, windowsHide: true, detached: process.platform !== 'win32' });
     } catch (e) {
       return done('error', null, `Could not start: ${(e as Error).message}`);
     }

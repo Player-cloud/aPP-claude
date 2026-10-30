@@ -527,6 +527,44 @@ test('M7: a ship-check shows each gate with its evidence, needs exceptions for f
     await card.getByText('Nothing was deployed').waitFor();
     await page.getByRole('navigation', { name: 'Project phases' }).getByText('0.1.0 prepared · not deployed').waitFor();
     await shot(page, '17-release-prepared-dark-1280');
+
+    // M20: a release with a deploy command is deployed after typing the environment and a native approval,
+    // its health is checked, and the rollback runs from the same card.
+    const marker = join(home, 'deployed.txt').replace(/\\/g, '/');
+    await panel.getByRole('button', { name: 'New release' }).click();
+    await form.getByLabel('Version').fill('0.2.0');
+    await form.getByLabel(/Release checks/).fill('unit = node -e "process.exit(0)"');
+    await form.getByLabel('Where it goes').fill('A folder on this computer');
+    await form.getByLabel('How you will know it works').fill('The file is there');
+    await form.getByLabel('How to undo it').fill('Delete the file');
+    await form.getByLabel('Environment').fill('staging');
+    await form.getByLabel('Deploy command').fill(`node -e "require('fs').writeFileSync('${marker}', 'ok')"`);
+    await form.getByLabel('Health check: an address or a command').fill(`node -e "require('fs').statSync('${marker}')"`);
+    await form.getByLabel('Rollback command').fill(`node -e "require('fs').rmSync('${marker}')"`);
+    await form.getByRole('button', { name: 'Add release' }).click();
+    const next = panel.locator('.release-card', { hasText: 'Release 0.2.0' });
+    await next.getByRole('button', { name: 'Run the ship-check' }).click();
+    await next.getByText('3 blocking', { exact: true }).waitFor();
+    for (const id of ['spec', 'drift', 'builds']) {
+      const g = next.getByRole('list', { name: 'Gates' }).locator(`li[data-gate="${id}"]`);
+      await g.getByText('Release anyway with an exception').click();
+      await g.getByLabel('Why this is acceptable').fill('Trying the deploy flow only');
+      await g.getByLabel('How you will limit the risk').fill('It deploys to a local folder');
+      await g.getByRole('button', { name: 'Record exception' }).click();
+      await g.getByText('Exception recorded', { exact: true }).waitFor();
+    }
+    await next.getByRole('button', { name: 'Mark prepared' }).click();
+    const deploy = next.getByRole('region', { name: 'Deploy' });
+    const go = deploy.getByRole('button', { name: 'Deploy to staging' });
+    assert.ok(await go.isDisabled(), 'the environment must be typed first');
+    await deploy.getByLabel('Type “staging” to deploy').fill('staging');
+    await go.click();
+    await deploy.getByText('Deployed and healthy', { exact: true }).waitFor();
+    assert.ok(existsSync(join(home, 'deployed.txt')));
+    await shot(page, '61-deployed-dark-1280');
+    await deploy.getByRole('button', { name: 'Roll back' }).click();
+    await deploy.getByText('Rolled back', { exact: true }).waitFor();
+    assert.equal(existsSync(join(home, 'deployed.txt')), false);
   } finally {
     await app.close();
   }
@@ -1058,7 +1096,7 @@ test('M13: an approved improvement becomes platform work with mandatory checks, 
     await page.getByLabel('Source folder').fill(repo);
     await page.getByRole('button', { name: 'Set up' }).click();
     const kg = page.getByRole('list', { name: 'Known-good versions' });
-    await kg.getByText('0.22.0', { exact: true }).waitFor();
+    await kg.getByText('0.23.0', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Nothing approved yet' }).waitFor();
 
     // An approved item, from typed feedback.

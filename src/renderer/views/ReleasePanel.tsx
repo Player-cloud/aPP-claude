@@ -2,9 +2,11 @@
 // The ship-check runs the person's release checks on the repository's current
 // commit, after they approve the commands in a native dialog. Every gate shows
 // the evidence it was decided on. A failed gate can only be passed by a recorded
-// exception with a mitigation. Preparing a release never deploys it.
+// exception with a mitigation. Preparing a release never deploys it; a
+// prepared release with a deploy command can be deployed after a native
+// approval, with its health checked and a rollback ready (M20, DEC-038).
 import { useState, type FormEvent } from 'react';
-import type { Build, DriftFinding, Gate, Project, Release, ReleaseDetail } from '../../shared/api.ts';
+import type { Build, DeploymentDetail, DeploymentStatus, DriftFinding, Gate, Project, Release, ReleaseDetail } from '../../shared/api.ts';
 import { call, iap } from '../api.ts';
 import { Alert, Badge, formatTime, type Tone } from '../ui.tsx';
 import { useAsync } from '../useAsync.ts';
@@ -44,6 +46,10 @@ function NewRelease({ projectId, builds, platform, onCreated }: { projectId: str
   const [monitoring, setMonitoring] = useState('');
   const [migrations, setMigrations] = useState('');
   const [envVars, setEnvVars] = useState('');
+  const [environment, setEnvironment] = useState('');
+  const [deployCommand, setDeployCommand] = useState('');
+  const [health, setHealth] = useState('');
+  const [rollbackCommand, setRollbackCommand] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const choosable = builds.filter((b) => b.status !== 'abandoned');
@@ -59,7 +65,18 @@ function NewRelease({ projectId, builds, platform, onCreated }: { projectId: str
           version,
           checks: parseChecks(checks),
           buildIds: included,
-          plan: { target, healthCheck, rollback, monitoring, migrations, envVars: lines(envVars) },
+          plan: {
+            target,
+            healthCheck,
+            rollback,
+            monitoring,
+            migrations,
+            envVars: lines(envVars),
+            environment,
+            deployCommand,
+            ...(/^https?:\/\//i.test(health.trim()) ? { healthUrl: health.trim() } : { healthCommand: health }),
+            rollbackCommand,
+          },
         }),
       );
       await onCreated();
@@ -101,6 +118,16 @@ function NewRelease({ projectId, builds, platform, onCreated }: { projectId: str
       {text('r-monitoring', 'Monitoring (optional)', monitoring, setMonitoring)}
       {text('r-migrations', 'Data migrations (optional)', migrations, setMigrations, 'none')}
       {text('r-env', 'Configuration names it needs (optional, names only)', envVars, setEnvVars, 'ANTHROPIC_API_KEY')}
+      {!platform && (
+        <fieldset className="plan-req">
+          <legend>Let the app deploy it (optional)</legend>
+          <p className="hint">Leave these empty to deploy it yourself. With a deploy command, the app can run it once the release is prepared and you approve, then checks it works and keeps the rollback ready.</p>
+          {text('r-environment', 'Environment', environment, setEnvironment, 'production')}
+          {text('r-deploy', 'Deploy command', deployCommand, setDeployCommand, 'npm run deploy')}
+          {text('r-healthcmd', 'Health check: an address or a command', health, setHealth, 'https://example.com/health')}
+          {text('r-rollbackcmd', 'Rollback command', rollbackCommand, setRollbackCommand, 'npm run deploy:previous')}
+        </fieldset>
+      )}
       {error && <Alert tone="danger">{error}</Alert>}
       <div className="btn-row">
         <button type="submit" className="btn btn-sm btn-primary" disabled={busy}>
@@ -199,6 +226,93 @@ function Gates({ detail, open, platform, act }: { detail: ReleaseDetail; open: b
   );
 }
 
+const DEPLOY: Record<DeploymentStatus, { label: string; tone: Tone }> = {
+  running: { label: 'Deploying', tone: 'info' },
+  failed: { label: 'Deploy failed', tone: 'danger' },
+  unhealthy: { label: 'Deployed, not healthy', tone: 'danger' },
+  healthy: { label: 'Deployed and healthy', tone: 'ok' },
+  rolling_back: { label: 'Rolling back', tone: 'warn' },
+  rolled_back: { label: 'Rolled back', tone: 'neutral' },
+  rollback_failed: { label: 'Rollback failed', tone: 'danger' },
+};
+
+/** Deploying a prepared release (M20). The main process asks in a native dialog; the name typed here must match the plan. */
+function Deploy({ release: r, onChanged }: { release: Release; onChanged: () => Promise<void> }) {
+  const list = useAsync(() => call(iap().listDeployments(r.id)), [r.id]);
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (label: string, fn: () => Promise<unknown>) => {
+    setBusy(label);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      await list.reload();
+      await onChanged();
+      setBusy(null);
+    }
+  };
+  const deployments: DeploymentDetail[] = list.data ?? [];
+  return (
+    <section className="deploy" aria-label="Deploy">
+      <h4>Deploy to {r.plan.environment}</h4>
+      <p className="subtle">
+        Runs <span className="mono">{r.plan.deployCommand}</span> on commit <span className="mono">{r.commit?.slice(0, 12)}</span>, then checks <span className="mono">{r.plan.healthUrl || r.plan.healthCommand}</span>. If it goes wrong you can run{' '}
+        <span className="mono">{r.plan.rollbackCommand}</span>.
+      </p>
+      <div className="field">
+        <label htmlFor={`dep-env-${r.id}`}>Type “{r.plan.environment}” to deploy</label>
+        <input id={`dep-env-${r.id}`} className="input" value={typed} maxLength={60} onChange={(e) => setTyped(e.target.value)} />
+      </div>
+      <div className="btn-row">
+        <button type="button" className="btn btn-sm btn-primary" disabled={busy !== null || typed.trim() !== r.plan.environment} onClick={() => void act('deploy', () => call(iap().deployRelease({ releaseId: r.id, environment: typed })))}>
+          {busy === 'deploy' ? 'Deploying…' : `Deploy to ${r.plan.environment}`}
+        </button>
+      </div>
+      {error && <Alert tone="danger">{error}</Alert>}
+      {deployments.length > 0 && (
+        <ul className="build-checks" aria-label="Deployments">
+          {deployments.map((d) => (
+            <li key={d.deployment.id}>
+              <details open={d === deployments[0]}>
+                <summary>
+                  <Badge tone={DEPLOY[d.deployment.status].tone}>{DEPLOY[d.deployment.status].label}</Badge>
+                  <span className="subtle">
+                    {d.deployment.version} · approved by {d.deployment.approvedBy}, {formatTime(d.deployment.approvedAt)}
+                  </span>
+                </summary>
+                <ol className="small-list" aria-label="Deployment steps">
+                  {d.steps.map((s) => (
+                    <li key={s.seq}>
+                      <Badge tone={s.status === 'passed' ? 'ok' : 'danger'}>{s.status === 'passed' ? 'Passed' : s.status.replace('_', ' ')}</Badge> {s.kind}: <span className="mono">{s.target}</span>
+                      {s.status !== 'passed' && s.output && <pre className="agent-output">{s.output}</pre>}
+                    </li>
+                  ))}
+                </ol>
+                <div className="btn-row">
+                  {d.next.includes('check_health') && (
+                    <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => void act('health', () => call(iap().checkDeploymentHealth(d.deployment.id)))}>
+                      {busy === 'health' ? 'Checking…' : 'Check health again'}
+                    </button>
+                  )}
+                  {d.next.includes('rollback') && (
+                    <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => void act('rollback', () => call(iap().rollbackDeployment(d.deployment.id)))}>
+                      {busy === 'rollback' ? 'Rolling back…' : 'Roll back'}
+                    </button>
+                  )}
+                </div>
+              </details>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function ReleaseCard({ release, platform, onChanged }: { release: Release; platform: boolean; onChanged: () => Promise<void> }) {
   const detail = useAsync(() => call(iap().getRelease(release.id)), [release.id, release.updatedAt]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -288,11 +402,12 @@ function ReleaseCard({ release, platform, onChanged }: { release: Release; platf
             </button>
           </div>
         )}
-        {r.status === 'prepared' && (
+        {r.status === 'prepared' && !r.plan.deployCommand && (
           <Alert tone="info" title="Nothing was deployed">
-            Every required gate passed or has a recorded exception on commit <span className="mono">{r.commit?.slice(0, 12)}</span>. Deploy it yourself using the plan above; this app does not deploy.
+            Every required gate passed or has a recorded exception on commit <span className="mono">{r.commit?.slice(0, 12)}</span>. Deploy it yourself using the plan above; this release has no deploy command for the app to run.
           </Alert>
         )}
+        {r.status === 'prepared' && r.plan.deployCommand && <Deploy release={r} onChanged={onChanged} />}
         {r.reportPath && (
           <p className="subtle">
             Report: <span className="mono">{r.reportPath}</span>

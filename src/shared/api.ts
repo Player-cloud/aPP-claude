@@ -36,6 +36,9 @@ import type { ReleaseDetail, ReleaseInput } from '../core/release/releaser.ts';
 import type { Release } from '../core/workspace.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
 export type { ReleaseDetail, ReleaseInput } from '../core/release/releaser.ts';
+import type { DeploymentDetail } from '../core/release/deploy.ts';
+export type { DeploymentDetail } from '../core/release/deploy.ts';
+export type { Deployment, DeploymentStatus, DeploymentStep } from '../core/workspace.ts';
 export type { Release, ReleaseCheckRun, ReleaseStatus } from '../core/workspace.ts';
 export type { DriftFinding, DriftKind, Gate, GateException, GateId, GateStatus, ReleasePlan } from '../core/release/gates.ts';
 export type { Brief, BriefField, PlanChange, PlanDoc, Priority, Requirement, Spec } from '../core/planning.ts';
@@ -216,6 +219,11 @@ export interface IapApi {
   addGateException(input: { releaseId: string; gateId: string; reason: string; mitigation: string }): Promise<Result<ReleaseDetail>>;
   prepareRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
   abandonRelease(releaseId: string): Promise<Result<ReleaseDetail>>;
+  /** M20: controlled deployment of a prepared release. The main process asks the person in a native dialog first. */
+  listDeployments(releaseId: string): Promise<Result<DeploymentDetail[]>>;
+  deployRelease(input: { releaseId: string; environment: string }): Promise<Result<DeploymentDetail>>;
+  checkDeploymentHealth(deploymentId: string): Promise<Result<DeploymentDetail>>;
+  rollbackDeployment(deploymentId: string): Promise<Result<DeploymentDetail>>;
   /** Import and assessment (M8): read-only. Nothing in the repository is changed or run. */
   importProject(input: { name: string; path: string; idea?: string }): Promise<Result<Project>>;
   assessmentCatalog(): Promise<Result<AssessmentCatalog>>;
@@ -398,6 +406,10 @@ export const IAP_METHODS = [
   'addGateException',
   'prepareRelease',
   'abandonRelease',
+  'listDeployments',
+  'deployRelease',
+  'checkDeploymentHealth',
+  'rollbackDeployment',
   'importProject',
   'assessmentCatalog',
   'listAssessments',

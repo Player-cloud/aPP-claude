@@ -35,7 +35,7 @@ import type { SkillProposal } from './learn/skills.ts';
 import type { AddonReview } from './learn/addons.ts';
 import { isWorkflow, planTransition, type RunState, type TransitionInput, type Workflow } from './workflow.ts';
 
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 /** Older tool scans beyond this many are pruned; the audit log keeps a record of every scan. */
 const KEEP_TOOL_SCANS = 20;
@@ -744,7 +744,71 @@ const MIGRATIONS: Record<number, string> = {
     -- M18 part 4 (DEC-036): what the helper agents found when the task was last checked.
     ALTER TABLE builds ADD COLUMN helpers TEXT;
   `,
+  19: `
+    -- M20 (FR-SHIP-002, DEC-038): deployments of prepared releases, with every step kept.
+    CREATE TABLE deployments (
+      id TEXT PRIMARY KEY,
+      release_id TEXT NOT NULL REFERENCES releases(id),
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      environment TEXT NOT NULL,
+      version TEXT NOT NULL,
+      commit_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running','failed','unhealthy','healthy','rolling_back','rolled_back','rollback_failed')),
+      approved_by TEXT NOT NULL,
+      approved_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX deployments_release ON deployments(release_id, created_at);
+    CREATE TRIGGER deployments_no_delete BEFORE DELETE ON deployments
+      BEGIN SELECT RAISE(ABORT, 'deployments are never deleted'); END;
+    CREATE TABLE deployment_steps (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      deployment_id TEXT NOT NULL REFERENCES deployments(id),
+      kind TEXT NOT NULL CHECK (kind IN ('verify','deploy','health','rollback')),
+      target TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('passed','failed','timed_out','error','not_run')),
+      exit_code INTEGER,
+      duration_ms INTEGER NOT NULL,
+      output TEXT NOT NULL,
+      started_at TEXT NOT NULL
+    );
+    CREATE TRIGGER deployment_steps_no_update BEFORE UPDATE ON deployment_steps
+      BEGIN SELECT RAISE(ABORT, 'deployment steps are append-only'); END;
+    CREATE TRIGGER deployment_steps_no_delete BEFORE DELETE ON deployment_steps
+      BEGIN SELECT RAISE(ABORT, 'deployment steps are append-only'); END;
+  `,
 };
+
+export type DeploymentStatus = 'running' | 'failed' | 'unhealthy' | 'healthy' | 'rolling_back' | 'rolled_back' | 'rollback_failed';
+
+/** One deployment of a prepared release (M20). */
+export interface Deployment {
+  id: string;
+  releaseId: string;
+  projectId: string;
+  environment: string;
+  version: string;
+  commit: string;
+  status: DeploymentStatus;
+  approvedBy: string;
+  approvedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeploymentStep {
+  seq: number;
+  deploymentId: string;
+  kind: 'verify' | 'deploy' | 'health' | 'rollback';
+  /** The command or address it ran. */
+  target: string;
+  status: CheckResult['status'];
+  exitCode: number | null;
+  durationMs: number;
+  output: string;
+  startedAt: string;
+}
 
 export type TodoStatus = 'open' | 'done' | 'cleared' | 'dropped';
 
@@ -2423,6 +2487,69 @@ export class Workspace {
     }));
   }
 
+  // ---- Deployments (M20) ---------------------------------------------------
+
+  /** Records an approved deployment of a prepared release. The approval is the person's, given in a dialog or with --confirm. */
+  createDeployment(input: { releaseId: string; environment: string; version: string; commit: string }): Deployment {
+    const release = this.getRelease(input.releaseId);
+    if (release.status !== 'prepared') throw new ValidationError('Only a prepared release can be deployed.');
+    const id = `dep_${randomUUID()}`;
+    const at = this.timestamp();
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO deployments (id, release_id, project_id, environment, version, commit_hash, status, approved_by, approved_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
+        )
+        .run(id, release.id, release.projectId, redactString(input.environment), redactString(input.version), input.commit, this.actor, at, at, at);
+      this.record('deploy.approved', release.projectId, null, { deploymentId: id, releaseId: release.id, environment: input.environment, version: input.version, commit: input.commit });
+    });
+    return this.getDeployment(id);
+  }
+
+  getDeployment(id: string): Deployment {
+    const row = this.db.prepare('SELECT * FROM deployments WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError('Deployment', id);
+    return toDeployment(row);
+  }
+
+  listDeployments(releaseId: string): Deployment[] {
+    return (this.db.prepare('SELECT * FROM deployments WHERE release_id = ? ORDER BY created_at DESC, id').all(releaseId) as Record<string, unknown>[]).map(toDeployment);
+  }
+
+  setDeploymentStatus(id: string, status: DeploymentStatus): Deployment {
+    const d = this.getDeployment(id);
+    this.transaction(() => {
+      this.db.prepare('UPDATE deployments SET status = ?, updated_at = ? WHERE id = ?').run(status, this.timestamp(), id);
+      this.record('deploy.status', d.projectId, null, { deploymentId: id, from: d.status, to: status, environment: d.environment, version: d.version });
+    });
+    return this.getDeployment(id);
+  }
+
+  recordDeploymentStep(deploymentId: string, step: Omit<DeploymentStep, 'seq' | 'deploymentId'>): void {
+    const d = this.getDeployment(deploymentId);
+    this.transaction(() => {
+      this.db
+        .prepare('INSERT INTO deployment_steps (deployment_id, kind, target, status, exit_code, duration_ms, output, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(deploymentId, step.kind, redactString(step.target), step.status, step.exitCode, step.durationMs, redactString(step.output), step.startedAt);
+      this.record('deploy.step', d.projectId, null, { deploymentId, kind: step.kind, target: redactString(step.target), status: step.status, exitCode: step.exitCode });
+    });
+  }
+
+  listDeploymentSteps(deploymentId: string): DeploymentStep[] {
+    return (this.db.prepare('SELECT * FROM deployment_steps WHERE deployment_id = ? ORDER BY seq').all(deploymentId) as Record<string, unknown>[]).map((row) => ({
+      seq: Number(row.seq),
+      deploymentId: String(row.deployment_id),
+      kind: row.kind as DeploymentStep['kind'],
+      target: String(row.target),
+      status: row.status as DeploymentStep['status'],
+      exitCode: row.exit_code === null ? null : Number(row.exit_code),
+      durationMs: Number(row.duration_ms),
+      output: String(row.output),
+      startedAt: String(row.started_at),
+    }));
+  }
+
   /** Records a person's authorisation to release despite a failed gate (FR-QA-004). Kept for good. */
   recordGateException(releaseId: string, gateId: string, commit: string, reason: string, mitigation: string): GateException {
     const release = this.getRelease(releaseId);
@@ -2669,6 +2796,22 @@ function toRelease(row: Record<string, unknown>): Release {
     updatedAt: String(row.updated_at),
     checkedAt: (row.checked_at as string | null) ?? null,
     preparedAt: (row.prepared_at as string | null) ?? null,
+  };
+}
+
+function toDeployment(row: Record<string, unknown>): Deployment {
+  return {
+    id: String(row.id),
+    releaseId: String(row.release_id),
+    projectId: String(row.project_id),
+    environment: String(row.environment),
+    version: String(row.version),
+    commit: String(row.commit_hash),
+    status: row.status as DeploymentStatus,
+    approvedBy: String(row.approved_by),
+    approvedAt: String(row.approved_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 

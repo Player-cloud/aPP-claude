@@ -63,8 +63,19 @@ export interface ReleasePlan {
   monitoring: string;
   /** Database or data migrations, or "none". */
   migrations: string;
-  /** Configuration the target needs, by name only (never values). */
+  /** Configuration the target needs, by name only (never values). A deployment passes these through from the app's environment. */
   envVars: string[];
+  /**
+   * The runnable release path (M20, FR-SHIP-002). All optional: without a
+   * deploy command the person deploys the release themselves. Older plans
+   * have none of these.
+   */
+  environment?: string;
+  deployCommand?: string;
+  /** A command that exits 0 when the release works, or an http(s) address that answers 2xx. */
+  healthCommand?: string;
+  healthUrl?: string;
+  rollbackCommand?: string;
 }
 
 export interface IncludedBuild {
@@ -292,6 +303,20 @@ function planGate({ plan }: GateInput): Gate {
     `Migrations: ${plan.migrations || 'not described'}`,
     `Configuration: ${plan.envVars.length ? plan.envVars.join(', ') : 'none listed'}`,
   ];
+  if (plan.deployCommand) {
+    // A release the app will deploy must be undoable and checkable by the app too.
+    if (!plan.environment) missing.push('the environment it deploys to');
+    if (!plan.rollbackCommand) missing.push('a rollback command');
+    if (!plan.healthCommand && !plan.healthUrl) missing.push('a health check command or address');
+  }
   if (missing.length) return { ...base, status: 'failed', summary: `Missing: ${missing.join(', ')}.`, evidence: notes };
-  return { ...base, status: 'passed', summary: `Described for ${plan.target}. The app records the plan; it does not test it.`, evidence: [`Health check: ${plan.healthCheck}`, `Rollback: ${plan.rollback}`, ...notes] };
+  const runnable = plan.deployCommand
+    ? [`Deploys to ${plan.environment} with: ${plan.deployCommand}`, `Health: ${plan.healthUrl || plan.healthCommand}`, `Rollback command: ${plan.rollbackCommand}`]
+    : [];
+  return {
+    ...base,
+    status: 'passed',
+    summary: plan.deployCommand ? `Described for ${plan.target}; the app can deploy it to ${plan.environment} once prepared and you approve.` : `Described for ${plan.target}. The app records the plan; it does not test it.`,
+    evidence: [`Health check: ${plan.healthCheck}`, `Rollback: ${plan.rollback}`, ...runnable, ...notes],
+  };
 }
