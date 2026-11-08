@@ -138,9 +138,12 @@ test('M20-AC4: a version mismatch stops before the deploy command, and a failed 
   assert.equal(existsSync(out), false, 'the deploy command never ran');
 
   const { home: home2, cleanup } = tempHome();
-  t.after(cleanup);
   const ws2 = Workspace.open(home2);
-  t.after(() => ws2.close());
+  // Close before removing the folder: Windows will not delete an open database.
+  t.after(() => {
+    ws2.close();
+    cleanup();
+  });
   const seen: string[] = [];
   const fetcher: Fetcher = async (url) => {
     seen.push(url);
@@ -166,13 +169,16 @@ test('M20-AC5: releases without a deploy command, or not prepared, cannot be dep
   assert.throws(() => d.request(draft.id), /Prepare the release first/);
 
   const { home: home2, cleanup } = tempHome();
-  t.after(cleanup);
   const ws2 = Workspace.open(home2);
   const p = await prepared(ws2, home2);
   const dep = await new Deployer(ws2, { healthDelayMs: 0 }).deploy(p.release.id, 'production');
   ws2.close();
   const db = new DatabaseSync(join(home2, 'iap.db'));
-  t.after(() => db.close());
+  // Close before removing the folder: Windows will not delete an open database.
+  t.after(() => {
+    db.close();
+    cleanup();
+  });
   assert.throws(() => db.prepare('UPDATE deployment_steps SET status = ?').run('passed'), /append-only/);
   assert.throws(() => db.prepare('DELETE FROM deployment_steps').run(), /append-only/);
   assert.throws(() => db.prepare('DELETE FROM deployments WHERE id = ?').run(dep.deployment.id), /never deleted/);
