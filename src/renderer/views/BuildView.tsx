@@ -11,7 +11,7 @@ import { highlight, langOf } from '../highlight.tsx';
 import { call, iap } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { CanvasFrame } from './Canvas.tsx';
-import { HelperCards } from './Helpers.tsx';
+import { HelperCards, ReviewActions } from './Helpers.tsx';
 import { Alert, Badge, InlineText, Prose, relativeTime, type Tone } from '../ui.tsx';
 
 /** What a task's state means to the person, in their words. */
@@ -837,7 +837,9 @@ export function WorkView({
           {b.helpers?.length ? (
             <>
               <dt>Helpers</dt>
-              <dd>{b.helpers.length} · Free</dd>
+              <dd>
+                {b.helpers.length} · {b.helpers.some((h) => h.costUsd > 0) ? `$${b.helpers.reduce((t, h) => t + h.costUsd, 0).toFixed(2)}` : 'Free'}
+              </dd>
             </>
           ) : null}
           {agent?.budgetUsd ? (
@@ -916,6 +918,15 @@ export function WorkView({
             Helpers <span className="col-count">{b.helpers.length}</span>
           </h2>
           <HelperCards helpers={b.helpers} />
+          {b.status === 'review' && (
+            <ReviewActions
+              helpers={b.helpers}
+              simulated={agent?.mode !== 'claude'}
+              busy={busy}
+              onReview={() => void act('review', () => call(iap().reviewBuild(buildId)))}
+              onSimplify={() => void act('simplify', () => call(iap().simplifyBuild(buildId)), true)}
+            />
+          )}
         </>
       ) : (
         <h2 className="col-head">

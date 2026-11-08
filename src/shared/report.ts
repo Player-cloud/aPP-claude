@@ -1,7 +1,7 @@
 // The finished task as a report (M16, DEC-033): one headline, the numbers that
 // matter, what changed, the commands that ran, and what is left before the
 // change ships. Pure, so the renderer and the tests share it.
-import type { Build, ChangedFile, CheckRun, LiveEvent, LiveState } from './api.ts';
+import type { Build, ChangedFile, CheckRun, HelperFinding, HelperRun, LiveEvent, LiveState } from './api.ts';
 
 export type ReportTone = 'ok' | 'warn' | 'danger' | 'neutral';
 
@@ -281,4 +281,22 @@ export function progressStages(events: LiveEvent[]): { id: StageId; label: strin
     ...st,
     state: ended === 'review' || i < at ? 'done' : i === at ? (ended ? 'stopped' : 'current') : 'todo',
   }));
+}
+
+/** Findings a simplification pass could act on: repeated, long or deeply nested code. */
+export function simplifyTargets(helpers: HelperRun[]): HelperFinding[] {
+  return helpers
+    .filter((h) => h.id === 'review' || h.id === 'claude')
+    .flatMap((h) => h.findings)
+    .filter((f) => f.area === 'complexity' || (f.area === 'maintainability' && f.severity !== 'info' && f.severity !== 'low'));
+}
+
+/** The follow-up a simplification pass sends to the agent (FR-QA-003: only when relevant, then the checks run again). */
+export function simplifyRequest(targets: HelperFinding[]): string {
+  const where = (f: HelperFinding) => (f.file ? ` (${f.file}${f.line ? `:${f.line}` : ''})` : '');
+  return [
+    'Simplify this change without changing what it does. The review found:',
+    ...targets.slice(0, 20).map((f) => `- ${f.title}${where(f)}: ${f.detail}${f.fix ? ` ${f.fix}` : ''}`),
+    'Keep the behaviour the same. Do not remove, skip or weaken any test. The checks run again afterwards and the change is reviewed again.',
+  ].join('\n');
 }

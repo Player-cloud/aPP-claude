@@ -266,6 +266,10 @@ export class Releaser {
         note: b.note,
         merged: b.resultCommit ? await isAncestor(repo, b.resultCommit, head) : false,
         branch: b.branch,
+        reviews: {
+          ran: (b.helpers ?? []).filter((h) => h.status === 'done').map((h) => h.id),
+          serious: (b.helpers ?? []).filter((h) => h.id === 'review' || h.id === 'security' || h.id === 'claude').flatMap((h) => h.findings.filter((f) => f.severity === 'high').map((f) => `${h.label}: ${f.title}${f.file ? ` in ${f.file}${f.line ? `:${f.line}` : ''}` : ''}`)),
+        },
         ...(b.source ? { source: b.source, protectedFiles: protectedFiles(b), protectedApproved: protectedApproved(b) } : {}),
       });
     }

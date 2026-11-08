@@ -189,6 +189,11 @@ test('M6: build commands run only after the approval outside the renderer', asyn
   assert.ok(verified.ok && verified.value.build.status === 'review');
   const diff = await h.buildDiff(b.value.id);
   assert.ok(diff.ok && diff.value.files.length === 0);
+  // M19: nothing changed, so there is nothing for Claude to review or to simplify.
+  const review = await h.reviewBuild(b.value.id);
+  assert.ok(!review.ok && /Nothing changed, so there is nothing to review/.test(review.error.message));
+  const simplify = await h.simplifyBuild(b.value.id);
+  assert.ok(!simplify.ok && /Nothing to simplify/.test(simplify.error.message));
   assert.equal((await h.completeBuild({ buildId: b.value.id })).ok, false, 'risks need a note');
   assert.ok((await h.completeBuild({ buildId: b.value.id, note: 'Could not reproduce; closing.' })).ok);
   const listed = h.listBuilds(p.value.id);

@@ -31,7 +31,8 @@ import { detectChecks, normalizeChecks, ranNoTests, runCheck, type Check, type C
 import { MANDATORY_CHECKS, protectedApproved, protectedChanges, protectedFiles, TEST_CHECKS } from '../maintain/maintain.ts';
 import { addWorktree, commitWorktree, diffWorktree, git, inspectRepo, trackedFiles, type Diff } from './git.ts';
 import { reviewChange } from './review.ts';
-import { runHelpers } from './helpers.ts';
+import { runHelpers, type HelperRun } from './helpers.ts';
+import { independentReview } from './independent.ts';
 import { splitShipList } from '../../shared/report.ts';
 import { auditUi, describeAudit } from '../design/audit.ts';
 import { reviewUi } from '../design/review.ts';
@@ -244,6 +245,41 @@ export class Builder {
         { type: 'build.verified', payload: { files: diff.files.length, risks: risks.map((r) => r.kind), helpers: helpers.map((h) => `${h.id}:${h.findings.length}`), checks: final.map((r) => `${r.checkId}:${r.status}`) } },
       );
       // What is left before it ships becomes to-dos the person can tick off (M17 K).
+      const ship = splitShipList(this.ws.getBuild(buildId).agent?.summary ?? '').todos;
+      this.ws.syncTodos(buildId, [...ship.map((text) => ({ text, source: 'claude' as const })), ...risks.map((r) => ({ text: r.detail, source: 'review' as const }))]);
+      this.writeReport(buildId);
+      return this.detail(buildId);
+    });
+  }
+
+  /**
+   * The independent review by Claude (M19, DEC-037), on the change as it was
+   * verified. It runs only when the person asks, under the monthly budget.
+   * Critical and high findings become risks that need an explanation before
+   * the work is done, and they block a release.
+   */
+  async review(buildId: string): Promise<BuildDetail> {
+    return this.exclusive(buildId, async () => {
+      const build = this.ws.getBuild(buildId);
+      if (build.status !== 'review' || !build.helpers) throw new ValidationError('Verify the change before asking for a review.');
+      const diff = await diffWorktree(build.worktree!, build.baseCommit!);
+      if (!diff.files.length) throw new ValidationError('Nothing changed, so there is nothing to review.');
+      const earlier = build.helpers.filter((h) => h.id !== 'claude');
+      let run: HelperRun;
+      try {
+        run = await independentReview(this.ws, this.model, { title: build.title, goal: build.goal, files: diff.files, patch: diff.patch, known: earlier.flatMap((h) => h.findings) });
+      } catch (e) {
+        throw new ValidationError(`The review did not run: ${(e as Error).message}`);
+      }
+      const risks = [
+        ...(build.risks ?? []).filter((r) => r.kind !== 'review'),
+        ...run.findings.filter((f) => f.severity === 'high').map((f) => ({ kind: 'review' as const, detail: `${f.title}${f.file ? ` in ${f.file}${f.line ? `:${f.line}` : ''}` : ''}: ${f.detail}` })),
+      ];
+      this.ws.updateBuild(
+        buildId,
+        { helpers: [...earlier, run], risks },
+        { type: 'build.reviewed', payload: { model: this.model.id, findings: run.findings.length, high: run.findings.filter((f) => f.severity === 'high').length, costUsd: run.costUsd } },
+      );
       const ship = splitShipList(this.ws.getBuild(buildId).agent?.summary ?? '').todos;
       this.ws.syncTodos(buildId, [...ship.map((text) => ({ text, source: 'claude' as const })), ...risks.map((r) => ({ text: r.detail, source: 'review' as const }))]);
       this.writeReport(buildId);
@@ -515,6 +551,18 @@ export function renderReport(build: Build, runs: CheckRun[], referenceTitles: st
     '## Changed files',
     '',
     ...(build.changedFiles?.length ? build.changedFiles.map((f) => `- ${f.status} \`${f.path}\` (+${f.added} -${f.removed})`) : ['- None recorded yet.']),
+    '',
+    '## Reviews',
+    '',
+    ...(build.helpers?.length
+      ? build.helpers.flatMap((h) => [
+          `- **${h.label}** (${h.costUsd ? `$${h.costUsd.toFixed(2)}` : 'free'}): ${h.summary}`,
+          ...h.findings
+            .filter((f) => h.id !== 'scan' && f.severity !== 'info')
+            .slice(0, 20)
+            .map((f) => `  - ${f.severity}${f.area ? ` ${f.area}` : ''}: ${f.title}${f.file ? ` (\`${f.file}${f.line ? `:${f.line}` : ''}\`)` : ''}. ${f.detail}${f.impact ? ` Impact: ${f.impact}` : ''}${f.fix ? ` Fix: ${f.fix}` : ''}`),
+        ])
+      : ['Not reviewed yet.']),
     '',
     '## Unresolved risks',
     '',

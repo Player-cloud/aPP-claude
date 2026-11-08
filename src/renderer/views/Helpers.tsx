@@ -1,13 +1,14 @@
 // The helper cards on a task's canvas (M18 part 5, DEC-036): what the
-// repository scan, security, tests and spec drift helpers found when the
-// change was last checked. Every number comes from the task's own files, diff
-// and check output; the helpers call no model, so each card says Free.
+// repository scan, code review, security, tests and spec drift helpers found
+// when the change was last checked. Every number comes from the task's own
+// files, diff and check output; those helpers call no model, so their cards
+// say Free. Claude's independent review (M19) shows what it cost.
 import type { HelperFinding, HelperRun, HelperSeverity } from '../../shared/api.ts';
-import { formatDuration } from '../../shared/report.ts';
+import { formatDuration, simplifyTargets } from '../../shared/report.ts';
 import { Icon } from '../icons.tsx';
 
 const SEVERITY: Record<HelperSeverity, string> = { high: 'High', medium: 'Medium', low: 'Low', info: 'Note' };
-const ICON = { scan: 'search', security: 'shield', tests: 'check', drift: 'list' } as const;
+const ICON = { scan: 'search', review: 'tools', security: 'shield', tests: 'check', drift: 'list', claude: 'sparkle' } as const;
 const SHOWN = 4;
 
 function chip(h: HelperRun): { tone: 'ok' | 'bad' | 'warn' | 'muted'; text: string } {
@@ -29,6 +30,8 @@ function Findings({ findings }: { findings: HelperFinding[] }) {
       <div>
         <b>{f.title}</b>
         <span className="find-detail">{f.detail}</span>
+        {f.impact && <span className="find-detail">Impact: {f.impact}</span>}
+        {f.fix && <span className="find-detail">Fix: {f.fix}</span>}
         {f.file && (
           <small className="mono">
             {f.file}
@@ -139,6 +142,34 @@ function TestsBody({ h }: { h: HelperRun }) {
   );
 }
 
+/**
+ * What the person can do with the reviews: ask Claude for an independent
+ * review (it costs money with real calls on), and simplify the change when the
+ * review found repeated, long or nested code (the checks then run again).
+ */
+export function ReviewActions({ helpers, simulated, busy, onReview, onSimplify }: { helpers: HelperRun[]; simulated: boolean; busy: string | null; onReview: () => void; onSimplify: () => void }) {
+  const reviewed = helpers.some((h) => h.id === 'claude');
+  const targets = simplifyTargets(helpers).length;
+  return (
+    <section className="kcard" aria-label="Reviews">
+      <p className="helper-summary">
+        {reviewed ? 'Claude has reviewed this version of the change.' : simulated ? 'A second opinion from Claude needs real calls on in Settings → AI usage; without them the review is simulated.' : 'Ask Claude for an independent review of correctness, security and tests. It costs a few cents from your monthly budget.'}
+        {targets > 0 && ` The review found ${targets} place${targets === 1 ? '' : 's'} to simplify.`}
+      </p>
+      <div className="btn-row">
+        <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={onReview}>
+          {busy === 'review' ? 'Reviewing…' : reviewed ? 'Review again' : 'Ask Claude to review'}
+        </button>
+        {targets > 0 && (
+          <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={onSimplify}>
+            Simplify
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function HelperCards({ helpers }: { helpers: HelperRun[] }) {
   return (
     <>
@@ -169,7 +200,7 @@ export function HelperCards({ helpers }: { helpers: HelperRun[] }) {
             )}
             <p className="helper-foot">
               <span className="worker" aria-hidden="true" />
-              {formatDuration(h.durationMs)} · Free
+              {formatDuration(h.durationMs)} · {h.costUsd > 0 ? `$${h.costUsd.toFixed(2)}` : 'Free'}
             </p>
           </section>
         );

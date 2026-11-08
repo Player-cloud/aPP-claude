@@ -84,6 +84,11 @@ export interface IncludedBuild {
   source?: { type: 'improvement' | 'update'; id: string; ref: string; title: string } | null;
   protectedFiles?: string[];
   protectedApproved?: boolean;
+  /**
+   * The reviews of its last verified change (M19): which reviewers ran, and
+   * their high-severity findings. Missing for evidence gathered before M19.
+   */
+  reviews?: { ran: string[]; serious: string[] };
 }
 
 /** For a platform release: where each included item stands now. */
@@ -99,7 +104,7 @@ export interface GateInput {
   checks: { defined: number; results: CheckResult[] };
   /** "path:line" for each line that looks like a credential. Values are never kept. */
   secrets: string[] | null;
-  /** Review tools found in the tool inventory (not run). */
+  /** Review tools found in the tool inventory (not run; the app's own reviewers are used). */
   reviewTools: string[];
   plan: ReleasePlan;
   classifications: Record<string, { kind: 'intentional_deviation' | 'spec_change'; note: string }>;
@@ -131,9 +136,10 @@ export function evaluateGates(input: GateInput): Gate[] {
     input.platform ? { id: 'drift', title: 'Specification drift', required: false, severity: 'low', status: 'skipped', summary: 'Platform work follows approved improvements and updates, not a product specification.', evidence: [] } : driftGate(input),
     buildsGate(input),
     risksGate(input),
+    // FR-SHIP-001's order: code review, security review, then tests.
+    reviewsGate(input),
     testsGate(input),
     secretsGate(input),
-    reviewsGate(input),
     planGate(input),
     ...(input.platform ? [protectedGate(input)] : []),
   ];
@@ -256,18 +262,25 @@ function secretsGate({ secrets }: GateInput): Gate {
   return { ...base, status: 'passed', summary: 'No known credential formats found in tracked files.', evidence: [] };
 }
 
-function reviewsGate({ reviewTools }: GateInput): Gate {
-  // FR-SHIP-001: installed commands are verified before use. None are verified yet, so none run.
+/** The reviewers every included change must have had: the code-review and security helpers. Claude's review is optional. */
+export const REQUIRED_REVIEWERS = ['review', 'security'] as const;
+
+function reviewsGate({ builds, reviewTools }: GateInput): Gate {
+  // FR-SHIP-001 / FR-QA-003 (M19, DEC-037): the app's own reviewers run when each
+  // change is verified; installed tools it has not verified are named, never run.
+  const base = { id: 'reviews' as const, title: 'Code review and security review', required: true, severity: 'high' as const };
+  const note = reviewTools.length ? [`Also in your Claude Code setup, not run by this app: ${reviewTools.join(', ')}`] : [];
+  if (!builds.length) return { ...base, status: 'skipped', summary: 'Nothing is included to review.', evidence: note };
+  const missing = builds.filter((b) => !b.reviews || REQUIRED_REVIEWERS.some((r) => !b.reviews!.ran.includes(r)));
+  const serious = builds.flatMap((b) => (b.reviews?.serious ?? []).map((f) => `${b.title}: ${f}`));
+  const claude = builds.filter((b) => b.reviews?.ran.includes('claude')).length;
+  if (missing.length) return { ...base, status: 'blocked', summary: `${missing.length} included item${missing.length === 1 ? ' was' : 's were'} not reviewed. Verify ${missing.length === 1 ? 'it' : 'them'} again to run the reviews.`, evidence: [...missing.map((b) => `${b.title}: not reviewed`), ...note] };
+  if (serious.length) return { ...base, status: 'failed', summary: `${serious.length} high-severity review finding${serious.length === 1 ? '' : 's'} not fixed.`, evidence: [...serious.slice(0, 50), ...note] };
   return {
-    id: 'reviews',
-    title: 'Code review and security review tools',
-    required: false,
-    severity: 'medium',
-    status: 'skipped',
-    summary: reviewTools.length
-      ? `Found ${reviewTools.join(', ')} in your Claude Code setup, but this app has not verified them, so they did not run.`
-      : 'No verified code-review or security-review tool is connected, so none ran.',
-    evidence: [],
+    ...base,
+    status: 'passed',
+    summary: `${builds.length} item${builds.length === 1 ? '' : 's'} reviewed for code and security with no high-severity findings${claude ? `; ${claude} also reviewed by Claude` : ''}.`,
+    evidence: note,
   };
 }
 

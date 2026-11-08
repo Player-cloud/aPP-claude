@@ -210,7 +210,7 @@ test('M7: iap release runs the ship-check with approval, blocks on failed gates 
   assert.equal(blocked.code, 4, blocked.err);
   assert.match(blocked.out, /FAILED\s+required plan\s+Missing: health check, rollback or mitigation/);
   assert.match(blocked.out, /PASSED\s+required tests\s+All 1 checks passed/);
-  assert.match(blocked.out, /SKIPPED\s+optional reviews/);
+  assert.match(blocked.out, /SKIPPED\s+required reviews\s+Nothing is included to review/);
   assert.equal(iap(home, 'release', 'prepare', release.id).code, 1);
   assert.equal(iap(home, 'release', 'plan', release.id, '--health', 'Unzip and run it', '--rollback', 'Delete the zip').code, 0);
   for (const gate of ['spec', 'drift', 'builds']) {

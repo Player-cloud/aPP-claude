@@ -166,14 +166,16 @@ test('M6-AC1 (bug fix): reproduce → regression test → fix → checks, in a w
   // The helper agents (M18 part 4) looked at the change and are kept with the task.
   assert.deepEqual(verified.build.helpers?.map((h) => [h.id, h.status, h.costUsd]), [
     ['scan', 'done', 0],
+    ['review', 'done', 0],
     ['security', 'done', 0],
     ['tests', 'done', 0],
     ['drift', 'done', 0],
   ]);
   assert.match(verified.build.helpers![0]!.summary, /test file; this task changed 2\.$/);
-  assert.equal(verified.build.helpers![1]!.summary, 'Nothing risky found in the added lines.');
+  assert.equal(verified.build.helpers!.find((h) => h.id === 'security')!.summary, 'Nothing risky found in the added lines.');
+  assert.equal(verified.build.helpers!.find((h) => h.id === 'review')!.summary, 'Nothing to change in the added code.');
   // Stored as numbers: redaction must not take a key like "passed" for a password.
-  assert.deepEqual(verified.build.helpers![2]!.totals, { ok: 0, failed: 0, skipped: 0 });
+  assert.deepEqual(verified.build.helpers!.find((h) => h.id === 'tests')!.totals, { ok: 0, failed: 0, skipped: 0 });
   const done = await builder.complete(build.id, null);
   assert.equal(done.build.status, 'completed');
   // The change is committed on the build's branch, so the person can merge it; their checkout's branch is untouched.

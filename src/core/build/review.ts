@@ -29,7 +29,9 @@ export interface Risk {
     // Platform work (M13, DEC-029)
     | 'protected_change'
     // The security helper's serious findings (M18, DEC-036)
-    | 'security';
+    | 'security'
+    // Claude's independent review: critical and high findings (M19, DEC-037)
+    | 'review';
   detail: string;
 }
 

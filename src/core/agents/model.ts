@@ -20,9 +20,10 @@ export interface ModelRequest {
    * the build agent's tool loop (M6, DEC-020): see `loop`. "classify" suggests
    * a kind, tags and an explanation for a design reference (M9), with `image`.
    * "lessons" reads a source the person imported, with `document`, and answers
-   * with citations (M14, DEC-031).
+   * with citations (M14, DEC-031). "review" is an independent review of a
+   * finished change, answered as JSON findings (M19, DEC-037).
    */
-  purpose: 'plan' | 'work' | 'brief' | 'spec' | 'build' | 'classify' | 'lessons';
+  purpose: 'plan' | 'work' | 'brief' | 'spec' | 'build' | 'classify' | 'lessons' | 'review';
   taskTitle: string;
   instructions: string;
   maxOutputTokens: number;
@@ -176,6 +177,7 @@ function defaultScript(request: Omit<ModelRequest, 'signal'>): SimulatedStep {
     return { text: `${SIMULATED_NOTE}\n\nThe simulated agent listed the repository files and made no changes. Make the change yourself in the worktree, then run the checks again.` };
   }
   if (request.purpose === 'lessons') return { cited: simulatedLessons(request.document) };
+  if (request.purpose === 'review') return { text: JSON.stringify({ summary: `${SIMULATED_NOTE} No AI read the change; turn on real calls in Settings → AI usage for Claude's review.`, findings: [] }) };
   if (request.purpose === 'classify') return { text: JSON.stringify(simulatedClassification(JSON.parse(request.instructions))) };
   if (request.purpose === 'plan') {
     return { text: JSON.stringify({ subtasks: [{ title: request.taskTitle, goal: request.instructions, writes: [], dependsOn: [], risk: 'low', estTokens: 2000 }] }) };
