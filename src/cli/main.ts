@@ -18,6 +18,7 @@ import { SimulatedModel, type ModelAdapter } from '../core/agents/model.ts';
 import { Orchestrator } from '../core/agents/orchestrator.ts';
 import { Planner } from '../core/planner.ts';
 import { Builder, type BuildDetail } from '../core/build/builder.ts';
+import { approvalLines, Deployer, type DeploymentDetail } from '../core/release/deploy.ts';
 import { Releaser, type ReleaseDetail } from '../core/release/releaser.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
 import { Assessor, scopeLabel, STATUS_LABEL } from '../core/assess/assessor.ts';
@@ -108,6 +109,13 @@ Releases (quality gate and ship-check; preparing a release never deploys, tags o
   release prepare <releaseId>                 Mark it prepared (needs every required gate passed or excepted)
   release abandon <releaseId>
   release list <projectId> | release show <releaseId>
+
+Deployment (only a prepared release whose plan has a deploy command; nothing runs without your approval)
+  plan options: --environment <name> --deploy <command> --health-url <https://...> | --health-cmd <command> --rollback-cmd <command>
+  release deploy <releaseId> --environment <name> --confirm   Verify the commit and version, deploy, then run the health check
+  release health <deploymentId>               Run the health check again (monitoring)
+  release rollback <deploymentId> --confirm   Run the plan's rollback command
+  release deployments <releaseId>
 
 Assessment (read-only: reads the repository's current commit from git, never runs its code or contacts outside services)
   assess run <projectId> [--scope <full|codebase|category:<id>|capability:<id>>] [--not-applicable <capabilityId>]...
@@ -233,6 +241,11 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
       monitoring: { type: 'string' },
       migrations: { type: 'string' },
       env: { type: 'string', multiple: true },
+      environment: { type: 'string' },
+      deploy: { type: 'string' },
+      'health-url': { type: 'string' },
+      'health-cmd': { type: 'string' },
+      'rollback-cmd': { type: 'string' },
       mitigation: { type: 'string' },
       path: { type: 'string' },
       scope: { type: 'string' },
@@ -292,6 +305,11 @@ export async function run(argv: string[], out: Out = console.log, err: Out = con
     if (values.monitoring !== undefined) p.monitoring = values.monitoring;
     if (values.migrations !== undefined) p.migrations = values.migrations;
     if (values.env !== undefined) p.envVars = values.env;
+    if (values.environment !== undefined) p.environment = values.environment;
+    if (values.deploy !== undefined) p.deployCommand = values.deploy;
+    if (values['health-url'] !== undefined) p.healthUrl = values['health-url'];
+    if (values['health-cmd'] !== undefined) p.healthCommand = values['health-cmd'];
+    if (values['rollback-cmd'] !== undefined) p.rollbackCommand = values['rollback-cmd'];
     return p;
   };
 
@@ -1106,6 +1124,38 @@ Not saved. Save it to the Vault inbox with: iap wrapup --save${values.hours ? ` 
         });
         return 0;
       }
+      case 'release deploy': {
+        const deployer = new Deployer(ws);
+        const req = deployer.request(need(rest[0], 'releaseId'));
+        if (!values.confirm) {
+          err(`${approvalLines(req).join('\n')}\nRe-run with --environment ${req.environment} --confirm to approve the deployment.`);
+          return 1;
+        }
+        const d = await deployer.deploy(req.releaseId, values.environment ?? '');
+        print(d, () => describeDeployment(d, out));
+        return d.deployment.status === 'healthy' ? 0 : 4;
+      }
+      case 'release health':
+      case 'release rollback': {
+        const deployer = new Deployer(ws);
+        const id = need(rest[0], 'deploymentId');
+        if (sub === 'rollback' && !values.confirm) {
+          const dep = ws.getDeployment(id);
+          err(`This runs on this computer with your permissions:\n  ${deployer.request(dep.releaseId).rollback}\nRe-run with --confirm to approve the rollback.`);
+          return 1;
+        }
+        const d = sub === 'health' ? await deployer.checkHealth(id) : await deployer.rollback(id);
+        print(d, () => describeDeployment(d, out));
+        return d.deployment.status === 'healthy' || d.deployment.status === 'rolled_back' ? 0 : 4;
+      }
+      case 'release deployments': {
+        const list = new Deployer(ws).list(need(rest[0], 'releaseId'));
+        print(list, () => {
+          if (!list.length) out('No deployments yet.');
+          for (const d of list) out(`${d.deployment.id}  ${d.deployment.version} → ${d.deployment.environment}  ${d.deployment.status}  ${d.deployment.createdAt}`);
+        });
+        return 0;
+      }
       case 'release show': {
         const d = new Releaser(ws).detail(need(rest[0], 'releaseId'));
         print(d, () => describeRelease(d, out));
@@ -1455,4 +1505,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error(`Error: ${(e as Error).message}\n\n${USAGE}`);
     process.exitCode = 1;
   }
+}
+
+function describeDeployment(d: DeploymentDetail, out: (s: string) => void): void {
+  const dep = d.deployment;
+  out(`${dep.id}  ${dep.version} → ${dep.environment}: ${dep.status.replace('_', ' ')} (approved by ${dep.approvedBy} at ${dep.approvedAt})`);
+  for (const s of d.steps) out(`  ${s.kind.padEnd(8)} ${s.status.padEnd(9)} ${s.exitCode ?? '-'}  ${s.target}${s.status === 'passed' ? '' : `\n      ${s.output.trim().split('\n').slice(-3).join('\n      ')}`}`);
+  if (d.next.includes('rollback') && dep.status !== 'healthy') out(`  Roll back with: iap release rollback ${dep.id} --confirm`);
 }

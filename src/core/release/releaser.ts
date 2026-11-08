@@ -372,7 +372,16 @@ function plan(input: Partial<ReleasePlan> | undefined): ReleasePlan {
   for (const n of envVars) {
     if (typeof n !== 'string' || !ENV_NAME.test(n)) throw new ValidationError(`"${String(n).slice(0, 40)}" is not a configuration name. List names only, never values.`);
   }
+  const healthUrl = field('Health check address', p.healthUrl);
+  if (healthUrl && !/^https?:\/\/[^\s]+$/i.test(healthUrl)) throw new ValidationError('The health check address must start with http:// or https://.');
+  const environment = field('Environment', p.environment);
+  if (environment && !/^[A-Za-z0-9][\w .-]{0,59}$/.test(environment)) throw new ValidationError('Name the environment with letters, numbers, spaces, dots or dashes, for example "production".');
   return {
+    environment,
+    deployCommand: field('Deploy command', p.deployCommand),
+    healthCommand: field('Health check command', p.healthCommand),
+    healthUrl,
+    rollbackCommand: field('Rollback command', p.rollbackCommand),
     target: field('Deployment target', p.target),
     healthCheck: field('Health check', p.healthCheck),
     rollback: field('Rollback', p.rollback),
@@ -419,6 +428,7 @@ export function renderReleaseReport({ release: r, checkRuns, exceptions, blockin
   lines.push('', '## Release plan', '');
   lines.push(`- Target: ${r.plan.target || '(missing)'}`, `- Health check: ${r.plan.healthCheck || '(missing)'}`, `- Rollback: ${r.plan.rollback || '(missing)'}`);
   lines.push(`- Monitoring: ${r.plan.monitoring || 'not described'}`, `- Migrations: ${r.plan.migrations || 'not described'}`, `- Configuration: ${r.plan.envVars.join(', ') || 'none listed'}`);
+  if (r.plan.deployCommand) lines.push(`- Environment: ${r.plan.environment}`, `- Deploy command: \`${r.plan.deployCommand}\``, `- Health check: ${r.plan.healthUrl || `\`${r.plan.healthCommand}\``}`, `- Rollback command: \`${r.plan.rollbackCommand}\``);
   lines.push('', '## Check runs', '');
   if (!checkRuns.length) lines.push('None yet.');
   else {
@@ -426,7 +436,12 @@ export function renderReleaseReport({ release: r, checkRuns, exceptions, blockin
     for (const c of checkRuns) lines.push(`| \`${c.commit.slice(0, 12)}\` | ${cell(c.checkId)} | \`${cell(c.command)}\` | ${c.status === 'passed' ? 'passed' : c.status.toUpperCase()} | ${c.exitCode ?? '-'} |`);
   }
   lines.push('', '## Next step', '');
-  if (r.status === 'prepared') lines.push(`Prepared at ${r.preparedAt}. Nothing was deployed. Deploy commit \`${r.commit}\` yourself using the plan above; this app does not deploy.`);
+  if (r.status === 'prepared')
+    lines.push(
+      r.plan.deployCommand
+        ? `Prepared at ${r.preparedAt}. Nothing was deployed yet. Deploy commit \`${r.commit}\` to ${r.plan.environment} from the release, after you approve it; the deployment's steps are kept with it.`
+        : `Prepared at ${r.preparedAt}. Nothing was deployed. Deploy commit \`${r.commit}\` yourself using the plan above; this release has no deploy command for the app to run.`,
+    );
   else if (r.status === 'abandoned') lines.push('Abandoned.');
   else if (r.gates && !blocking.length) lines.push('Every required gate passed or has an exception. The release can be marked prepared.');
   else if (r.gates) lines.push(`Blocked by: ${blocking.join(', ')}. Fix these, or record an exception with a mitigation.`);

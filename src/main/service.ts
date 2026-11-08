@@ -20,6 +20,7 @@ import { detectPreview, Previews, type PreviewPlan } from '../core/build/preview
 import { capturePages, findRoutes, sharePackages, unsharePackages, type PageSet } from '../core/build/pages.ts';
 import { git } from '../core/build/git.ts';
 import { Releaser, type ReleaseInput } from '../core/release/releaser.ts';
+import { approvalLines, Deployer, type Fetcher as DeployFetcher } from '../core/release/deploy.ts';
 import type { ReleasePlan } from '../core/release/gates.ts';
 import { Assessor } from '../core/assess/assessor.ts';
 import { CAPABILITIES, CATEGORIES } from '../core/assess/capabilities.ts';
@@ -46,7 +47,7 @@ import type { AgentStatus, AppStatus, IapApi, Result, RunWithNext } from '../sha
 import { MemoryKeyStore, type KeyStore } from './keystore.ts';
 
 // Most handlers answer synchronously; the agent and planning drafts wait for (simulated) model calls.
-type AsyncMethod = 'capturePages' | 'todoToTask' | 'startPreview' | 'stopPreview' | 'abandonBuild' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'reviewBuild' | 'simplifyBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
+type AsyncMethod = 'capturePages' | 'todoToTask' | 'startPreview' | 'stopPreview' | 'abandonBuild' | 'capturePreview' | 'openPreview' | 'quickBuild' | 'followUpBuild' | 'reviewBuild' | 'simplifyBuild' | 'setupMaintenance' | 'approveProtectedChange' | 'restoreBackup' | 'checkUpdates' | 'verifyUpdate' | 'runCleanup' | 'restoreCleanup' | 'runAgent' | 'draftBrief' | 'draftSpec' | 'setProjectRepo' | 'initProjectRepo' | 'startBuild' | 'runBuildAgent' | 'verifyBuild' | 'completeBuild' | 'buildDiff' | 'checkRelease' | 'prepareRelease' | 'deployRelease' | 'checkDeploymentHealth' | 'rollbackDeployment' | 'importProject' | 'runAssessment' | 'importReferences' | 'suggestReference' | 'importSources' | 'readLessons' | 'exportSkill';
 type Handlers = { [K in keyof IapApi]: (...args: unknown[]) => K extends AsyncMethod ? ReturnType<IapApi[K]> : Awaited<ReturnType<IapApi[K]>> };
 
 function str(value: unknown, label: string, optional = false): string | undefined {
@@ -104,6 +105,8 @@ export interface ServiceOptions {
   confirmCleanup?: (request: { title: string; lines: string[] }) => Promise<boolean>;
   /** Replaces the `claude` executable. Tests pass a stand-in; the app finds claude on PATH. */
   claudeCommand?: string[];
+  /** Reaches a deployment's health check address (M20). Tests pass a fake. */
+  healthFetcher?: DeployFetcher;
   /** Reaches the trusted update sources (M12). Tests pass a fake so nothing goes to the network. */
   fetcher?: Fetcher;
   /** Lists the models the stored key can use. Tests pass a fake. */
@@ -205,6 +208,7 @@ export class AppService {
   private readonly pickSources: () => Promise<string[]>;
   private readonly pickFolder: NonNullable<ServiceOptions['pickFolder']>;
   private readonly fetcher: Fetcher;
+  private readonly healthFetcher: DeployFetcher | undefined;
   private readonly listModels: (apiKey: string) => Promise<ModelInfo[]>;
   private readonly bundled: Record<string, string | null> | undefined;
   private readonly agentQuery: QueryFn;
@@ -229,6 +233,7 @@ export class AppService {
     this.confirmAction = options.confirmAction ?? (async () => false);
     this.claudeCommand = options.claudeCommand;
     this.fetcher = options.fetcher ?? httpFetcher();
+    this.healthFetcher = options.healthFetcher;
     this.bundled = options.bundled;
     this.agentQuery = options.agentQuery ?? sdkQuery;
     this.engineExecutable = options.engineExecutable ?? (() => undefined);
@@ -280,6 +285,29 @@ export class AppService {
   /** Starts a build after the person approves its commands in a dialog the renderer cannot answer. */
   private releaser(): Releaser {
     return new Releaser(this.workspace(), { checkTimeoutMs: this.checkTimeoutMs });
+  }
+
+  private deployer(): Deployer {
+    return new Deployer(this.workspace(), { fetcher: this.healthFetcher, timeoutMs: this.checkTimeoutMs, ...(this.healthFetcher ? { healthDelayMs: 0 } : {}) });
+  }
+
+  /** A deployment changes something outside the app, so the person approves it in a dialog the renderer cannot answer (FR-SEC-003). */
+  private async deployRelease(releaseId: string, environment: string) {
+    const d = this.deployer();
+    const req = d.request(releaseId);
+    if (environment.trim() !== req.environment) throw new ValidationError(`Type the environment's name exactly ("${req.environment}") to deploy to it.`);
+    const ok = await this.confirmAction({ title: `Deploy ${req.version} to ${req.environment}?`, lines: approvalLines(req), button: `Deploy to ${req.environment}` });
+    if (!ok) throw new ValidationError('The deployment was not approved, so nothing ran.');
+    return d.deploy(releaseId, environment);
+  }
+
+  private async rollbackDeployment(deploymentId: string) {
+    const d = this.deployer();
+    const dep = this.workspace().getDeployment(deploymentId);
+    const req = d.request(dep.releaseId);
+    const ok = await this.confirmAction({ title: `Roll back ${dep.version} on ${dep.environment}?`, lines: [`Runs: ${req.rollback}`, `In: ${req.folder}`], button: 'Roll back' });
+    if (!ok) throw new ValidationError('The rollback was not approved, so nothing ran.');
+    return d.rollback(deploymentId);
   }
 
   /** The ship-check runs commands, so the person approves them every time it runs. */
@@ -969,6 +997,15 @@ export class AppService {
       }),
     prepareRelease: (releaseId) => wrapAsync(() => this.releaser().prepare(str(releaseId, 'Release id')!)),
     abandonRelease: (releaseId) => wrap(() => this.releaser().abandon(str(releaseId, 'Release id')!)),
+    // Deployments (M20). Only the commands in the prepared plan run.
+    listDeployments: (releaseId) => wrap(() => this.deployer().list(str(releaseId, 'Release id')!)),
+    deployRelease: (input) =>
+      wrapAsync(() => {
+        const i = obj(input, 'Deployment');
+        return this.deployRelease(str(i.releaseId, 'Release id')!, str(i.environment, 'Environment')!);
+      }),
+    checkDeploymentHealth: (deploymentId) => wrapAsync(() => this.deployer().checkHealth(str(deploymentId, 'Deployment id')!)),
+    rollbackDeployment: (deploymentId) => wrapAsync(() => this.rollbackDeployment(str(deploymentId, 'Deployment id')!)),
     // Import and assessment (M8). Read-only: the scope is validated in assessor.ts, and nothing in the repository runs.
     importProject: (input) =>
       wrapAsync(() => {
