@@ -19,7 +19,13 @@ function gitIn(cwd: string, ...args: string[]) {
   return execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd, encoding: 'utf8' });
 }
 
-const node = (js: string) => `node -e "${js.replace(/"/g, '\\"')}"`;
+// No double quotes inside the script: cmd.exe on Windows does not unescape \", so paths
+// are passed as single-quoted JavaScript strings with forward slashes, which Node accepts there.
+const node = (js: string) => {
+  if (js.includes('"')) throw new Error('Keep double quotes out of a node -e script.');
+  return `node -e "${js}"`;
+};
+const lit = (path: string) => `'${path.replace(/\\/g, '/')}'`;
 
 /** A prepared release of a small repository, with a deploy that writes a file the health check reads. */
 async function prepared(ws: Workspace, home: string, plan: Record<string, unknown> = {}, version = '1.2.0') {
@@ -42,9 +48,9 @@ async function prepared(ws: Workspace, home: string, plan: Record<string, unknow
       healthCheck: 'The file says the version',
       rollback: 'Delete the file',
       environment: 'production',
-      deployCommand: node(`require('fs').writeFileSync(${JSON.stringify(out)}, process.env.IAP_RELEASE_VERSION + ' ' + (process.env.SITE_TOKEN || 'none'))`),
-      healthCommand: node(`process.exit(require('fs').readFileSync(${JSON.stringify(out)}, 'utf8').startsWith('${version}') ? 0 : 1)`),
-      rollbackCommand: node(`require('fs').rmSync(${JSON.stringify(out)})`),
+      deployCommand: node(`require('fs').writeFileSync(${lit(out)}, process.env.IAP_RELEASE_VERSION + ' ' + (process.env.SITE_TOKEN || 'none'))`),
+      healthCommand: node(`process.exit(require('fs').readFileSync(${lit(out)}, 'utf8').startsWith('${version}') ? 0 : 1)`),
+      rollbackCommand: node(`require('fs').rmSync(${lit(out)})`),
       envVars: ['SITE_TOKEN'],
       ...plan,
     },
